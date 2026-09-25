@@ -35,7 +35,7 @@
 | 명령 | 하는 일 | 누가 |
 |---|---|---|
 | `/refactor:go` | 다음 단계 진행. 뒤에 `하나씩`(한 단계만), `다시 CHECKUP`(그 단계부터 다시), `마무리`(완료 보고 — 끝내기는 `/refactor:approve 마무리`)를 붙일 수 있음 | 사장님 |
-| `/refactor:approve` | 승인·취소·마무리. 예: `baseline` / `P0-1 P1-2` / `P1`(묶음 전체) / `보류 P1-2`(보류는 맨 앞에) / `마무리`(리팩토링 끝내기) / `확인`(승인 기록을 직접 고친 뒤 다시 봉인). 인자 없이 치면 승인 현황 | **사장님만** — Claude가 부르는 것은 안전장치가 막고, 계획서의 체크 표시를 고쳐도 승인으로 치지 않습니다 |
+| `/refactor:approve` | 승인·취소·마무리. 예: `baseline` / `P0-1 P1-2` / `P1`(묶음 전체) / `보류 P1-2`(보류는 맨 앞에) / `마무리`(리팩토링 끝내기) / `확인`(승인 기록을 직접 고친 뒤 다시 봉인). 인자 없이 치면 승인 현황 | **사장님만** — Claude가 부르는 것은 안전장치가 막고, 계획서의 체크 표시를 고쳐도 승인으로 치지 않습니다. 인자가 있는 승인·취소·마무리는 사장님이 입력창에서 **직접** 칠 때 훅이 남기는 1회용 표(세션·시각, 10분 안에만 유효)가 있어야 실행됩니다 — 인자 없는 현황 보기는 이 표 없이도 됩니다 |
 | `/refactor:status` | 이 프로젝트가 어디까지 왔는지, 다음에 뭘 치면 되는지 | 사장님·Claude |
 | `/refactor:board` | 여러 프로젝트를 급한 순서로 한 표에. 예: `/refactor:board ~/projects` | 사장님·Claude |
 
@@ -60,7 +60,7 @@ git commit -m "vibe-plugins 0.2.0"
 gh repo create vibe-plugins --private --source . --push
 ```
 
-`gh` 명령이 없으면 GitHub 웹에서 **비공개(Private)** 저장소 `vibe-plugins`를 만들고, 화면에 나오는 안내대로 `git remote add origin …` → `git push -u origin main`을 하면 됩니다.
+`gh` 명령이 없으면 GitHub 웹에서 **비공개(Private)** 저장소 `vibe-plugins`를 만들고, 화면에 나오는 안내대로 `git remote add origin …` → `git branch -M main`(로컬 기본 브랜치 이름이 `master`일 수 있으니 `main`으로 맞춰 둡니다) → `git push -u origin main`을 하면 됩니다.
 
 ### 3-2. 프로젝트마다 설치 (프로젝트 폴더에서 두 줄)
 
@@ -69,8 +69,8 @@ claude plugin marketplace add <GitHub아이디>/vibe-plugins --scope local
 claude plugin install refactor@vibe-consulting --scope local
 ```
 
-- 두 줄 모두 **그 프로젝트의 `.claude/settings.local.json`에만** 적힙니다. 전역 설정(`~/.claude/settings.json`)은 바뀌지 않고, git에도 올라가지 않습니다.
-- 비공개 저장소라서 그 PC의 git이 GitHub에 로그인돼 있어야 합니다(`gh auth login` 한 번).
+- 두 줄 모두 **그 프로젝트의 `.claude/settings.local.json`에만** 적힙니다(git에도 올라가지 않습니다). `~/.claude/settings.json`은 바뀌지 않지만, `~/.claude/plugins/` 아래 마켓플레이스·설치 목록·캐시에는 기록됩니다(이 PC 전체에 남는 흔적이라는 뜻).
+- 비공개 저장소라서 그 PC의 git이 GitHub에 로그인돼 있어야 합니다(`gh auth login` 한 번, 이어서 `gh auth setup-git`으로 git 인증 정보까지 저장해 두면 백그라운드 자동 업데이트도 조용히 인증됩니다).
 - 설치 뒤 Claude Code를 다시 열면 적용됩니다.
 
 ### 3-3. 잘 깔렸는지 확인
@@ -79,7 +79,7 @@ claude plugin install refactor@vibe-consulting --scope local
 2. `/hooks`를 열어 refactor의 훅(PreToolUse·PostToolUse·UserPromptSubmit·SessionStart)이 보이면 안전장치 OK.
 3. 첫 `/refactor:go`의 준비 단계에서 안전장치가 실제로 막는지 스스로 시험합니다(항상 켜진 규칙, 리팩토링 중 규칙, `/refactor:go` 중 규칙 각각 한 번). 막히지 않으면 보고해 줍니다.
 
-> 설치 없이 이번 대화에서만 시험해 보기: `claude --plugin-dir ~/vibe-plugins/plugins/refactor`
+> 설치 없이 이번 대화에서만 시험해 보기: `claude --plugin-dir ~/vibe-plugins/plugins/refactor`(PowerShell은 `~`를 홈 폴더로 안 바꿔 주니 `$HOME/vibe-plugins/plugins/refactor`나 전체 경로를 쓰세요. Git Bash면 그대로 됩니다.)
 
 ---
 
@@ -98,14 +98,15 @@ claude plugin install refactor@vibe-consulting --scope local
 
 ## 5. 여러 프로젝트 관리
 
-아무 프로젝트에서나 `/refactor:board` — 그 프로젝트의 상위 폴더에 있는 프로젝트들을 모아 급한 순서로 보여 주고, 이번 주에 먼저 할 일 3개를 골라 줍니다. 프로젝트들이 한 폴더에 모여 있지 않으면 `/refactor:board ~/projects`처럼 폴더를 알려 주세요.
+`/refactor:board` — 지금 프로젝트에 `docs/refactor/STATE.md`가 있으면(리팩토링 중인 프로젝트) 그 상위 폴더에 있는 프로젝트들을 모아 급한 순서로 보여 주고, 없으면 지금 폴더 아래를 훑습니다. 이번 주에 먼저 할 일 3개를 골라 줍니다. 다른 폴더를 보고 싶으면 `/refactor:board ~/projects`처럼 알려 주세요.
 
 | 상태 | 뜻 |
 |---|---|
 | 🔴 급한 구멍 | 아직 안 막은 위험(🔴)이 있음 |
-| 🙋 사장님 차례 | 승인이나 답변만 하면 진행됨 |
+| 🙋 사장님 차례 | 승인·답변이나 마무리 확인만 하면 진행됨 |
 | ▶ 다음 단계 가능 | 승인된 단계가 실행을 기다림 |
 | ⏳ 진행 중 | 진단 중 |
+| ✅ 완료 | `/refactor:approve 마무리`까지 끝남 |
 | ⏰ N일 멈춤 | 14일 넘게 진행이 없음 |
 | ⚠허용파일 | 기준선·마이그레이션 수정 허용 파일이 남아 있음 |
 
@@ -117,11 +118,16 @@ Claude가 명령을 실행하거나 파일을 고치기 **직전에** 검사해�
 
 | 언제 | 막는 것 |
 |---|---|
-| **항상** (이 플러그인을 켠 프로젝트) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기/출력/복사/전송/수정하는 명령(파이프·`$( )`·와일드카드로 나눈 것 포함), 환경변수 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색(`git log -p … \| grep` 등), git이 무시하지 않는 `.env`가 든 범위의 내용 검색(Grep 도구 포함) · 강제 push, `reset --hard`, `clean -f`, `checkout .`, `rm -rf ~` 같은 대량 삭제, DB 테이블 삭제·초기화 · 승인 스크립트, 승인 기록·허용 파일 만들기, 플러그인 폴더 수정 |
+| **항상** (이 플러그인을 켠 프로젝트) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기/출력/복사/전송/수정하는 명령(파이프·`$( )`·와일드카드로 나눈 것 포함), 환경변수 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색(`git log -p … \| grep` 등), git이 무시하지 않는 `.env`가 든 범위의 내용 검색(Grep 도구 포함) · 강제 push, `reset --hard`, `clean -f`, `checkout .`, `rm -rf ~` 같은 대량 삭제, DB 테이블 삭제·초기화 · 승인 스크립트, 승인 기록·허용 파일 만들기, 플러그인 폴더 수정 · 승인 기록·허용 파일·`docs/refactor/` 기록 폴더를 복사·이동·개명·압축 해제·패치로 바꾸는 명령, 프로젝트 폴더 자체·상위·홈을 지우는 모든 표현, MCP 파일·실행 도구나 하위 에이전트 프롬프트로 위 금지를 우회하려는 것, `rg`·`findstr`·PowerShell 검색으로 비밀 파일 내용을 찍는 것 |
 | **리팩토링 진행 중** (완료 전) | push·배포·운영 DB 적용·원격 DB 접속, 배포/DB용 npm 스크립트, 플러그인 끄기, Claude 설정 수정, `git stash`, 파일을 지정하지 않은 `git log -p`, 프로젝트 전체 포맷터 · 커밋된 기준선 테스트와 마이그레이션 파일 수정(스냅숏 갱신 옵션 포함) |
 | **`/refactor:go` 실행 중** | 대표 실행 명령(npm·pnpm·yarn·bun·npx, python·node·deno, pytest, uv·poetry·pipenv run, make, turbo·nx, docker compose 등)은 안전 실행기로만 · 읽기 전용 단계, 그리고 실행 대기(승인됨) 단계가 없는 단계 실행 중에는 `docs/refactor/` 밖의 코드 수정 금지 |
+| **너무 긴 입력** | 명령 문자열이 16KB, Grep·파일 도구 입력이 32KB를 넘거나 검색 범위가 너무 넓으면(폴더 200개·5초 이상) 판정하지 않고 그대로 차단합니다 — 파일로 저장해 실행하거나 범위를 좁히세요 |
+
+예외(막지 않음): 환경변수 **이름만** 보고 값은 안 보는 명령(`env | cut -d= -f1`, `printenv PATH`, `printenv HOME` 등 PATH·HOME 같은 비밀 아닌 이름), `.env`가 **아직 없을 때만** 하는 `cp .env.example .env`(있으면 덮어쓰기라 막습니다), `git config --list`, `.envrc` 읽기(비밀 파일 목록에서 뺐습니다)는 허용합니다.
 
 셸 명령(Bash·PowerShell·Monitor 도구)과 파일 도구, Grep 도구, MCP 도구를 모두 봅니다. 명령이 끝난 뒤에도(백그라운드·Monitor 명령은 시작 직후에) 한 번 더 확인해서, **이번 턴에** 커밋된 기준선·마이그레이션 파일이나 승인 기록(`APPROVALS.log`)이 바뀌었으면 그 턴의 Claude에게 바로 알립니다(사장님이 원래 고치던 파일은 알리지 않습니다). 승인 기록은 `/refactor:approve`가 쓸 때마다 봉인되므로, 그 밖에서 바뀐 기록은 사장님이 `/refactor:approve 확인`을 입력하기 전까지 다음 대화에서도 인정되지 않습니다(`/refactor:status`가 봉인 뒤 달라진 줄을 보여 줍니다). 다만 승인 기록과 봉인을 함께 다시 쓰는 스크립트까지는 막지 못합니다(아래 한계).
+
+`/refactor:approve`(인자가 있는 승인·취소·마무리)는 사장님이 입력창에서 **직접** 칠 때만 실행됩니다 — 그때 훅이 승인 기록 폴더에 남기는 1회용 표(세션ID·시각, 10분 안에만 유효)가 있어야 승인 스크립트가 돕니다. 안전장치 훅 자체가 꺼져 있으면(Windows에서 Git Bash를 못 찾을 때 등) 이 표도 안 남아 승인이 되지 않으니, 안 되면 `/hooks`로 refactor 훅이 보이는지 먼저 확인하세요. 인자 없이 `/refactor:approve`만 쳐서 현황을 보는 것은 이 표 없이도 됩니다.
 
 ### 안전 실행기 (운영 키 대신 가짜 값)
 
@@ -130,6 +136,8 @@ Claude가 명령을 실행하거나 파일을 고치기 **직전에** 검사해�
 ```
 bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- npm test
 ```
+
+**Bash 도구(Git Bash)로만 실행합니다.** PowerShell 도구에서 `bash`를 치면 Windows 자체에 딸린 WSL bash가 먼저 잡혀 실패합니다(§11의 `WSL … execvpe(/bin/bash) failed` 참고).
 
 `.env`(세 단계 아래 폴더까지)와 셸 환경에서 운영일 수 있는 값(DB 주소, API 키, 결제 키, 서버 주소 등)을 **이름과 값의 모양으로** 찾아(값은 출력하지 않음) 가짜 값(`127.0.0.1:9` 등, 접속하면 바로 실패하는 주소)으로 바꿔 실행합니다. 테스트 키(`test_…`, `sk_test_…`)·로컬 주소·숫자·짧은 설정값(버킷 이름, 템플릿 코드 등)·파일 경로는 그대로 둡니다. `refactor-safe-run --check`로 무엇이 바뀌는지 이름만 볼 수 있습니다.
 
@@ -172,9 +180,9 @@ bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- npm test
 | `EXECUTION_LOG.md` | 실행 기록 |
 | `APPROVALS.log` | **승인의 유일한 근거.** 언제·무엇을·어떤 카드 내용(지문)으로 승인했는지. `/refactor:approve`만 쓰도록 되어 있습니다 |
 | `approved/<ID>.md` | 승인할 때의 카드 내용(나중에 카드가 바뀌면 무엇이 바뀌었는지 보여 줄 때 씀) |
-| `.turn`, `.turn-dirty`, `.allow-*`(`.allow-env` 포함) | 플러그인·사람용 표시 파일(git에 올라가지 않음) |
+| `.turn.<세션ID>`, `.turn-dirty.<세션ID>`, `.allow-*`(`.allow-env` 포함) | 플러그인·사람용 표시 파일 — 세션별로 나뉘어 있어 같은 프로젝트를 여러 대화창에서 동시에 열어도 서로 안 섞입니다(git에 올라가지 않음) |
 
-`docs/refactor/`는 **git에 커밋해 두세요.** 다른 PC에서 이어서 하려면 필요합니다.
+`docs/refactor/`는 **git에 커밋해 두세요.** 다른 PC에서 이어서 하려면 필요합니다. 승인 기록의 봉인은 줄바꿈(CRLF)과 무관하게 계산되므로, 다른 PC가 CRLF로 체크아웃해도 봉인은 깨지지 않습니다 — 이를 위해 `docs/refactor/.gitattributes`가 없으면 자동으로 만들어집니다.
 
 ## 8. 지금 쓰는 루틴과 함께
 
@@ -194,20 +202,27 @@ bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- npm test
 ```bash
 claude plugin marketplace update vibe-consulting
 claude plugin update refactor@vibe-consulting        # 그다음 Claude Code 다시 열기
-claude plugin disable refactor@vibe-consulting       # 잠시 끄기
-claude plugin uninstall refactor@vibe-consulting     # 지우기
+claude plugin disable refactor@vibe-consulting       # 잠시 끄기 — 범위는 local→project→user 순으로 자동으로 찾음, 안 되면 --scope local
+claude plugin uninstall refactor@vibe-consulting --scope local   # 지우기 — 프로젝트 폴더에서 실행. --scope 를 안 주면 기본값이 user 라서, 이 플러그인처럼 local 로 설치했으면 안 지워집니다
 ```
 
 플러그인을 고쳐 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올리세요.
+
+### 0.2.1 변경점
+
+- 승인 명령의 1회용 표(§6), 환경변수 이름 확인·`.env.example` 복사·`git config --list`·`.envrc` 읽기 허용(§6), 너무 긴 명령·넓은 검색 범위 차단(§6), 승인 기록·허용 파일을 복사·이동·개명·우회 도구로 건드리는 것을 새로 막음(§6)
+- `.turn`·`.turn-dirty` 표시 파일을 세션별(`.turn.<세션ID>`)로 분리(§7)
+- Windows에서 테스트 하네스가 그대로 돌아감(§12), 안전 실행기가 여러 출처를 함께 보고 값은 출력하지 않음, `run.sh`의 역슬래시 경로 처리 보강
 
 ## 11. 문제가 생기면
 
 | 증상 | 할 일 |
 |---|---|
 | 안전장치가 아무것도 안 막음 | Windows면 Git for Windows 설치 확인 → Claude Code 다시 열기 → `/hooks`에서 refactor 훅 확인 |
+| `WSL … execvpe(/bin/bash) failed` | 안전 실행기를 PowerShell 도구로 실행했습니다. Bash 도구(Git Bash)로 `bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- <명령>`을 다시 실행하세요(§6) |
 | `[refactor 안전장치]`로 멈춤 | 정상입니다. → 줄의 안내를 따르거나, 정말 필요하면 사장님이 `!`로 직접 실행 |
 | "이번 턴에 보호된 파일이 바뀌었습니다" | `git diff <파일>`로 무엇이 바뀌었는지 보고 결정하세요. 사장님이 일부러 바꾼 것이면 그대로 두면 됩니다 |
-| 승인이 안 먹힘 | `/refactor:approve`(인자 없이)로 현황과 사용법 확인. 계획서의 체크 표시를 손으로 고치는 것은 승인으로 치지 않습니다 |
+| 승인이 안 먹힘 | `/refactor:approve`(인자 없이)로 현황과 사용법 확인. 계획서의 체크 표시를 손으로 고치는 것은 승인으로 치지 않습니다. 안전장치 훅이 꺼져 있으면(Windows에서 Git Bash를 못 찾을 때 등) 1회용 표가 안 남아 승인도 안 되니 `/hooks`에서 refactor 훅이 보이는지 확인하세요 |
 | "승인 뒤 카드 내용이 바뀜" | 승인한 뒤 그 단계 카드가 고쳐졌습니다. `/refactor:status`가 보여 주는 바뀐 줄(− 승인 때 / + 지금)을 읽어 보고 괜찮으면 `/refactor:approve <ID>`로 다시 승인 |
 | "이번 턴에 승인 기록이 바뀌었습니다" / "승인 기록이 /refactor:approve 밖에서 바뀌었습니다" | `git diff docs/refactor/APPROVALS.log`로 보고, 모르는 줄이면 지운 뒤 `/refactor:approve 확인` |
 | "DONE이지만 마무리 확인이 없어 안전장치가 켜져 있습니다" | 정말 끝났으면 `/refactor:approve 마무리` |
@@ -237,11 +252,23 @@ vibe-plugins/
                         refactor-lib.sh(승인 기록·카드 읽기 공용) · refactor-safe-run.sh(안전 실행기)
 ```
 
+Git Bash·macOS·Linux(`&&`로 잇기):
+
 ```bash
-python3 tests/test_guard.py && python3 tests/test_scripts.py   # 안전장치·스크립트 시험
-GUARD_BASH=/bin/bash python3 tests/test_guard.py              # macOS 기본 bash 3.2로 시험
+python tests/test_guard.py && python tests/test_scripts.py   # 안전장치·스크립트 시험 (python3 는 Windows 스토어 스텁일 수 있음)
+GUARD_BASH=/bin/bash python tests/test_guard.py              # macOS 기본 bash 3.2로 시험
 claude plugin validate --strict plugins/refactor && claude plugin validate --strict .
 ```
+
+PowerShell(`&&` 대신 `;`, `VAR=값 명령` 대신 `$env:VAR`):
+
+```powershell
+python tests/test_guard.py; python tests/test_scripts.py
+$env:GUARD_BASH = "C:/Program Files/Git/bin/bash.exe"; python tests/test_guard.py
+claude plugin validate --strict plugins/refactor; claude plugin validate --strict .
+```
+
+Windows는 Git Bash를 자동으로 찾습니다. 못 찾으면 `GUARD_BASH` 환경변수에 Git Bash 절대경로를 지정하세요.
 
 ## 13. 다음 계획
 

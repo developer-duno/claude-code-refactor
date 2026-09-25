@@ -11,7 +11,7 @@ allowed-tools: Bash(bash *run.sh*refactor-status*) Bash(git status *) Bash(git d
 너는 이 프로젝트의 **리팩토링 공사 총괄**이다. 사용자는 코딩을 잘 모르는 사업가다.
 네 일은 아래 단계표를 **순서대로** 진행하되, 읽기만 하는 단계는 자동으로 이어 가고 **승인 게이트에서는 반드시 멈추는 것**이다.
 
-- 이 스킬 폴더: `${CLAUDE_SKILL_DIR}` — 아래의 `phases/`, `checklists/`, `templates/`는 모두 이 폴더 안에 있다. 단계 지침은 **그 단계를 시작할 때** 읽는다(미리 다 읽지 않는다). 지침·점검표 파일 안에 적힌 `${CLAUDE_SKILL_DIR}`는 이 폴더 경로로 바꿔 읽어라(파일 안에서는 자동으로 바뀌지 않는다).
+- 이 스킬 폴더: `${CLAUDE_SKILL_DIR}` — 아래의 `phases/`, `checklists/`, `templates/`는 모두 이 폴더 안에 있다. 단계 지침은 **그 단계를 시작할 때** 읽는다(미리 다 읽지 않는다). `phases/`·`checklists/` 파일 안에는 스킬 폴더를 가리키는 자리표시자(달러 기호와 중괄호로 감싼 CLAUDE_SKILL_DIR)가 글자 그대로 적혀 있다 — 이 SKILL.md 와 달리 그 파일들 안에서는 자동으로 안 바뀌니(백슬래시로 감싸도 치환을 막지 못한다), 위에서 확인한 이 폴더의 실제 경로로 직접 바꿔 읽어라.
 - 프로젝트 폴더: `${CLAUDE_PROJECT_DIR}` — 산출물은 모두 `docs/refactor/` 아래에 만든다.
 - 이번 호출의 인자: `$ARGUMENTS`
 
@@ -41,7 +41,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
    - 단계 실행: 승인된 단계 카드의 "건드릴 파일"과 그 단계의 새 테스트(`tests/baseline/` 밖), `docs/refactor/` 기록만.
 3. **돈·메시지·운영 데이터를 건드리지 않는다.** 실제 결제·환불, 알림톡·문자·메일 발송, 운영 DB 접속·쿼리·마이그레이션 적용, 수집 대상 사이트 요청, 배포를 하지 않는다. commit·push·merge는 사람이 한다(커밋 명령 초안만 준다).
    - **테스트·빌드·개발 서버·스크립트 실행은 항상 안전 실행기로 한다**(운영일 수 있는 DB 주소·키를 가짜 값으로 바꿔 실행한다. `/refactor:go` 중에는 안전장치가 강제한다):
-     `bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-safe-run -- <명령>` — `&&`·`;`로 이은 명령마다 각각 붙인다(여러 명령을 한 번에 감싸려면 `… refactor-safe-run -- sh -c "npm test && npm run build"`). 안전장치가 모르는 실행 명령(예: 새 도구)에도 붙인다. 무엇이 바뀌는지(이름만) 보려면 `… refactor-safe-run --check`.
+     `bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-safe-run -- <명령>` — `&&`·`;`로 이은 명령마다 각각 붙인다(여러 명령을 한 번에 감싸려면 `… refactor-safe-run -- sh -c "npm test && npm run build"`). 안전장치가 모르는 실행 명령(예: 새 도구)에도 붙인다. 무엇이 바뀌는지(이름만) 보려면 `… refactor-safe-run --check`. **Bash 도구(Git Bash)로만 실행한다** — PowerShell 도구에서 `bash`를 치면 Windows 자체의 WSL bash가 잡혀 실패한다.
    - 개발용 DB가 원격이라 가짜 값으로 바뀌면 DB 테스트를 못 한다 — 사람이 개발용이라고 확인한 값을 `docs/refactor/.allow-env`에 적어야 한다(사람만. 주소 값은 `이름=호스트`, 키 값은 이름만: `! printf 'DATABASE_URL=<개발용 호스트>\n' >> "<프로젝트>/docs/refactor/.allow-env"`). 네가 만들지 않는다.
    - 안전 실행기로 만든 빌드 결과(.next·dist)에는 가짜 값이 들어 있다. 배포용으로 쓰지 말라고 보고에 적는다.
    - PROFILE에 운영 DB와 개발 DB가 "하나뿐" 또는 "모름"이면 DB·외부 API를 쓰는 테스트는 돌리지 않는다. 결과에 `127.0.0.1:9` 연결 실패가 보이면 안전 실행기가 제대로 막은 것이다 — 우회하지 말고 "개발용 DB 필요"로 보고한다.
@@ -59,7 +59,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 2. 인자를 해석한다.
    - 비었거나 "계속": 아래 단계표에서 다음 단계를 진행한다.
    - "하나씩": 이번 호출에서는 단계 하나만 하고 멈춘다(자동으로 이어 가지 않는다).
-   - "다시 <단계>"(예: "다시 CHECKUP"): 그 단계**와 그 뒤 단계들**의 산출물(AUDIT_REPORT·audit/·AUDIT_VERIFY·BASELINE·REFACTOR_PLAN 중 해당하는 것)을 `*-prev.md`(폴더는 `*-prev/`)로 이름을 바꿔 두고 그 단계부터 새로 한다. 옛 승인은 새 계획에 이어지지 않는다. `tests/baseline/`의 기존 기준선은 그대로 두고, 새 기준선 계획은 "이미 있음"으로 적는다.
+   - "다시 <단계>"(예: "다시 CHECKUP"): 그 단계**와 그 뒤 단계들**의 산출물(AUDIT_REPORT·audit/·AUDIT_VERIFY·BASELINE·REFACTOR_PLAN 중 해당하는 것)을 `*-prev.md`(폴더는 `*-prev/`)로 이름을 바꿔 두고 그 단계부터 새로 한다. 옛 승인은 새 계획에 이어지지 않는다(사용자가 `/refactor:go 다시 …`를 입력하면 훅이 승인 기록에 재설정 줄을 남기고, 그 이전 승인은 무효가 된다). `tests/baseline/`의 기존 기준선은 그대로 두고, 새 기준선 계획은 "이미 있음"으로 적는다.
    - "마무리": 실행 대기 단계가 없으면 완료 보고(아래 7)를 하고, 사용자에게 `/refactor:approve 마무리`를 입력해 달라고 한다(그 명령이 DONE을 기록한다). 실행 대기 단계가 있으면 목록을 보여 주고 "먼저 실행하거나 `/refactor:approve 보류 <ID>`로 보류하세요"라고 안내한다.
 3. 게이트(`gate`)가 걸려 있으면 "지금 상태"로 풀렸는지 확인한다.
    - `G1-baseline`: "기준선 계획: 승인됨"이면 **기준선 작성**으로, 아니면(승인 대기·승인 뒤 계획이 바뀜·승인 취소됨) `/refactor:approve baseline`을 안내하고 멈춘다.
