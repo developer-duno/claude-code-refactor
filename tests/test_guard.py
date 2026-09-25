@@ -3,6 +3,8 @@
 
 막아야 할 호출은 종료 코드 2, 통과해야 할 호출은 0이 나오는지 확인한다.
 실행:  python3 tests/test_guard.py
+       Windows: python tests/test_guard.py (python3 은 MS Store 스텁일 수 있음)
+                Git Bash 를 자동으로 찾는다. 못 찾으면 GUARD_BASH 로 직접 지정.
 옵션:  GUARD_BASH=/path/to/bash   (예: macOS 기본 bash 3.2로 시험)
        GUARD_PATH_PREFIX=/dir      (예: BSD 계열 awk·sed·grep이 든 폴더를 PATH 앞에)
 """
@@ -10,6 +12,7 @@ import json
 import os
 import pathlib
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -17,8 +20,40 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HOOKS = ROOT / "plugins/refactor/hooks"
-BASH = os.environ.get("GUARD_BASH", "bash")
+
+
+def _default_bash():
+    """Windows: PATH의 bash(WSL의 System32\\bash.exe일 수 있음) 대신 Git Bash 절대경로를 우선 찾는다."""
+    if os.name != "nt":
+        return "bash"
+    for cand in [
+        os.path.expandvars(r"%ProgramFiles%\Git\usr\bin\bash.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Git\bin\bash.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\usr\bin\bash.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\bin\bash.exe"),
+    ]:
+        if os.path.isfile(cand):
+            return cand
+    return "bash"
+
+
+BASH = os.environ.get("GUARD_BASH") or _default_bash()
 PATH_PREFIX = os.environ.get("GUARD_PATH_PREFIX", "")
+
+
+def lf(path, text):
+    """LF 줄바꿈으로 고정해 쓴다(Windows에서 write_text의 기본 CRLF 변환을 막는다)."""
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
+def rmtree_rw(path):
+    """읽기 전용 .git 객체 파일도 지운다(Windows PermissionError [WinError 5] 방지)."""
+    def onerr(func, p, exc_info):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+    kw = {"onexc": onerr} if sys.version_info >= (3, 12) else {"onerror": onerr}
+    shutil.rmtree(path, **kw)
 
 PLAN = """# 계획서
 
@@ -42,7 +77,7 @@ def git(d, *args):
 
 def approve(d, args):
     """사람이 /refactor:approve 를 입력한 것처럼 승인 스크립트를 실행한다(시험용)."""
-    r = subprocess.run([BASH, str(HOOKS / "run.sh"), "refactor-approve", str(d)], input=args.encode("utf-8"),
+    r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "refactor-approve", str(d)], input=args.encode("utf-8"),
                        capture_output=True, env=env_for(d), timeout=60)
     return r.stdout.decode("utf-8", "replace")
 
@@ -51,27 +86,27 @@ def make_project(phase=None, allow=(), baseline_approved=False, crlf_plan=False,
     d = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-"))
     for sub in ["docs/refactor", "tests/baseline", "supabase/migrations", "src", ".claude", "certs"]:
         (d / sub).mkdir(parents=True, exist_ok=True)
-    (d / "tests/baseline/money.test.ts").write_text("expect(1).toBe(1)\n")
-    (d / "supabase/migrations/0001_init.sql").write_text("create table x();\n")
-    (d / "src/app.ts").write_text("export {}\n")
-    (d / ".env").write_text("SECRET=do-not-read\n")
-    (d / ".gitignore").write_text(".env\n")
-    (d / ".claude/settings.local.json").write_text("{}")
+    lf(d / "tests/baseline/money.test.ts", "expect(1).toBe(1)\n")
+    lf(d / "supabase/migrations/0001_init.sql", "create table x();\n")
+    lf(d / "src/app.ts", "export {}\n")
+    lf(d / ".env", "SECRET=do-not-read\n")
+    lf(d / ".gitignore", ".env\n")
+    lf(d / ".claude/settings.local.json", "{}")
     plan = PLAN.replace("\n", "\r\n") if crlf_plan else PLAN
     (d / "docs/refactor/REFACTOR_PLAN.md").write_bytes(plan.encode("utf-8"))
     mark = "[x] (2026-09-21)" if baseline_checkbox else "[ ]"
-    (d / "docs/refactor/BASELINE.md").write_text(
-        "# 기준선\n\n> 승인 방법: 사용자가 승인하면 아래 줄이 `기준선 계획 승인: [x]` 로 바뀝니다.\n\n"
-        f"| 칸 | 기준선 계획 승인: [x] 예시 |\n\n기준선 계획 승인: {mark}\n", encoding="utf-8")
+    lf(d / "docs/refactor/BASELINE.md",
+       "# 기준선\n\n> 승인 방법: 사용자가 승인하면 아래 줄이 `기준선 계획 승인: [x]` 로 바뀝니다.\n\n"
+       f"| 칸 | 기준선 계획 승인: [x] 예시 |\n\n기준선 계획 승인: {mark}\n")
     git(d, "init", "-q")
     git(d, "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A")
     git(d, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init")
-    (d / "supabase/migrations/0002_new.sql").write_text("-- 새 파일(아직 커밋 전)\n")
+    lf(d / "supabase/migrations/0002_new.sql", "-- 새 파일(아직 커밋 전)\n")
     if phase:
-        (d / "docs/refactor/STATE.md").write_text(
-            f"---\nrefactor_state: 1\nproject: \"t\"\nphase: {phase}\ngate: none\n---\n", encoding="utf-8")
+        lf(d / "docs/refactor/STATE.md",
+           f"---\nrefactor_state: 1\nproject: \"t\"\nphase: {phase}\ngate: none\n---\n")
     for a in allow:
-        (d / "docs/refactor" / a).write_text("go t\nready P1-2\n" if a == ".turn" else "")
+        lf(d / "docs/refactor" / a, "go t\nready P1-2\n" if a == ".turn" else "")
     if no_plan or baseline_approved:
         (d / "docs/refactor/REFACTOR_PLAN.md").unlink()
     if baseline_approved:
@@ -84,7 +119,7 @@ def make_project(phase=None, allow=(), baseline_approved=False, crlf_plan=False,
 def turn(proj, sess, prompt):
     """UserPromptSubmit 훅(turn.sh)을 실행한다."""
     pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
-    subprocess.run([BASH, str(HOOKS / "run.sh"), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
+    subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
                    capture_output=True, env=env_for(proj), timeout=30)
 
 
@@ -103,7 +138,7 @@ def run(proj, tool, tool_input, project_dir=None, script="guard", event="PreTool
     }
     if extra:
         payload.update(extra)
-    r = subprocess.run([BASH, str(HOOKS / "run.sh"), script], input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+    r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), script], input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                        capture_output=True, env=env_for(proj, project_dir), timeout=60)
     return r.returncode, r.stderr.decode("utf-8", "replace")
 
@@ -467,30 +502,30 @@ def main():
     proj = make_project()
     check(res, "절대 경로 전체 검색", proj, [(B, bash(f"grep -rn KEY {proj}")), (OK, bash(f"grep -rn KEY {proj}/src"))])
     (proj / ".env").unlink()
-    (proj / "apps/web").mkdir(parents=True); (proj / "apps/web/.env.local").write_text("A=1\n")
+    (proj / "apps/web").mkdir(parents=True); lf(proj / "apps/web/.env.local", "A=1\n")
     check(res, "하위 폴더 .env", proj, [(B, bash("grep -rn KEY .")), (OK, bash("grep -rn KEY src"))])
     shutil.rmtree(proj, ignore_errors=True)
 
     # 기준선 승인 뒤: 계획서가 생겼거나 기준선 계획 내용이 바뀌면 다시 잠긴다
     proj = make_project(phase="BASELINE", baseline_approved=True)
-    (proj / "docs/refactor/REFACTOR_PLAN.md").write_text(PLAN, encoding="utf-8")
+    lf(proj / "docs/refactor/REFACTOR_PLAN.md", PLAN)
     check(res, "BASELINE(승인 뒤 계획서 있음)", proj, BASELINE_LOCKED)
     (proj / "docs/refactor/REFACTOR_PLAN.md").unlink()
     check(res, "BASELINE(승인, 계획서 치운 뒤)", proj, [(OK, bash("npx vitest run tests/baseline -u"))])
     bl = proj / "docs/refactor/BASELINE.md"
-    bl.write_text(bl.read_text(encoding="utf-8").replace("# 기준선", "# 기준선\n\n(승인 뒤 범위를 넓힘)"), encoding="utf-8")
+    lf(bl, bl.read_text(encoding="utf-8").replace("# 기준선", "# 기준선\n\n(승인 뒤 범위를 넓힘)"))
     check(res, "BASELINE(승인 뒤 계획 바뀜)", proj, BASELINE_LOCKED)
     shutil.rmtree(proj, ignore_errors=True)
 
     # Grep 도구: git이 무시하지 않는 .env 가 있으면 넓은 내용 검색을 막는다 / 무시되면 통과
     proj = make_project()
-    (proj / ".gitignore").write_text("node_modules\n")
+    lf(proj / ".gitignore", "node_modules\n")
     check(res, "Grep 도구(.env 무시 안 됨)", proj, GREP_TOOL)
-    (proj / ".gitignore").write_text(".env\n")
+    lf(proj / ".gitignore", ".env\n")
     check(res, "Grep 도구(.env 무시됨)", proj, [(OK, ("Grep", {"pattern": "KEY", "output_mode": "content"}))])
     shutil.rmtree(proj, ignore_errors=True)
     proj = make_project()
-    shutil.rmtree(proj / ".git")
+    rmtree_rw(proj / ".git")
     check(res, "Grep 도구(git 아님)", proj, [(B, ("Grep", {"pattern": "KEY", "output_mode": "content"}))])
     shutil.rmtree(proj, ignore_errors=True)
 
@@ -501,21 +536,21 @@ def main():
         (OK, ("Grep", {"pattern": "x", "output_mode": "content", "glob": "**/*.{ts,json}"})),
         (B, ("Grep", {"pattern": "x", "output_mode": "content", "glob": ".env*"})),
     ])
-    (proj / "credentials.json").write_text("{}")
+    lf(proj / "credentials.json", "{}")
     check(res, "Grep glob(무시 안 된 credentials.json)", proj, [(B, ("Grep", {"pattern": "x", "output_mode": "content", "glob": "*.json"}))])
-    (proj / ".gitignore").write_text("/.env\n")   # 맨 위 .env 만 무시 → 아래 폴더의 .env 는 무시되지 않음
+    lf(proj / ".gitignore", "/.env\n")   # 맨 위 .env 만 무시 → 아래 폴더의 .env 는 무시되지 않음
     (proj / "apps/web/config").mkdir(parents=True)
-    (proj / "apps/web/config/.env").write_text("A=1\n")
+    lf(proj / "apps/web/config/.env", "A=1\n")
     (proj / "credentials.json").unlink()
     check(res, "Grep(세 단계 아래 .env)", proj, [(B, ("Grep", {"pattern": "x", "output_mode": "content"}))])
     shutil.rmtree(proj, ignore_errors=True)
 
     # 단계 실행(EXECUTE) go 턴: 이번 go 를 시작할 때 실행 대기 단계가 없었으면 코드 수정 금지, 있으면 허용
     proj = make_project(phase="EXECUTE")
-    (proj / "docs/refactor/.turn").write_text("go t\nready\n")
+    lf(proj / "docs/refactor/.turn", "go t\nready\n")
     check(res, "EXECUTE 실행 대기 없음", proj, [(B, ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "x"})),
                                            (OK, ("Write", {"file_path": "docs/refactor/EXECUTION_LOG.md", "content": "x"}))])
-    (proj / "docs/refactor/.turn").write_text("go t\nready P1-2\n")
+    lf(proj / "docs/refactor/.turn", "go t\nready P1-2\n")
     check(res, "EXECUTE 실행 대기 있음", proj, [(OK, ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "x"}))])
     shutil.rmtree(proj, ignore_errors=True)
 
@@ -537,14 +572,14 @@ def main():
     # 이어지는 대화에서 실행 대기 목록을 다시 계산: 그사이 단계가 완료되면 코드 수정이 막힌다
     proj = make_project(phase="EXECUTE")
     approve(proj, "P1-1")
-    (proj / "docs/refactor/STATE.md").write_text("---\nphase: EXECUTE\ngate: G3-step\n---\n", encoding="utf-8")
+    lf(proj / "docs/refactor/STATE.md", "---\nphase: EXECUTE\ngate: G3-step\n---\n")
     turn(proj, "t", "/refactor:go")
     pf = proj / "docs/refactor/REFACTOR_PLAN.md"
-    pf.write_text(pf.read_text(encoding="utf-8").replace("- **승인**: [x] 승인 (", "- **승인**: [x] 승인 (", 1).replace(
-        "### [P1-1] 첫 단계\n- **종류**: 🔧 리팩토링\n- **승인**: [x]", "### [P1-1] 첫 단계\n- **종류**: 🔧 리팩토링\n- **승인**: [x]"), encoding="utf-8")
+    lf(pf, pf.read_text(encoding="utf-8").replace("- **승인**: [x] 승인 (", "- **승인**: [x] 승인 (", 1).replace(
+        "### [P1-1] 첫 단계\n- **종류**: 🔧 리팩토링\n- **승인**: [x]", "### [P1-1] 첫 단계\n- **종류**: 🔧 리팩토링\n- **승인**: [x]"))
     txt = pf.read_text(encoding="utf-8")
     i = txt.index("### [P1-1]"); j = txt.index("- **완료**: [ ] 완료", i)
-    pf.write_text(txt[:j] + "- **완료**: [x] 완료" + txt[j + len("- **완료**: [ ] 완료"):], encoding="utf-8")
+    lf(pf, txt[:j] + "- **완료**: [x] 완료" + txt[j + len("- **완료**: [ ] 완료"):])
     turn(proj, "t", "그 김에 src/app.ts 이름도 정리해 줘")
     check(res, "이어지는 대화(실행 대기 없음)", proj, [(B, ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "x"}))])
     shutil.rmtree(proj, ignore_errors=True)
@@ -564,9 +599,9 @@ def main():
     proj = make_project(phase="EXECUTE")
     for expected, mutate, allow in [(OK, False, False), (B, True, False), (OK, True, True)]:
         if mutate:
-            (proj / "tests/baseline/money.test.ts").write_text("expect(1).toBe(2)\n")
+            lf(proj / "tests/baseline/money.test.ts", "expect(1).toBe(2)\n")
         if allow:
-            (proj / "docs/refactor/.allow-baseline-edit").write_text("")
+            lf(proj / "docs/refactor/.allow-baseline-edit", "")
         code, err = run(proj, "Bash", {"command": "npx prettier --write ."}, script="post-check", event="PostToolUse")
         res["total"] += 1
         if code != expected:
@@ -576,9 +611,9 @@ def main():
     # post-check: guard와 같은 범위만 본다(src/components/baseline 은 보호 대상 아님)
     proj = make_project(phase="EXECUTE")
     (proj / "src/components/baseline").mkdir(parents=True)
-    (proj / "src/components/baseline/Grid.tsx").write_text("a\n")
+    lf(proj / "src/components/baseline/Grid.tsx", "a\n")
     git(proj, "add", "-A"); git(proj, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "grid")
-    (proj / "src/components/baseline/Grid.tsx").write_text("b\n")
+    lf(proj / "src/components/baseline/Grid.tsx", "b\n")
     code, err = run(proj, "Bash", {"command": "npm test"}, script="post-check", event="PostToolUse")
     res["total"] += 1
     if code != OK:
@@ -587,18 +622,18 @@ def main():
 
     # post-check: 턴이 시작될 때 이미 바뀌어 있던 파일(사용자의 작업)은 알리지 않고, 이번 턴의 새 변경만 알린다
     proj = make_project(phase="CHECKUP")
-    (proj / "supabase/migrations/0001_init.sql").write_text("create table x(); -- 사용자가 고치던 중\n")
+    lf(proj / "supabase/migrations/0001_init.sql", "create table x(); -- 사용자가 고치던 중\n")
     turn(proj, "t", "/refactor:go")
     code, err = run(proj, "Bash", {"command": "ls"}, script="post-check", event="PostToolUse")
     res["total"] += 1
     if code != OK:
         res["fails"].append(("post-check 기존 변경", OK, code, "Bash", "turn 시작 전 변경", err.strip()[:200]))
-    (proj / "tests/baseline/money.test.ts").write_text("expect(1).toBe(3)\n")
+    lf(proj / "tests/baseline/money.test.ts", "expect(1).toBe(3)\n")
     code, err = run(proj, "Bash", {"command": "npx prettier --write ."}, script="post-check", event="PostToolUse")
     res["total"] += 1
     if code != B or "money.test.ts" not in err or "0001_init.sql" in err:
         res["fails"].append(("post-check 새 변경", B, code, "Bash", "이번 턴의 새 변경만", err.strip()[:300]))
-    (proj / "supabase/migrations/0001_init.sql").write_text("drop table x;\n")   # 이미 바뀐 파일을 이번 턴에 또 바꿈
+    lf(proj / "supabase/migrations/0001_init.sql", "drop table x;\n")   # 이미 바뀐 파일을 이번 턴에 또 바꿈
     code, err = run(proj, "Bash", {"command": "ls"}, script="post-check", event="PostToolUse")
     res["total"] += 1
     if code != B or "0001_init.sql" not in err:
@@ -607,7 +642,7 @@ def main():
     # 기준선 작성 단계(승인됨)에서도 커밋된 기준선 파일이 바뀌면 알린다
     proj = make_project(phase="BASELINE", baseline_approved=True)
     turn(proj, "t", "/refactor:go")
-    (proj / "tests/baseline/money.test.ts").write_text("expect(1).toBe(9)\n")
+    lf(proj / "tests/baseline/money.test.ts", "expect(1).toBe(9)\n")
     code, err = run(proj, "Bash", {"command": "npx vitest run tests/baseline -u"}, script="post-check", event="PostToolUse")
     res["total"] += 1
     if code != B:
@@ -637,11 +672,11 @@ def main():
     # turn.sh: 단계 보고 뒤(G3-step)의 같은 세션 일반 문장은 go 표시 유지, 붙여 넣은 글(<pasted_content>)은 사람 입력으로 처리
     proj = make_project(phase="EXECUTE")
     stf = proj / "docs/refactor/STATE.md"
-    stf.write_text("---\nphase: EXECUTE\ngate: G3-step\n---\n", encoding="utf-8")
+    lf(stf, "---\nphase: EXECUTE\ngate: G3-step\n---\n")
     turn(proj, "s1", "/refactor:go")
     turn(proj, "s1", "화면 확인하게 개발 서버 켜 줘")
     ok_g3 = (proj / "docs/refactor/.turn").exists()
-    stf.write_text("---\nphase: EXECUTE\ngate: none\n---\n", encoding="utf-8")
+    lf(stf, "---\nphase: EXECUTE\ngate: none\n---\n")
     turn(proj, "s1", "<pasted_content id=1>에러 로그</pasted_content> 이거 봐 줘")
     ok_paste = not (proj / "docs/refactor/.turn").exists()
     for label, ok in [("G3-step 유지", ok_g3), ("붙여 넣은 글은 사람 입력", ok_paste)]:
@@ -652,7 +687,7 @@ def main():
 
     # turn.sh: 알림 입력(<task-notification>)은 무시, "/refactor:go⏎내용"도 go 턴, .turn-dirty 스냅숏, .gitignore 에 .turn*
     proj = make_project(phase="CHECKUP")
-    (proj / "docs/refactor/.gitignore").write_text(".allow-*\n.turn\n", encoding="utf-8")   # 옛 버전이 만든 파일
+    lf(proj / "docs/refactor/.gitignore", ".allow-*\n.turn\n")   # 옛 버전이 만든 파일
     turn(proj, "s1", "/refactor:go\n이어서 해 줘")
     ok1 = (proj / "docs/refactor/.turn").exists() and (proj / "docs/refactor/.turn-dirty").exists()
     turn(proj, "s1", "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>")
@@ -670,14 +705,14 @@ def main():
     (proj / "docs/refactor/.gitignore").unlink(missing_ok=True)
     state = proj / "docs/refactor/STATE.md"
     def set_gate(g):
-        state.write_text(f"---\nphase: CHECKUP\ngate: {g}\n---\n", encoding="utf-8")
+        lf(state, f"---\nphase: CHECKUP\ngate: {g}\n---\n")
     steps = [("s1", "/refactor:go 하나씩", "none", True), ("s1", "그냥 질문", "none", False),
              ("s1", "/refactor:go", "ask-user", True), ("s1", "1. 꽃배달 쇼핑몰이고 결제는 토스예요", "ask-user", True),
              ("s2", "다른 세션의 질문", "none", True), ("s1", "/refactor:status", "none", False)]
     for sess, prompt, gate, want in steps:
         set_gate(gate)
         pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
-        subprocess.run([BASH, str(HOOKS / "run.sh"), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
+        subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
                        capture_output=True, env=env_for(proj), timeout=30)
         exists = (proj / "docs/refactor/.turn").exists()
         ok = exists == want and (not want or (proj / "docs/refactor/.turn").read_text().splitlines()[0].strip() == "go s1")
@@ -706,12 +741,12 @@ def main():
     g.write_bytes(lines[0] + b"\n" + b"\r\n".join(lines[1:]))
     proj = make_project()
     pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "cat .env"}, "cwd": str(proj)}).encode()
-    r = subprocess.run([BASH, str(tmpd / "refactor/hooks/run.sh"), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=30)
+    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=30)
     res["total"] += 1
     if r.returncode != B:
         res["fails"].append(("run.sh CRLF 중간", B, r.returncode, "Bash", "cat .env", r.stderr.decode()[:200]))
-    g.write_text("#!/usr/bin/env bash\nif then\n", encoding="utf-8")
-    r = subprocess.run([BASH, str(tmpd / "refactor/hooks/run.sh"), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=30)
+    lf(g, "#!/usr/bin/env bash\nif then\n")
+    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=30)
     res["total"] += 1
     if r.returncode != 1:
         res["fails"].append(("run.sh 고장 난 스크립트", 1, r.returncode, "Bash", "문법 오류", r.stderr.decode()[:200]))
@@ -721,7 +756,7 @@ def main():
     # 성능: 큰 계획서 전체 쓰기, 긴 명령
     proj = make_project(phase="PLAN")
     big = PLAN + "".join(f"\n### [P3-{i}] 단계 {i}\n- **종류**: 🔧 리팩토링\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n" for i in range(600))
-    (proj / "docs/refactor/REFACTOR_PLAN.md").write_text(big, encoding="utf-8")
+    lf(proj / "docs/refactor/REFACTOR_PLAN.md", big)
     for label, (tool, tin), expected in [
         ("큰 계획서 Write(승인 없음)", ("Write", {"file_path": "docs/refactor/REFACTOR_PLAN.md", "content": big + "\n메모\n"}), OK),
         ("큰 계획서 Write(승인 추가)", ("Write", {"file_path": "docs/refactor/REFACTOR_PLAN.md", "content": big.replace("[ ] 승인", "[x] 승인", 3)}), B),

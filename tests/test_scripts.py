@@ -12,9 +12,32 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-RUN = ROOT / "plugins/refactor/hooks/run.sh"
-BASH = os.environ.get("GUARD_BASH", "bash")
+RUN = (ROOT / "plugins/refactor/hooks/run.sh").as_posix()
+
+
+def _default_bash():
+    """Windows: PATH의 bash(WSL의 System32\\bash.exe일 수 있음) 대신 Git Bash 절대경로를 우선 찾는다."""
+    if os.name != "nt":
+        return "bash"
+    for cand in [
+        os.path.expandvars(r"%ProgramFiles%\Git\usr\bin\bash.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Git\bin\bash.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\usr\bin\bash.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\bin\bash.exe"),
+    ]:
+        if os.path.isfile(cand):
+            return cand
+    return "bash"
+
+
+BASH = os.environ.get("GUARD_BASH") or _default_bash()
 PATH_PREFIX = os.environ.get("GUARD_PATH_PREFIX", "")
+
+
+def lf(path, text):
+    """LF 줄바꿈으로 고정해 쓴다(Windows에서 write_text의 기본 CRLF 변환을 막는다)."""
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
 
 PLAN = """# 계획서
 
@@ -83,9 +106,9 @@ def sh(script, proj, stdin="", args=()):
 def project(plan=PLAN, baseline=BASELINE):
     d = pathlib.Path(tempfile.mkdtemp(prefix="scripttest-"))
     (d / "docs/refactor").mkdir(parents=True)
-    (d / "docs/refactor/REFACTOR_PLAN.md").write_text(plan, encoding="utf-8")
-    (d / "docs/refactor/BASELINE.md").write_text(baseline, encoding="utf-8")
-    (d / "docs/refactor/STATE.md").write_text(STATE, encoding="utf-8")
+    lf((d / "docs/refactor/REFACTOR_PLAN.md"), plan)
+    lf((d / "docs/refactor/BASELINE.md"), baseline)
+    lf((d / "docs/refactor/STATE.md"), STATE)
     return d
 
 
@@ -113,15 +136,15 @@ def main():
 
     # 2) 승인 뒤 카드가 바뀌면 실행 대기에서 빠진다
     p = d / "docs/refactor/REFACTOR_PLAN.md"
-    p.write_text(p.read_text(encoding="utf-8").replace("다시 계산", "다시 계산하고 로그도 남김"), encoding="utf-8")
+    lf(p, p.read_text(encoding="utf-8").replace("다시 계산", "다시 계산하고 로그도 남김"))
     st = sh("refactor-status", d)
     check("현황: 카드 바뀜", "🔁 승인 뒤 카드 내용이 바뀜" in st and "▶ 실행 대기" not in st, st)
     out = sh("refactor-approve", d, "P1-1")
     check("재승인", "다시 승인" in out and "▶ 실행 대기(승인됨): P1-1" in out, out)
 
     # 3) 계획서 글자만 바꾼 체크 표시는 승인이 아니다
-    p.write_text(p.read_text(encoding="utf-8").replace("### [P1-2] 알림 문구 정리\n- **종류**: 🔧 리팩토링\n- **승인**: [ ] 승인",
-                                                      "### [P1-2] 알림 문구 정리\n- **종류**: 🔧 리팩토링\n- **승인**: [x] 승인"), encoding="utf-8")
+    lf(p, p.read_text(encoding="utf-8").replace("### [P1-2] 알림 문구 정리\n- **종류**: 🔧 리팩토링\n- **승인**: [ ] 승인",
+                                                      "### [P1-2] 알림 문구 정리\n- **종류**: 🔧 리팩토링\n- **승인**: [x] 승인"))
     st = sh("refactor-status", d)
     ready = st.split("▶ 실행 대기")[1].split("\n  ")[0] if "▶ 실행 대기" in st else ""
     check("현황: 기록 없는 체크 표시", "체크 표시만 있고 승인 기록이 없음" in st and "[P1-2]" not in ready, st)
@@ -159,11 +182,11 @@ def main():
     check("기준선 기록", "| 승인 | BASELINE | plan=" in (d / "docs/refactor/APPROVALS.log").read_text(encoding="utf-8"))
     check("기준선 현황", "기준선 계획: 승인됨" in sh("refactor-status", d))
     bp = d / "docs/refactor/BASELINE.md"
-    bp.write_text(bp.read_text(encoding="utf-8").replace("| BL-001 | 배송비 계산 |", "| BL-001 | 배송비 계산 |\n| BL-002 | 결제 전체 |"), encoding="utf-8")
+    lf(bp, bp.read_text(encoding="utf-8").replace("| BL-001 | 배송비 계산 |", "| BL-001 | 배송비 계산 |\n| BL-002 | 결제 전체 |"))
     check("기준선 계획 바뀜", "승인 뒤 계획 내용이 바뀜" in sh("refactor-status", d))
-    bp.write_text(bp.read_text(encoding="utf-8") + "\n## 결과\n| BL-001 | 통과 |\n", encoding="utf-8")
+    lf(bp, bp.read_text(encoding="utf-8") + "\n## 결과\n| BL-001 | 통과 |\n")
     out = sh("refactor-approve", d, "baseline")
-    bp.write_text(bp.read_text(encoding="utf-8") + "| BL-002 | 통과 |\n", encoding="utf-8")   # 승인 줄 아래 결과 추가는 괜찮다
+    lf(bp, bp.read_text(encoding="utf-8") + "| BL-002 | 통과 |\n")   # 승인 줄 아래 결과 추가는 괜찮다
     check("기준선: 승인 줄 아래 결과 추가", "기준선 계획: 승인됨" in sh("refactor-status", d))
     shutil.rmtree(d, ignore_errors=True)
 
@@ -171,10 +194,10 @@ def main():
     d = project()
     sh("refactor-approve", d, "baseline")
     bp = d / "docs/refactor/BASELINE.md"
-    bp.write_text(bp.read_text(encoding="utf-8").replace("껍데기 확인: 포함", "껍데기 확인: 제외"), encoding="utf-8")
+    lf(bp, bp.read_text(encoding="utf-8").replace("껍데기 확인: 포함", "껍데기 확인: 제외"))
     check("기준선: 승인 줄 아래 계획도 지문", "승인 뒤 계획 내용이 바뀜" in sh("refactor-status", d))
     sh("refactor-approve", d, "baseline")
-    bp.write_text(bp.read_text(encoding="utf-8") + "\n## 결과\n| BL-001 | 통과 |\n", encoding="utf-8")
+    lf(bp, bp.read_text(encoding="utf-8") + "\n## 결과\n| BL-001 | 통과 |\n")
     check("기준선: ## 결과 아래는 자유", "기준선 계획: 승인됨" in sh("refactor-status", d))
     shutil.rmtree(d, ignore_errors=True)
     d = project(baseline=BASELINE.replace("# 기준선\n", "# 기준선\n- 기준선 계획 승인: [ ] ← /refactor:approve baseline\n"))
@@ -193,7 +216,7 @@ def main():
         ("쌍점 없는 승인 줄", "- **👤 사람이 직접 할 일**: 결제사 테스트 키 발급\n", "- **👤 사람이 직접 할 일**: 결제사 테스트 키 발급\n- **승인** 범위 추가: src/admin.ts\n", "P1-1"),
     ]:
         assert old_t in base_plan, label
-        p.write_text(base_plan.replace(old_t, new_t, 1), encoding="utf-8")
+        lf(p, base_plan.replace(old_t, new_t, 1))
         st = sh("refactor-status", d)
         check(f"카드 지문: {label}", "🔁 승인 뒤 카드 내용이 바뀜" in st and f"[{cid}]" in st.split("🔁")[1][:400], st)
     # 바뀐 줄 보여 주기(승인 때 남긴 카드 내용과 비교)
@@ -201,7 +224,7 @@ def main():
     check("승인 때 카드 내용 보관", (d / "docs/refactor/approved/P1-1.md").exists())
     # 쌍점 없는 '**승인** 버튼…' 설명 줄은 승인 스크립트가 덮어쓰지 않는다
     assert "### [P2-1] 둘째 묶음\n" in base_plan
-    p.write_text(base_plan.replace("### [P2-1] 둘째 묶음\n", "### [P2-1] 둘째 묶음\n- **승인** 버튼을 누르면 결제 창이 열림\n"), encoding="utf-8")
+    lf(p, base_plan.replace("### [P2-1] 둘째 묶음\n", "### [P2-1] 둘째 묶음\n- **승인** 버튼을 누르면 결제 창이 열림\n"))
     out = sh("refactor-approve", d, "P2-1")
     txt = p.read_text(encoding="utf-8")
     check("설명 줄 보존", "- **승인** 버튼을 누르면 결제 창이 열림" in txt and "승인함: [P2-1]" in out
@@ -219,8 +242,8 @@ def main():
     # 8) 안전 실행기: 이름만 출력하고, 실행할 때는 가짜 값을 넣는다(값은 출력하지 않음)
     d = pathlib.Path(tempfile.mkdtemp(prefix="saferun-"))
     subprocess.run(["git", "init", "-q", str(d)], check=True)
-    (d / ".env").write_text("DATABASE_URL=postgres://u:FAKEPW@db.example.com:5432/app\nSTRIPE_SECRET_KEY=sk_live_FAKEFAKE\n"
-                            "TOSS_CLIENT_KEY=test_ck_FAKE\nPORT=3000\nSHOP_NAME=꽃배달\n", encoding="utf-8")
+    lf((d / ".env"), "DATABASE_URL=postgres://u:FAKEPW@db.example.com:5432/app\nSTRIPE_SECRET_KEY=sk_live_FAKEFAKE\n"
+                            "TOSS_CLIENT_KEY=test_ck_FAKE\nPORT=3000\nSHOP_NAME=꽃배달\n")
     r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--check"], capture_output=True, env=env(), cwd=str(d), timeout=60)
     out = r.stdout.decode() + r.stderr.decode()
     check("안전 실행기 --check 이름만", "DATABASE_URL" in out and "STRIPE_SECRET_KEY" in out and "FAKE" not in out and "example.com" not in out, out)
@@ -235,14 +258,14 @@ def main():
     d = pathlib.Path(tempfile.mkdtemp(prefix="saferun2-"))
     subprocess.run(["git", "init", "-q", str(d)], check=True)
     (d / "docs/refactor").mkdir(parents=True)
-    (d / "docs/refactor/.allow-env").write_text("DEV_SUPABASE_URL=devproj.supabase.co\n", encoding="utf-8")
+    lf((d / "docs/refactor/.allow-env"), "DEV_SUPABASE_URL=devproj.supabase.co\n")
     (d / "pkg/api/config").mkdir(parents=True)
-    (d / "pkg/api/config/.env").write_text("DEEP_SECRET_KEY=FAKEdeep\n", encoding="utf-8")
-    (d / ".env").write_text(
+    lf((d / "pkg/api/config/.env"), "DEEP_SECRET_KEY=FAKEdeep\n")
+    lf((d / ".env"), 
         "SSH_PASSWORD=FAKEpw123\nGIT_TOKEN=ghp_FAKEFAKEFAKE\nNPM_TOKEN=npm_FAKEFAKE\nBACKEND=api.myflowershop.co.kr\n"
         "DB_CONN=postgres://u:p@13.125.44.12:5432/prod?application_name=localhost\nAPP_VERSION=1.0.2\nOPENAI_MODEL=gpt-4.1-mini\n"
         "SUPABASE_BUCKET=photos\nDEV_SUPABASE_URL=https://devproj.supabase.co\n-----BEGIN PRIVATE KEY-----\n"
-        "FAKEVALUE14abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345==\n-----END PRIVATE KEY-----\n", encoding="utf-8")
+        "FAKEVALUE14abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345==\n-----END PRIVATE KEY-----\n")
     r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--check"], capture_output=True, env=env(), cwd=str(d), timeout=60)
     out = r.stdout.decode() + r.stderr.decode()
     bad = [w for w in ["FAKE", "13.125", "myflowershop", "ghp_", "abcdefghij", "prod"] if w in out]
@@ -256,16 +279,16 @@ def main():
     r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--", BASH, "-c", "exit 3"], capture_output=True, env=env(), cwd=str(d), timeout=60)
     check("안전 실행기 종료 코드 그대로", r.returncode == 3, str(r.returncode))
     # 모듈 경로·로컬 호스트 목록은 그대로, 허용 목록의 호스트가 바뀌면 다시 가림
-    (d / ".env").write_text("DJANGO_SETTINGS_MODULE=config.settings.local\nFLASK_APP=app.main\nALLOWED_HOSTS=localhost,127.0.0.1\n"
-                            "API_BACKEND=api.myshop.co.kr\nDATABASE_URL=postgres://u:p@db.prodref.supabase.co:5432/postgres\n", encoding="utf-8")
-    (d / "docs/refactor/.allow-env").write_text("DATABASE_URL=db.devproj.supabase.co\n", encoding="utf-8")
+    lf((d / ".env"), "DJANGO_SETTINGS_MODULE=config.settings.local\nFLASK_APP=app.main\nALLOWED_HOSTS=localhost,127.0.0.1\n"
+                            "API_BACKEND=api.myshop.co.kr\nDATABASE_URL=postgres://u:p@db.prodref.supabase.co:5432/postgres\n")
+    lf((d / "docs/refactor/.allow-env"), "DATABASE_URL=db.devproj.supabase.co\n")
     r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--", BASH, "-c",
                         'printf "%s|%s|%s|%s|%s" "${DJANGO_SETTINGS_MODULE:-keep}" "${FLASK_APP:-keep}" "${ALLOWED_HOSTS:-keep}" "${API_BACKEND:-keep}" "${DATABASE_URL:-keep}"'],
                        capture_output=True, env=env(), cwd=str(d), timeout=60)
     check("모듈 경로·로컬 목록 그대로, 호스트 바뀐 허용 이름은 가림", r.stdout.decode() == "keep|keep|keep|127.0.0.1|postgresql://refactor:refactor@127.0.0.1:9/refactor", r.stdout.decode())
     # 이름만 적은 허용: 주소 값은 가리고(호스트를 함께 적어야 함), 키 값은 그대로
-    (d / ".env").write_text("NEXT_PUBLIC_SUPABASE_URL=https://prodref.supabase.co\nSUPABASE_ANON_KEY=eyJFAKEFAKE.FAKE.FAKE\n", encoding="utf-8")
-    (d / "docs/refactor/.allow-env").write_text("NEXT_PUBLIC_SUPABASE_URL\nSUPABASE_ANON_KEY\n", encoding="utf-8")
+    lf((d / ".env"), "NEXT_PUBLIC_SUPABASE_URL=https://prodref.supabase.co\nSUPABASE_ANON_KEY=eyJFAKEFAKE.FAKE.FAKE\n")
+    lf((d / "docs/refactor/.allow-env"), "NEXT_PUBLIC_SUPABASE_URL\nSUPABASE_ANON_KEY\n")
     r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--", BASH, "-c", 'printf "%s|%s" "${NEXT_PUBLIC_SUPABASE_URL:-keep}" "${SUPABASE_ANON_KEY:-keep}"'],
                        capture_output=True, env=env(), cwd=str(d), timeout=60)
     check("이름만 허용: 주소는 가림·키는 그대로", r.stdout.decode() == "http://127.0.0.1:9|keep", r.stdout.decode())
@@ -297,11 +320,11 @@ def main():
 
     # 10-1) 이전 버전 프로젝트(봉인 없는 기록): 따로 안내, 확인 한 번이면 끝
     d = project()
-    (d / "docs/refactor/APPROVALS.log").write_text("2026-09-20 10:00 KST | 승인 | P1-1 P1-2 | 사용자가 /refactor:approve 로 실행\n", encoding="utf-8")
+    lf((d / "docs/refactor/APPROVALS.log"), "2026-09-20 10:00 KST | 승인 | P1-1 P1-2 | 사용자가 /refactor:approve 로 실행\n")
     st = sh("refactor-status", d)
     check("봉인 없음 안내", "봉인이 없습니다" in st and "⛔" not in st, st)
     # 10-2) 현황표: 사용자 마무리 확인이 없는 DONE은 "완료"로 보이지 않는다
-    (d / "docs/refactor/STATE.md").write_text(STATE.replace("phase: PLAN", "phase: DONE"), encoding="utf-8")
+    lf((d / "docs/refactor/STATE.md"), STATE.replace("phase: PLAN", "phase: DONE"))
     r = subprocess.run([BASH, str(RUN), "refactor-board", str(d)], input=str(d).encode(), capture_output=True, env=env(), timeout=60)
     bout = r.stdout.decode()
     check("현황표: 마무리 확인 필요", "마무리 확인 필요" in bout and "✅ 완료" not in bout.split("상태 뜻")[0], bout)
@@ -311,7 +334,7 @@ def main():
     d = project(baseline=BASELINE.replace("# 기준선\n", "# 기준선\n\n## 결과\n(나중에 채움)\n"))
     sh("refactor-approve", d, "baseline")
     bp = d / "docs/refactor/BASELINE.md"
-    bp.write_text(bp.read_text(encoding="utf-8").replace("배송비 계산", "배송비 계산과 결제 전체"), encoding="utf-8")
+    lf(bp, bp.read_text(encoding="utf-8").replace("배송비 계산", "배송비 계산과 결제 전체"))
     check("기준선: 앞쪽 결과 제목", "승인 뒤 계획 내용이 바뀜" in sh("refactor-status", d))
     shutil.rmtree(d, ignore_errors=True)
 
