@@ -1,0 +1,69 @@
+name: 버그 신고
+description: refactor 플러그인이 예상과 다르게 동작할 때 신고해 주세요.
+title: "[버그] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        신고해 주셔서 감사합니다. 취약점(안전장치를 우회하는 명령 등)은 이 양식이 아니라
+        [비공개 취약점 신고](../../security/advisories/new)로 보내 주세요.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: 플러그인 버전
+      description: "`plugins/refactor/.claude-plugin/plugin.json` 의 version 값"
+      placeholder: "0.2.1"
+    validations:
+      required: true
+  - type: input
+    id: claude-code-version
+    attributes:
+      label: Claude Code 버전
+      description: "터미널에서 `claude --version` 실행 결과"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 운영체제
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: 무엇을 하려 했나요?
+      description: 실행한 명령·상황을 적어 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 무슨 일이 일어났나요?
+      description: 안전장치 메시지(`[refactor 안전장치] …`)가 떴다면 그 문구를 그대로 붙여 넣어 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대한 동작
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 진단 묶음 (선택)
+      description: "`/refactor:report` 로 만든 진단 내용을 붙여 넣어 주세요. 붙여 넣기 전 비밀값·경로가 지워졌는지 꼭 확인하세요."
+    validations:
+      required: false
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: 확인
+      options:
+        - label: 위 내용에 비밀값(API 키·토큰·비밀번호 등)이나 민감한 경로가 없는지 확인했습니다.
+          required: true

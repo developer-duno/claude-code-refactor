@@ -8,6 +8,7 @@
     "url": "https://vibe.2u.pe.kr"
   },
   "homepage": "https://vibe.2u.pe.kr",
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "repository": "https://github.com/developer-duno/claude-code-refactor",
   "keywords": ["refactoring", "audit", "baseline", "korean", "vibe-coding"]
 }

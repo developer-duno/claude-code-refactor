@@ -1,4 +1,6 @@
-# vibe-plugins — Vibe Consulting의 Claude Code 플러그인
+# claude-code-refactor — Vibe Consulting의 Claude Code 플러그인
+
+누구나 쓸 수 있는 공개 플러그인(MIT), 한국어 전용.
 
 ## refactor — 운영 중인 서비스를 안전하게 리팩토링하는 플러그인
 
@@ -30,7 +32,7 @@
 
 ⏸ 표시에서 멈춥니다. 그 사이의 읽기 단계는 알아서 이어 갑니다.
 
-## 2. 명령 4개
+## 2. 명령 5개
 
 | 명령 | 하는 일 | 누가 |
 |---|---|---|
@@ -38,6 +40,7 @@
 | `/refactor:approve` | 승인·취소·마무리. 예: `baseline` / `P0-1 P1-2` / `P1`(묶음 전체) / `보류 P1-2`(보류는 맨 앞에) / `마무리`(리팩토링 끝내기) / `확인`(승인 기록을 직접 고친 뒤 다시 봉인). 인자 없이 치면 승인 현황 | **사장님만** — Claude가 부르는 것은 안전장치가 막고, 계획서의 체크 표시를 고쳐도 승인으로 치지 않습니다. 인자가 있는 승인·취소·마무리는 사장님이 입력창에서 **직접** 칠 때 훅이 남기는 1회용 표(세션·시각, 10분 안에만 유효)가 있어야 실행됩니다 — 인자 없는 현황 보기는 이 표 없이도 됩니다 |
 | `/refactor:status` | 이 프로젝트가 어디까지 왔는지, 다음에 뭘 치면 되는지 | 사장님·Claude |
 | `/refactor:board` | 여러 프로젝트를 급한 순서로 한 표에. 예: `/refactor:board ~/projects` | 사장님·Claude |
+| `/refactor:report` | 문제를 신고할 진단 묶음을 만들어 먼저 보여 주고, 승인하면 이슈를 만듦(§14) | 사장님·Claude |
 
 ---
 
@@ -48,29 +51,29 @@
 - **git** — 리팩토링할 프로젝트는 git 저장소여야 합니다(되돌리기의 바탕).
 - **Windows**: **Git for Windows(Git Bash)** 가 설치돼 있어야 안전장치가 돕니다.
 
-### 3-1. 이 폴더를 GitHub 비공개 저장소에 올리기 (처음 한 번)
+### 3-1. 이 폴더를 GitHub 공개 저장소에 올리기 (처음 한 번)
 
-압축을 푼 `vibe-plugins` 폴더에서:
+압축을 푼 `claude-code-refactor` 폴더에서:
 
 ```bash
-cd vibe-plugins
+cd claude-code-refactor
 git init
 git add -A
-git commit -m "vibe-plugins 0.2.0"
-gh repo create vibe-plugins --private --source . --push
+git commit -m "claude-code-refactor 0.2.0"
+gh repo create claude-code-refactor --public --source . --push
 ```
 
-`gh` 명령이 없으면 GitHub 웹에서 **비공개(Private)** 저장소 `vibe-plugins`를 만들고, 화면에 나오는 안내대로 `git remote add origin …` → `git branch -M main`(로컬 기본 브랜치 이름이 `master`일 수 있으니 `main`으로 맞춰 둡니다) → `git push -u origin main`을 하면 됩니다.
+`gh` 명령이 없으면 GitHub 웹에서 **공개(Public)** 저장소 `claude-code-refactor`를 만들고, 화면에 나오는 안내대로 `git remote add origin …` → `git branch -M main`(로컬 기본 브랜치 이름이 `master`일 수 있으니 `main`으로 맞춰 둡니다) → `git push -u origin main`을 하면 됩니다.
 
 ### 3-2. 프로젝트마다 설치 (프로젝트 폴더에서 두 줄)
 
 ```bash
-claude plugin marketplace add <GitHub아이디>/vibe-plugins --scope local
+claude plugin marketplace add <GitHub아이디>/claude-code-refactor --scope local
 claude plugin install refactor@vibe-consulting --scope local
 ```
 
 - 두 줄 모두 **그 프로젝트의 `.claude/settings.local.json`에만** 적힙니다(git에도 올라가지 않습니다). `~/.claude/settings.json`은 바뀌지 않지만, `~/.claude/plugins/` 아래 마켓플레이스·설치 목록·캐시에는 기록됩니다(이 PC 전체에 남는 흔적이라는 뜻).
-- 비공개 저장소라서 그 PC의 git이 GitHub에 로그인돼 있어야 합니다(`gh auth login` 한 번, 이어서 `gh auth setup-git`으로 git 인증 정보까지 저장해 두면 백그라운드 자동 업데이트도 조용히 인증됩니다).
+- 공개 저장소라서 로그인 없이도 설치할 수 있습니다. `gh auth login` 후 `gh auth setup-git`으로 git 인증 정보까지 저장해 두면 백그라운드 자동 업데이트가 더 안정적으로 됩니다(선택).
 - 설치 뒤 Claude Code를 다시 열면 적용됩니다.
 
 ### 3-3. 잘 깔렸는지 확인
@@ -79,7 +82,7 @@ claude plugin install refactor@vibe-consulting --scope local
 2. `/hooks`를 열어 refactor의 훅(PreToolUse·PostToolUse·UserPromptSubmit·SessionStart)이 보이면 안전장치 OK.
 3. 첫 `/refactor:go`의 준비 단계에서 안전장치가 실제로 막는지 스스로 시험합니다(항상 켜진 규칙, 리팩토링 중 규칙, `/refactor:go` 중 규칙 각각 한 번). 막히지 않으면 보고해 줍니다.
 
-> 설치 없이 이번 대화에서만 시험해 보기: `claude --plugin-dir ~/vibe-plugins/plugins/refactor`(PowerShell은 `~`를 홈 폴더로 안 바꿔 주니 `$HOME/vibe-plugins/plugins/refactor`나 전체 경로를 쓰세요. Git Bash면 그대로 됩니다.)
+> 설치 없이 이번 대화에서만 시험해 보기: `claude --plugin-dir ~/claude-code-refactor/plugins/refactor`(PowerShell은 `~`를 홈 폴더로 안 바꿔 주니 `$HOME/claude-code-refactor/plugins/refactor`나 전체 경로를 쓰세요. Git Bash면 그대로 됩니다.)
 
 ---
 
@@ -235,7 +238,7 @@ claude plugin uninstall refactor@vibe-consulting --scope local   # 지우기 —
 ## 12. 폴더 구조와 검증 (고치는 사람용)
 
 ```
-vibe-plugins/
+claude-code-refactor/
 ├─ .claude-plugin/marketplace.json      마켓플레이스(플러그인 목록)
 ├─ .gitattributes                        스크립트 줄바꿈을 LF로 고정
 ├─ tests/test_guard.py                   안전장치 시험(522개)
@@ -272,6 +275,21 @@ Windows는 Git Bash를 자동으로 찾습니다. 못 찾으면 `GUARD_BASH` 환
 
 ## 13. 다음 계획
 
-- **사이트 공개 전**: 실제 프로젝트 2~3개에서 끝까지 써 보기 → 문구 다듬기 → 라이선스 정하기(지금은 비공개 `UNLICENSED`).
+- **사이트 공개 전**: 실제 프로젝트 2~3개에서 끝까지 써 보기 → 문구 다듬기.
 - **vibe.2u.pe.kr 연결**: 사이트의 리팩토링 카드(N1~N8)와 이 플러그인의 단계를 짝지어 안내.
 - **(선택) 관제 에이전트**: 여러 프로젝트의 재점검(`다시 CHECKUP`)을 정해진 날 자동으로 돌려 현황표를 갱신 — 필요해지면 예약 작업이나 GitHub Actions로 확장.
+
+## 14. 문제 신고와 피드백
+
+- **이슈로 신고하기**: [버그 신고 양식](../../issues/new?template=bug.yml) 또는 [기능 제안 양식](../../issues/new?template=feature.yml)으로 남겨 주세요.
+- **`/refactor:report` 명령**: 플러그인 버전·OS·Claude Code 버전·최근 문제 기록(비밀값 가림)을 모아 **먼저 화면에 보여 주고**, 사용자가 "예"라고 할 때만 그 사용자의 `gh` 로그인으로 이슈를 만듭니다. `gh`가 없으면 미리 채워진 이슈 작성 링크를 줍니다. 아무것도 자동으로 보내지 않습니다.
+- **취약점**: 안전장치를 우회하는 명령을 찾았다면 이슈 대신 [`SECURITY.md`](SECURITY.md)의 비공개 취약점 신고로 보내 주세요.
+- **업데이트 받기**:
+  ```bash
+  claude plugin marketplace update vibe-consulting
+  claude plugin update refactor@vibe-consulting
+  ```
+
+## 15. 라이선스
+
+MIT — 전문은 [`LICENSE`](LICENSE) 파일을 확인하세요.
