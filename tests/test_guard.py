@@ -15,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import atexit
 import tempfile
 import time
 
@@ -43,6 +44,9 @@ def _default_bash():
 
 BASH = os.environ.get("GUARD_BASH") or _default_bash()
 PATH_PREFIX = os.environ.get("GUARD_PATH_PREFIX", "")
+# 문제 기록(problems.log)은 시험용 임시 폴더에(실제 ~/.claude/plugins/data/refactor 를 더럽히지 않게) — 모든 서브프로세스에 준다
+TEST_DATA = tempfile.mkdtemp(prefix="guarddata-")
+atexit.register(shutil.rmtree, TEST_DATA, True)
 
 
 def lf(path, text):
@@ -130,7 +134,7 @@ def turn(proj, sess, prompt):
 
 
 def env_for(proj, project_dir=None):
-    env = dict(os.environ, CLAUDE_PROJECT_DIR=project_dir or str(proj))
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=project_dir or str(proj), CLAUDE_PLUGIN_DATA=TEST_DATA)
     if PATH_PREFIX:
         env["PATH"] = PATH_PREFIX + os.pathsep + env["PATH"]
     return env
@@ -953,6 +957,77 @@ UP_R4 = [  # 플러그인 훅 진입점(turn·guard·post-check·session-start)�
 ]
 
 
+# ── 0.2.1 V 검사관 지적 반영(2026-09-26 16:50) ─────────────────────────────
+UP_H1 = [  # 따옴표 정규화: 단어 안 빈 따옴표 쌍 지우기 + 단순 따옴표 인자 벗기기
+    (B, bash("bash /x/hooks/run.sh refactor-app''rove \"$PWD\" --from''-hook <<< P1-1")), (B, bash("bash /x/hooks/run.sh tu''rn")),
+    (B, bash('git reset "--hard"')), (B, bash("git re''set --hard")), (B, bash("cat .e''nv")), (B, bash("git re'set' --hard")),
+    (B, bash("cat '.env'")), (B, bash('"git" "reset" "--hard"')), (B, bash('git push "--force"')), (B, bash("rm -rf '~'")),
+    (B, bash("git reset $'--hard'")), (B, bash("git re$''set --hard")), (OK, bash("echo $'a b'")), (OK, bash("printf $'%s\\n' x")),
+    (OK, bash('echo "hello world"')), (OK, bash('git commit -m "fix: reset"')), (OK, bash('grep -rn "hard" src')),
+    (OK, bash("printf '%s' \"$x\"")), (OK, bash('grep -rn "--from-hook" plugins')), (OK, bash('grep -n "" src/app.ts')),
+    (OK, bash("git commit -m 'reset --hard 설명'")), (OK, bash("echo 'it''s ok'")),
+]
+UP_H1_GO = [  # /refactor:go 중(EXECUTE + go 턴): 따옴표로 쪼갠 실행 명령도 안전 실행기로만
+    (B, bash("n''pm test")), (B, bash('"npm" test')), (B, bash("np'm' run build")),
+    (OK, bash("bash /x/hooks/run.sh refactor-safe-run -- n''pm test")), (OK, bash("n''pm run lint")),
+]
+UP_H1B = [  # 새 Claude 세션에 승인 명령을 넘기는 길
+    (B, bash('claude -p "/refactor:approve P1-1"')), (B, bash("claude --print '/refactor:approve baseline'")),
+    (B, bash("echo '/refactor:approve P1-1' | claude -p")), (B, bash('npx @anthropic-ai/claude-code -p "/refactor:approve P1-1"')),
+    (B, bash('claude.exe -p "/refactor:app\'\'rove P1-1"')), (B, bash('node /x/node_modules/@anthropic-ai/claude-code/cli.js -p "/refactor:approve P1-1"')),
+    (OK, bash("claude --version")), (OK, bash('claude -p "요약해줘"')), (OK, bash("claude plugin list")),
+    (OK, bash('grep -rn "/refactor:approve" plugins/refactor/skills')),
+]
+UP_M1 = [  # cd·pushd 뒤 상대경로는 그 폴더 기준(삭제·이동·사람 전용·기록 폴더)
+    (B, bash("cd docs && rm -rf refactor")), (B, bash("cd docs/refactor && rm APPROVALS.log")), (B, bash("pushd docs; mv refactor x")),
+    (B, bash("cd docs; rm -rf refactor")), (B, bash("(cd docs && rm -r refactor)")), (B, bash("cd docs/refactor && echo x > .allow-baseline-edit")),
+    (OK, bash("cd src && npm run build")), (OK, bash("cd /tmp && rm -rf x")), (OK, bash("cd docs && ls refactor")),
+    (OK, bash("cd src && rm -rf old")), (OK, bash("cd docs && mv notes.md notes-old.md")),
+]
+UP_M1_ON = [  # 리팩토링 진행 중(EXECUTE): cd 뒤 기록 폴더 안 파일 지우기
+    (B, bash("cd docs/refactor && rm STATE.md")), (OK, bash("cd docs/refactor && cat STATE.md")), (OK, bash("cd src && rm old.ts")),
+]
+UP_M1B = [  # 지울·옮길 대상이 명령 치환이면 판정할 수 없다
+    (B, bash('rm -rf "$(git rev-parse --show-toplevel)"')), (B, bash("rm -r $(pwd)")), (B, bash("rm -rf `git rev-parse --show-toplevel`")),
+    (B, bash('mv "$(git rev-parse --show-toplevel)" /tmp/x')), (B, bash('rmdir "$(git rev-parse --show-toplevel)"')),
+    (OK, bash('rm -rf "$TMPDIR/x"')), (OK, bash('echo "$(git rev-parse --show-toplevel)"')), (OK, bash('mv x "$(mktemp -d)"')),
+    (OK, bash('rm -f "$(ls *.log | head -1)"')),
+]
+UP_M2 = [  # 읽기 전용 단계(CHECKUP + go 턴): 패키지 실행기 셸 모드(npx -c …) 안의 명령으로 판정
+    (B, bash("npx -c 'prettier --write src/app.ts'")), (B, bash('npx -c "eslint --fix ."')), (B, bash("npm exec -c 'prettier --write src/app.ts'")),
+    (B, bash("npx --call 'prettier -w src'")), (B, bash("pnpm exec -c 'prettier --write src/app.ts'")),
+    (OK, bash("npx -c 'prettier --check .'")), (OK, bash("npx -c 'eslint src'")),
+]
+UP_M4V = [  # 값 출력·덤프 변형(프로젝트에 .env 있음)
+    (B, bash("cat $(echo .env)")), (B, bash('cat $(echo ".env")')), (B, bash('cat <<< "$OPENAI_API_KEY"')),
+    (B, bash('node -e "process.stdout.write(process.env.OPENAI_API_KEY)"')), (B, bash('node -e "process.stderr.write(process.env.OPENAI_API_KEY)"')),
+    (B, bash('node -e "console.error(process.env.STRIPE_KEY)"')),
+    (B, bash("python3 -c \"import os,sys; sys.stdout.write(os.environ['OPENAI_API_KEY'])\"")),
+    (B, bash("perl -e 'print %ENV'")), (B, bash("perl -e 'print $ENV{OPENAI_API_KEY}'")), (B, bash("perl -le 'print $ENV{OPENAI_API_KEY}'")),
+    (B, bash("awk 'BEGIN{print ENVIRON[\"OPENAI_API_KEY\"]}'")), (B, bash("awk 'BEGIN{for (k in ENVIRON) print k, ENVIRON[k]}'")),
+    (B, bash("jq -n env")), (B, bash("jq -n '$ENV'")), (B, bash("jq -n 'env.OPENAI_API_KEY'")),
+    (B, bash("find . -type f | xargs grep -n SECRET")), (B, bash("grep -n SECRET -- $(ls -A)")), (B, bash("ls -A | xargs grep -n SECRET")),
+    (OK, bash("node -e \"process.stdout.write('hi')\"")), (OK, bash("awk '{print $1}' file.txt")), (OK, bash("jq .name package.json")),
+    (OK, bash("find src -name '*.ts' | xargs grep -n TODO")), (OK, bash("perl -e 'print \"ok\"'")), (OK, bash("perl -e 'print $ENV{HOME}'")),
+    (OK, bash("awk 'BEGIN{print ENVIRON[\"HOME\"]}'")), (OK, bash("jq -r '.name' package.json")), (OK, bash("jq . config/env.json")),
+    (OK, bash("grep -n TODO $(ls src)")), (OK, bash("find . -name '*.ts' | xargs grep -l KEY")), (OK, bash("jq -n 'env.HOME'")),
+    (OK, bash("cat <<< \"$HOME\"")),
+]
+UP_M5W = [  # /refactor:go 중(EXECUTE + go 턴): corepack·eval 로 감싼 실행도 안전 실행기로만
+    (B, bash("corepack pnpm test")), (B, bash("corepack npm run build")), (B, bash('eval "npm test"')), (B, bash("eval 'pnpm test'")),
+    (B, bash("npx -c 'npm test'")),
+    (OK, bash('eval "echo hi"')), (OK, bash("corepack --version")), (OK, bash("corepack enable")),
+]
+UP_L3 = [  # 승인 스크립트: 읽기는 통과, 실행하는 모양만 막는다
+    (OK, bash("cat plugins/refactor/scripts/refactor-approve.sh")), (OK, bash("grep -n from-hook plugins/refactor/hooks/turn.sh")),
+    (OK, bash("head -20 plugins/refactor/scripts/refactor-approve.sh")), (OK, bash("grep -rn refactor-approve plugins/refactor/skills")),
+    (B, bash("bash plugins/refactor/scripts/refactor-approve.sh /p")), (B, bash("sh plugins/refactor/scripts/refactor-approve.sh /p")),
+    (B, bash("source plugins/refactor/scripts/refactor-approve.sh")), (B, bash(". plugins/refactor/scripts/refactor-approve.sh")),
+    (B, bash("plugins/refactor/scripts/refactor-approve.sh /p")), (B, bash("bash /x/hooks/run.sh refactor-approve /p")),
+    (B, bash("cat plugins/refactor/scripts/refactor-approve.sh | bash")),
+]
+
+
 def check_upgrade_021(res):
     """0.2.1 보강 항목의 회귀 케이스(목록 + 실제 폴더가 필요한 경우)."""
     for title, kw, cases in [
@@ -967,6 +1042,11 @@ def check_upgrade_021(res):
         ("0.2.1 F1 대조군 EXECUTE", dict(phase="EXECUTE", allow=(".turn",)), UP_F1_EXEC),
         ("0.2.1 F5 go 중 신고 명령", dict(phase="EXECUTE", allow=(".turn",)), UP_F5),
         ("0.2.1 F6 환경변수 이름만 출력", dict(), UP_F6),
+        ("0.2.1 V H1 따옴표 정규화", dict(), UP_H1), ("0.2.1 V H1 go 턴", dict(phase="EXECUTE", allow=(".turn",)), UP_H1_GO),
+        ("0.2.1 V H1b 중첩 claude", dict(), UP_H1B), ("0.2.1 V M1 cd 추적", dict(), UP_M1),
+        ("0.2.1 V M1 cd 추적(진행 중)", dict(phase="EXECUTE"), UP_M1_ON), ("0.2.1 V M1b 명령 치환 삭제", dict(), UP_M1B),
+        ("0.2.1 V M2 npx -c", dict(phase="CHECKUP", allow=(".turn",)), UP_M2), ("0.2.1 V M4v 값 출력 변형", dict(), UP_M4V),
+        ("0.2.1 V M5w corepack·eval", dict(phase="EXECUTE", allow=(".turn",)), UP_M5W), ("0.2.1 V L3 승인 스크립트 읽기", dict(), UP_L3),
     ]:
         proj = make_project(**kw)
         try:
@@ -998,6 +1078,49 @@ def check_upgrade_021(res):
     timed("9 폴더 1,500개 Grep 차단", proj, B, "Grep", {"pattern": "KEY", "output_mode": "content"}, 5)   # 한가할 때 약 0.7~1초(부하 시 느려짐)
     timed("9 폴더 1,500개라도 path 지정은 통과", proj, OK, "Grep", {"pattern": "KEY", "output_mode": "content", "path": "src"}, 5)
     shutil.rmtree(proj, ignore_errors=True)
+
+    # V M1: cd .. 뒤 프로젝트 폴더 이름으로 통째 삭제
+    proj = make_project()
+    check(res, "0.2.1 V M1 cd .. 뒤 프로젝트 삭제", proj, [(B, bash(f"cd .. && rm -rf {proj.name}")), (OK, bash(f"cd .. && ls {proj.name}"))])
+    shutil.rmtree(proj, ignore_errors=True)
+
+    # V M3: 하위 에이전트 지시문 32KB 상한(무거운 판정 전에 길이만 보고 막는다), MCP 는 크기로 막지 않되 빨리 판정한다
+    proj = make_project()
+    timed("V M3 Agent 40KB 차단", proj, B, "Agent", {"description": "t", "prompt": "src/app.ts 를 정리해 줘.\n" * 1400}, 5)
+    timed("V M3 Agent 20KB 통과", proj, OK, "Agent", {"description": "t", "prompt": "src/app.ts 를 정리해 줘.\n" * 700}, 25)
+    notion = {"page_id": "x", "content": ("## 회의록\n- 결정: 다음 주 배포\n" * 6000)[:200000]}
+    timed("V M3 MCP 200KB 통과", proj, OK, "mcp__notion__notion-update-page", notion, 5)
+    timed("V M3 MCP 200KB 안 .env 경로 차단", proj, B, "mcp__fs__write_file", {"content": notion["content"], "path": ".env"}, 5)
+    ins = "INSERT INTO t (a, b) VALUES (1, 'x');\n" * 1100
+    timed("V M3b SQL 40KB 통과", proj, OK, "mcp__x__execute_sql", {"project_id": "p", "query": ins}, 10)
+    timed("V M3b SQL 40KB 끝 DROP 차단", proj, B, "mcp__x__execute_sql", {"project_id": "p", "query": ins + "DROP TABLE t;"}, 10)
+    ins2 = "INSERT INTO t (a, b) VALUES (1, 'x'); -- 메모\n" * 5500   # 약 250KB: 주석·문장 나누기를 awk 로 한 번에
+    timed("V M3b SQL 250KB 통과", proj, OK, "mcp__x__execute_sql", {"project_id": "p", "query": ins2 + "UPDATE t SET a = 2 WHERE id = 1;"}, 10)
+    timed("V M3b SQL 250KB 가운데 DELETE 차단", proj, B, "mcp__x__execute_sql", {"project_id": "p", "query": ins2[:120000] + "DELETE FROM orders;\n" + ins2[:120000]}, 10)
+    timed("V M3b SQL 250KB 주석 DROP/**/TABLE 차단", proj, B, "mcp__x__execute_sql", {"project_id": "p", "query": ins2 + "DROP/**/TABLE orders;"}, 10)
+    shutil.rmtree(proj, ignore_errors=True)
+    proj = make_project(phase="EXECUTE")
+    check(res, "0.2.1 V M3 진행 중 DB 도구", proj, [(B, ("mcp__x__execute_sql", {"project_id": "p", "query": "SELECT 1"}))])
+    shutil.rmtree(proj, ignore_errors=True)
+
+    # V L6: 문제 기록 줄에는 규칙 설명과 시각만(파일 이름·경로·명령 조각 없음)
+    global TEST_DATA
+    keep, TEST_DATA = TEST_DATA, tempfile.mkdtemp(prefix="guarddata-l6-")
+    proj = make_project()
+    lf(proj / ".env.hongildong-prod", "A=1\n")
+    check(res, "0.2.1 V L6 기록용 차단", proj, [
+        (B, ("Read", {"file_path": ".env.hongildong-prod"})), (B, ("Read", {"file_path": "certs/client_secret_KIMCHULSOO-3301.json"})),
+        (B, bash("cat .env.hongildong-prod")), (B, ("Write", {"file_path": "docs/refactor/.allow-baseline-edit", "content": ""})),
+        (B, ("Read", {"file_path": "C:\\Users\\hong\\proj\\.env.local"}))])
+    plog = pathlib.Path(TEST_DATA, "problems.log")
+    lines = plog.read_text(encoding="utf-8").splitlines() if plog.exists() else []
+    bad = [l for l in lines if any(x in l for x in ("hongildong", "KIMCHULSOO", ".env.", ".allow-", "hong", "\\")) or "/" in l.split(" | ", 2)[-1]]
+    res["total"] += 1
+    if len(lines) != 5 or bad:
+        res["fails"].append(("V L6 기록 줄", "5줄·경로 없음", len(lines), "problems.log", str(bad)[:170], "\n".join(lines)[:300]))
+    shutil.rmtree(proj, ignore_errors=True)
+    shutil.rmtree(TEST_DATA, ignore_errors=True)
+    TEST_DATA = keep
 
     # 27: --plugin-dir 로 띄운 플러그인 폴더(REFACTOR_ROOT)도 고치지 못한다
     proj = make_project()

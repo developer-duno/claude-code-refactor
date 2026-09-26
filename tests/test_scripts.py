@@ -4,8 +4,10 @@
 실행:  python3 tests/test_scripts.py
 옵션:  GUARD_BASH=/path/to/bash, GUARD_PATH_PREFIX=/dir  (test_guard.py 와 같음)
 """
+import atexit
 import json
 import os
+import re
 import pathlib
 import shutil
 import subprocess
@@ -34,6 +36,9 @@ def _default_bash():
 
 BASH = os.environ.get("GUARD_BASH") or _default_bash()
 PATH_PREFIX = os.environ.get("GUARD_PATH_PREFIX", "")
+# 문제 기록(problems.log)은 시험용 임시 폴더에(실제 ~/.claude/plugins/data/refactor 를 더럽히지 않게) — 모든 서브프로세스에 준다
+TEST_DATA = tempfile.mkdtemp(prefix="scriptsdata-")
+atexit.register(shutil.rmtree, TEST_DATA, True)
 
 
 def lf(path, text):
@@ -93,7 +98,7 @@ STATE = "---\nrefactor_state: 1\nphase: PLAN\ngate: G2-plan\nsteps_total: 0\nste
 
 
 def env():
-    e = dict(os.environ)
+    e = dict(os.environ, CLAUDE_PLUGIN_DATA=TEST_DATA)
     if PATH_PREFIX:
         e["PATH"] = PATH_PREFIX + os.pathsep + e["PATH"]
     return e
@@ -556,8 +561,25 @@ def main():
     tmpd = pathlib.Path(tempfile.mkdtemp(prefix="runsh2-"))
     shutil.copytree(ROOT / "plugins/refactor", tmpd / "refactor")
     (tmpd / "refactor/hooks/guard.sh").unlink()
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=b"{}", capture_output=True, env=env(), timeout=90)
+    e1 = env()
+    e1["CLAUDE_PLUGIN_DATA"] = str(tmpd / "d")
+    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=b"{}", capture_output=True, env=e1, timeout=90)
     check("run.sh: 훅 파일 없음 → 1(막지 않음)", r.returncode == 1, str(r.returncode))
+    pl1 = (tmpd / "d/problems.log").read_text(encoding="utf-8") if (tmpd / "d/problems.log").exists() else ""
+    check("run.sh: 훅 파일 없음 기록은 실제 종료 코드(exit 1)", pl1.rstrip().endswith(" | run.sh | guard exit 1 (파일 없음)"), pl1)
+
+    # 19-2) bash 3.2 호환(README 약속): bash 4 이상 전용 문법이 훅·스크립트에 없는지(버전 확인으로 감싼 줄은 제외)
+    pats = [r"\bread\s[^;|\n]*-N\b", r"\bprintf\b[^|;\n]*%\(", r"EPOCHSECONDS|EPOCHREALTIME", r"&>>", r"\bglobstar\b|\blastpipe\b",
+            r"\b(declare|local)\s+-[a-zA-Z]*n\b", r"\bwait\s+-n\b", r"\[\[\s+-v\s", r"\$\{[a-zA-Z_][a-zA-Z0-9_]*[\^,]", r"\[-1\]",
+            r"\{[0-9]+\.\.[0-9]+\.\.", r"(^|[\s;&|{(])(mapfile|readarray|coproc)\s", r"\bdeclare\s+-[a-zA-Z]*A", r"\$\{[a-zA-Z_]+@[QEPAa]\}",
+            r"(^|\s);;?&(\s|$)", r"\s\|&\s", r"\bBASHPID\b|\bSRANDOM\b"]
+    hits = []
+    for f in sorted((ROOT / "plugins/refactor").glob("*/*.sh")):
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if "BASH_VERSINFO" in line:
+                continue
+            hits += [f"{f.name}:{i}: {p}" for p in pats if re.search(p, line)]
+    check("bash 3.2: bash 4 전용 문법 0건", not hits, "\n".join(hits[:20]))
     shutil.rmtree(tmpd, ignore_errors=True)
 
     # 20) 훅 조기 종료(#18): 보통 프로젝트에서는 입력을 (거의) 읽지 않고 끝난다(출력 0B·exit 0)
@@ -683,6 +705,11 @@ def main():
         "aws": "AK" + "IA" + fk + "AW",
         "jwt": "ey" + "J" + fk + "jw",
         "home": "C:\\Users\\" + "fakeperson" + "\\proj",
+        "google": "AI" + "za" + "Sy" + fk + "gg",   # 0.2.1 V M4: Google API 키·Bearer 토큰·Supabase·Stripe 웹훅·제한 키
+        "bearer": "Authorization: Bear" + "er " + fk + "br",
+        "sb": "sb_" + "secret_" + fk + "sb",
+        "whsec": "wh" + "sec_" + fk + "wh",
+        "rk": "rk_" + "live_" + fk + "rk",
     }
     data.mkdir()
     lf(data / "problems.log", "2026-09-26 10:00 | run.sh | x exit 2 " + fakes["kv"] + "\n")

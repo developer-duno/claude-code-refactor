@@ -33,7 +33,7 @@ BS='\'; Q='"'; SL='/'; PH=$'\001'; NL=$'\n'; TAB=$'\t'
 P_BS2='\\'; P_BSQ='\"'; P_BSSL='\/'; P_BSN='\n'; P_BSR='\r'; P_BST='\t'
 
 block() {
-  { F=${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/refactor}; F=${F//"$BS"/$SL}; [ -d "$F" ] || mkdir -p "$F"; F=$F/problems.log; LC_ALL=C.UTF-8; m=${1%%"$NL"*}; TZ=KST-9 printf -v t '%(%Y-%m-%d %H:%M)T' -1; [ -n "$t" ] || t=$(TZ=KST-9 date '+%Y-%m-%d %H:%M'); printf '%s | guard | 차단: %s\n' "$t" "${m:0:60}" >> "$F"; (( RANDOM % 64 )) || { s=$(wc -c < "$F"); [ "${s//[!0-9]/}" -gt 204800 ] && tail -c 102400 "$F" | tail -n +2 > "$F.tmp" && mv -f "$F.tmp" "$F"; }; } 2>/dev/null   # 문제 기록(problems.log)에 규칙 설명 첫 줄 앞 60자만 남긴다(명령·경로·값은 적지 않음, 실패는 무시, 가끔 200KB 넘으면 최근 절반만) — 프로그램을 거의 띄우지 않아 차단이 늦어지지 않는다
+  { F=${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/refactor}; F=${F//"$BS"/$SL}; [ -d "$F" ] || mkdir -p "$F"; F=$F/problems.log; LC_ALL=C.UTF-8; m=${1%%"$NL"*}; w=${m%% *}; case "$w" in *[./"$BS"~]*) m="<파일>${m#"$w"}" ;; esac; m=${m//\/refactor:/refactor:}; r='[(][^()]*[./\~][^()]*[)]'; while [[ $m =~ $r ]]; do m=${m/"${BASH_REMATCH[0]}"/(<파일>)}; done; t=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && TZ=KST-9 printf -v t '%(%Y-%m-%d %H:%M)T' -1; [ -n "$t" ] || t=$(TZ=KST-9 date '+%Y-%m-%d %H:%M'); printf '%s | guard | 차단: %s\n' "$t" "${m:0:60}" >> "$F"; (( RANDOM % 64 )) || { s=$(wc -c < "$F"); [ "${s//[!0-9]/}" -gt 204800 ] && tail -c 102400 "$F" | tail -n +2 > "$F.tmp" && mv -f "$F.tmp" "$F"; }; } 2>/dev/null   # 문제 기록(problems.log)에 규칙 설명 첫 줄 앞 60자와 시각만 남긴다 — 괄호 속·맨 앞의 파일 이름·경로는 <파일>로 바꾸고 명령·값은 적지 않는다(공개 신고에 붙을 수 있음). 실패는 무시, 가끔 200KB 넘으면 최근 절반만. %(…)T 는 bash 4.2+ 에서만(3.2 는 date) — 프로그램을 거의 띄우지 않아 차단이 늦어지지 않는다
   printf '[refactor 안전장치] %s\n' "$1" >&2
   if [ -n "${2:-}" ]; then printf '  → %s\n' "$2" >&2; fi
   if [ -n "${BLOCK_NOTE:-}" ]; then printf '  %s\n' "$BLOCK_NOTE" >&2; fi
@@ -120,6 +120,14 @@ if [ "${#input}" -gt 32768 ]; then
     Grep) block "검색 입력이 너무 깁니다(32KB 초과)." "검색어와 범위를 줄여 주세요." ;;
     Edit|MultiEdit)
       jget old_string; [ "${#JV}" -gt 32768 ] && block "바꿀 부분(old_string)이 너무 깁니다(32KB 초과)." "여러 번에 나눠 고치거나 Write 도구로 파일 전체를 쓰세요." ;;
+    Agent|Task)
+      # 하위 에이전트 지시문(prompt+description)이 32KB 를 넘으면 판정(줄마다 코드 조각 검사)이 훅 제한 시간을 넘길 수 있다 — 무거운 판정 전에 길이만 재고 막는다
+      n=$(printf '%s' "$input" | awk 'function rall(s, re, w,   n, i, P, out) { n = split(s, P, re); if (n < 2) return s; out = P[1]; for (i = 2; i <= n; i++) out = out w P[i]; return out }
+        { j = j $0 "\n" } END { j = rall(rall(j, "\\\\\\\\", "\002\002"), "\\\\\"", "\003\003"); t = 0
+          if (match(j, /"prompt"[ \t]*:[ \t]*"[^"]*"/)) { v = substr(j, RSTART, RLENGTH); sub(/^"prompt"[ \t]*:[ \t]*"/, "", v); t += length(v) - 1 }
+          if (match(j, /"description"[ \t]*:[ \t]*"[^"]*"/)) { v = substr(j, RSTART, RLENGTH); sub(/^"description"[ \t]*:[ \t]*"/, "", v); t += length(v) - 1 }
+          print t }' 2>/dev/null)
+      [ "${n:-0}" -gt 32768 ] && block "도구 입력이 너무 깁니다(32KB 초과) — 파일로 저장해 경로를 넘기세요." "지시문을 파일(예: /tmp/지시.md)로 저장하고, 하위 에이전트에게는 그 파일 경로를 읽으라고 짧게 쓰세요." ;;
   esac
 fi
 proj_raw=${CLAUDE_PROJECT_DIR:-}
@@ -503,6 +511,21 @@ check_grep_tool() {
 
 # SQL·DB 명령이 데이터를 통째로 지우거나 구조를 삭제하는가. $2: shell(따옴표 안 SQL) / sql(순수 SQL)
 sql_destructive() {
+  # 큰 SQL(MCP 도구의 큰 INSERT·마이그레이션 16KB 초과): 정규식 검사·잘라내기를 통째 문자열에 되풀이하면 길이만큼 느려져(256KB 에서 수십 초)
+  # 주석은 awk 로 한 번에 지우고, 문장(;)으로 나눠 위험 낱말이 든 문장만 아래 판정에 넣는다
+  if [ "$2" = "sql" ] && [ "${#1}" -gt 16384 ]; then
+    # awk: 주석 지우기(gsub 는 바꿀 곳이 수천 개면 느려 split 으로 나눠 잇는다) → ; 로 나누기 → 위험 낱말이 든 문장만 한 줄에 하나씩(각 16KB 까지)
+    local risky pt
+    risky=$(printf '%s' "$1" | awk 'BEGIN { RS = "\001" } {
+        n = split($0, P, /\/\*([^*]|\*+[^*\/])*\*+\//); s = P[1]; for (i = 2; i <= n; i++) s = s " " P[i]
+        n = split(s, P, /--[^;]*/); s = P[1]; for (i = 2; i <= n; i++) s = s " " P[i]
+        gsub(/\n/, " ", s); n = split(s, S, ";")
+        for (i = 1; i <= n; i++) if (tolower(S[i]) ~ /drop|alter|truncate|flush|delete|update|remove/) print substr(S[i], 1, 16384) }' 2>/dev/null)
+    while IFS= read -r pt; do
+      [ -n "$pt" ] && sql_destructive "$pt" sql && return 0
+    done <<< "$risky"
+    return 1
+  fi
   local t=$1 seg rest stop re_lc re_bc='/\*([^*]|\*+[^*/])*\*+/'
   if [ "$2" = "sql" ]; then stop='[^;]*'; else stop='[^;"]*'; fi
   # 주석(/* … */, -- …)은 지우고 본다 — DELETE FROM x -- where … 가 조건처럼 보이거나 DROP/**/TABLE 로 규칙을 피하지 않게
@@ -524,32 +547,43 @@ sql_destructive() {
 # ── MCP 도구(연결된 DB·배포·메일 등) ─────────────────────────────────────────
 check_mcp() {
   # 경로 인자(path·file_path·paths·uri·file …)가 비밀값 파일이면 막는다(도구 이름과 무관하게 인자 이름으로)
-  local rest=$input v m arr re_pk='"(path|file_path|filepath|file|filename|uri|url|paths|files|source|destination|target)"[[:space:]]*:[[:space:]]*("(([^"\\]|\\.)*)"|\[[^]]*\])'
+  # (키가 입력에 없으면 건너뛴다. 키마다 따로 찾고 나머지는 정규식 끝 (.*) 로 받는다 — 여러 이름을 한 정규식에 묶거나 ${x#*…} 로 자르면
+  #  200KB 입력에서 수십 초가 걸려 훅 제한 시간을 넘긴다)
+  local rest v arr pk re_pk
   local re_s='"(([^"\\]|\\.)*)"'
-  while [[ $rest =~ $re_pk ]]; do
-    m=${BASH_REMATCH[0]}; v=${BASH_REMATCH[3]}; arr=${BASH_REMATCH[2]}; rest=${rest#*"$m"}
-    case "$arr" in '['*) ;; *) arr="\"$v\"" ;; esac
-    while [[ $arr =~ $re_s ]]; do
-      v=${BASH_REMATCH[1]}; arr=${arr#*"${BASH_REMATCH[0]}"}
-      unesc_line "$v"; v=${UV#file://}; v=${v%%\?*}
-      [ -z "$v" ] && continue
-      normpath "$v"
-      is_secret_path "$NP" && block "비밀값 파일(${NP##*/})은 MCP 도구로도 열거나 보내지 않습니다." "이름·git 추적 여부만 확인하세요(git ls-files, ls -a). 필요한 값은 사람에게 물어보세요."
+  for pk in path file_path filepath file filename uri url paths files source destination target; do
+    case "$input" in *"\"$pk\""*) ;; *) continue ;; esac
+    rest=$input; re_pk="\"$pk\"[[:space:]]*:[[:space:]]*(\"(([^\"\\\\]|\\\\.)*)\"|\\[[^]]*\\])(.*)"
+    while [[ $rest =~ $re_pk ]]; do
+      arr=${BASH_REMATCH[1]}; v=${BASH_REMATCH[2]}; rest=${BASH_REMATCH[4]}
+      case "$arr" in '['*) ;; *) arr="\"$v\"" ;; esac
+      while [[ $arr =~ $re_s ]]; do
+        v=${BASH_REMATCH[1]}; arr=${arr#*"${BASH_REMATCH[0]}"}
+        unesc_line "$v"; v=${UV#file://}; v=${v%%\?*}
+        [ -z "$v" ] && continue
+        normpath "$v"
+        is_secret_path "$NP" && block "비밀값 파일(${NP##*/})은 MCP 도구로도 열거나 보내지 않습니다." "이름·git 추적 여부만 확인하세요(git ls-files, ls -a). 필요한 값은 사람에게 물어보세요."
+      done
     done
   done
   # 명령·코드 인자(command·cmd·script·code …)는 셸 명령 판정을 그대로 태운다. query 는 실행 도구(sql·exec·run·shell…)일 때만
-  local k
+  # (MCP 입력은 크기로 막지 않는다 — 노션 긴 글·큰 SQL 도 정상 작업. 대신 키가 입력에 아예 없으면 jget 을 건너뛰어 큰 입력도 빨리 끝낸다)
+  local k q=""
   for k in command cmd script shell_command commandline args_command; do
+    case "$input" in *"\"$k\""*) ;; *) continue ;; esac
     jget "$k"; [ -n "$JV" ] && check_shell "$JV"
   done
-  jget code; [ -n "$JV" ] && check_shell "python3 -c $JV"
-  if has "$tool" 'sql|exec|run|shell|bash|terminal|command|script|eval|query_database'; then
-    jget query; [ -n "$JV" ] && check_shell "$JV"
+  case "$input" in *'"code"'*) jget code; [ -n "$JV" ] && check_shell "python3 -c $JV" ;; esac
+  case "$input" in *'"query"'*) jget query; q=$JV ;; esac
+  # 16KB 넘는 query 는 셸 명령 길이 상한(파일로 저장해 실행)에 걸리므로 셸 판정은 건너뛰고 아래 SQL 파괴 판정만 한다(큰 INSERT 등)
+  if [ -n "$q" ] && [ "${#q}" -le 16384 ] && has "$tool" 'sql|exec|run|shell|bash|terminal|command|script|eval|query_database'; then
+    check_shell "$q"
   fi
   if has "$tool" 'sql|execute|migration|query_database|run_query'; then
     local sqltext=""
-    jget query; if [ -n "$JV" ]; then unesc_line "$JV"; sqltext=$UV; fi
-    if [ -z "$sqltext" ]; then jget sql; if [ -n "$JV" ]; then unesc_line "$JV"; sqltext=$UV; fi; fi
+    # SQL 은 자르지 않고 푼다(unesc_line 은 2만 자에서 자른다 — 큰 SQL 끝의 DROP 을 놓치지 않게)
+    if [ -n "$q" ]; then unesc_short "$q"; sqltext=$UV; fi
+    if [ -z "$sqltext" ]; then case "$input" in *'"sql"'*) jget sql; if [ -n "$JV" ]; then unesc_short "$JV"; sqltext=$UV; fi ;; esac; fi
     if [ -n "$sqltext" ] && sql_destructive "$sqltext" sql; then
       block "DB 데이터를 통째로 지우거나 구조를 삭제하는 SQL은 막혀 있습니다." "운영 DB 작업은 사람이 백업을 확인한 뒤 직접 합니다."
     fi
@@ -594,12 +628,13 @@ interp_writes() {
 
 # 따옴표 인자 하나를 _Q_로 바꾼다(명령 치환이 든 것은 그대로). $1 정규식(따옴표 인자가 마지막 괄호) $2 그 괄호 번호 $3 원문 → BQ
 blank_quoted() {
-  local re=$1 gi=$2 rest=$3 out="" m0 mq re_cs='[$][(]|`'
+  local re=$1 gi=$2 rest=$3 out="" m0 mq re_cs='[$][(]|`' re_se='^[(][[:space:]]*(echo|printf|write-output)'
   while [[ $rest =~ $re ]]; do
     m0=${BASH_REMATCH[0]}; mq=${BASH_REMATCH[$gi]}
     out="$out${rest%%"$m0"*}"
     rest=${rest#*"$m0"}
-    if [[ $mq =~ $re_cs ]]; then out="$out$m0"; else out="$out${m0%"$mq"}_Q_"; fi
+    # $(echo "…") 의 문구는 명령의 인자가 되므로 지우지 않는다(cat $(echo ".env"))
+    if [[ $mq =~ $re_cs ]] || { [ "${out: -1}" = '$' ] && [[ $m0 =~ $re_se ]]; }; then out="$out$m0"; else out="$out${m0%"$mq"}_Q_"; fi
   done
   BQ="$out$rest"
 }
@@ -623,7 +658,7 @@ blank_echo_words() {
   while [[ $rest =~ $re ]]; do
     m0=${BASH_REMATCH[0]}; lead="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; args=${BASH_REMATCH[4]}
     out="$out${rest%%"$m0"*}"; rest=${rest#*"$m0"}
-    if [[ $args =~ $re_cs ]]; then out="$out$m0"; continue; fi
+    if [[ $args =~ $re_cs ]] || { [ "${out: -1}" = '$' ] && [ "${m0:0:1}" = '(' ]; }; then out="$out$m0"; continue; fi   # $(echo .env) 는 인자가 된다
     kept=""
     while [[ $args =~ $re_r ]]; do r=${BASH_REMATCH[0]}; kept="$kept $r"; args=${args#*"$r"}; done
     out="$out$lead _Q_$kept "
@@ -796,6 +831,96 @@ fw_norm() {
   done
 }
 
+# 단어 안의 빈 따옴표 쌍('' "")을 지운다(re''set → reset, n""pm → npm, .e''nv → .env) — bash 에서는 같은 단어다.
+# 홀로 선 '' "" 는 빈 인자(grep -n "" .env)라 그대로 둔다 → EQ
+rm_empty_quotes() {
+  EQ=$1
+  case "$EQ" in *"''"*|*'""'*) ;; *) return 0 ;; esac
+  EQ=${EQ//"\$''"/}; EQ=${EQ//'$""'/}   # $'' · $"" 도 빈 문자열이다(re$''set → reset)
+  local re="([^[:space:];&|<>()])(''|\"\")+|(''|\"\")+([^[:space:];&|<>()])" m k=0
+  while [[ $EQ =~ $re ]] && [ "$k" -lt 200 ]; do
+    m=${BASH_REMATCH[0]}; EQ=${EQ/"$m"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}; k=$((k + 1))
+  done
+}
+# 공백·특수문자·$·와일드카드가 없는 따옴표 인자는 따옴표를 벗긴다("--hard" → --hard, '.env' → .env, re'set' → reset) → UQ
+# 공백·;&|<>·괄호·$ 가 든 문자열(명령·코드·검색어)은 따옴표째 그대로 둔다 — 그 안은 기존 판정이 따옴표를 경계로 본다. <<'EOF' 구분자도 그대로
+unquote_simple() {
+  UQ=$1
+  case "$UQ" in *[\"\']*) ;; *) return 0 ;; esac
+  local s=$1 out="" m c re="\"([^\"]*)\"|'([^']*)'" re_ok='^[A-Za-z0-9_./:@%+=,~-]+$' re_hd='<<-?[[:space:]]*$'
+  while [[ $s =~ $re ]]; do
+    m=${BASH_REMATCH[0]}; c=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+    out="$out${s%%"$m"*}"; s=${s#*"$m"}
+    if [[ $c =~ $re_ok ]] && ! [[ $out =~ $re_hd ]]; then
+      [ "${out: -1}" = '$' ] && out=${out%?}   # $'--hard' · $"x" 도 같은 글자다(ANSI-C·로캘 따옴표)
+      out="$out$c"
+    else out="$out$m"; fi
+  done
+  UQ="$out$s"
+}
+# 패키지 실행기의 셸 모드(npx -c '…' · npx --call … · npm exec -c · pnpm exec -c · yarn exec -c)는 안의 명령만 남긴다 → SC
+strip_call_opt() {
+  SC=$1
+  case "$SC" in *-c*|*--call*) ;; *) return 0 ;; esac
+  local q="'" m k=0 inner
+  local re="(^|[;&|({[:space:]])(npx|pnpx|bunx|npm[[:space:]]+(exec|x)|pnpm[[:space:]]+(exec|dlx)|yarn[[:space:]]+(exec|dlx))(([[:space:]]+-[^[:space:]]+)*)[[:space:]]+(-c|--call)(=|[[:space:]]+)(\"([^\"]*)\"|${q}([^${q}]*)${q}|([^[:space:];&|]+))"
+  while [[ $SC =~ $re ]] && [ "$k" -lt 5 ]; do
+    m=${BASH_REMATCH[0]}; inner="${BASH_REMATCH[11]}${BASH_REMATCH[12]}${BASH_REMATCH[13]}"
+    SC=${SC/"$m"/"${BASH_REMATCH[1]}$inner"}; k=$((k + 1))
+  done
+}
+# 명령을 && || ; | ` $( 로 나눈 조각들 → CUTS(줄바꿈 구분)
+cut_segs() { local s=$1; s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; CUTS=${s//\$(/$NL}; }
+# 새 Claude 세션(claude -p … · npx claude · node …/claude-code/…)에 승인 명령·--from-hook 을 넘기는가 — 새 세션의 입력 훅이 사람 입력으로 보고 승인한다
+nested_claude_approve() {
+  has "$1" 'claude' && has "$1" 'refactor:approve|from-hook' || return 1
+  local s seg i a
+  cut_segs "$1"; s=$CUTS
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    case "$seg" in *claude*) ;; *) continue ;; esac
+    seg_words "$seg"
+    case "$SCMD" in
+      claude|claude.cmd) return 0 ;;
+      npx|pnpx|bunx|node|bun|deno|pnpm|yarn|npm)
+        for ((i = SI + 1; i < ${#SW[@]}; i++)); do
+          a=${SW[$i]}
+          case "$a" in exec|dlx|x|run) continue ;; -*) continue ;; esac
+          case "$a" in *claude*) return 0 ;; esac
+          break
+        done ;;
+    esac
+  done
+  return 1
+}
+# 승인 스크립트를 "실행"하는 모양인가(읽기·검색은 아니다): bash·sh·source·. 로 부르기, 직접 실행, run.sh refactor-approve,
+# 셸로 흘려 넣기(cat … | bash · bash < … · <( ) · eval · xargs bash · -exec bash). $1 = 판정용 명령(따옴표 정리됨)
+approve_exec() {
+  local s seg
+  has "$1" "[|][[:space:]]*(sudo[[:space:]]+)?(ba|z|da|k)?sh([[:space:]]|$)|(^|[;&|({[:space:]])(bash|sh|zsh|dash|source|\\.)[[:space:]]*<|<[(]|(^|[;&|({[:space:]])eval([[:space:]]|$)|(xargs|-exec|-execdir)[[:space:]]+([^;&|]*[[:space:]])?(sudo[[:space:]]+)?(bash|sh|zsh|dash|source)([[:space:]]|$)" && return 0
+  cut_segs "$1"; s=$CUTS
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    case "$seg" in *refactor-approve*) ;; *) continue ;; esac
+    seg_words "$seg"
+    case "$SCMD" in *refactor-approve*|run.sh|bash|sh|zsh|dash|ksh|source|.) return 0 ;; esac
+  done
+  return 1
+}
+# cd·pushd·Set-Location 조각이면 그 폴더를 cwd 로 삼는다(뒤 조각의 상대경로 기준). popd 는 처음 폴더로. 대상을 판정할 수 없으면 cwd 그대로.
+# 0 = cd 류 조각이었음. 부르는 쪽이 끝나면 cwd 를 되돌린다(CWD_BASE)
+cd_seg() {
+  case "$1" in *cd*|*pushd*|*popd*|*location*|*chdir*|*sl\ *) ;; *) return 1 ;; esac
+  seg_words "$1"
+  case "$SCMD" in cd|pushd|chdir|set-location|sl|push-location) ;; popd|pop-location) cwd=$CWD_BASE; return 0 ;; *) return 1 ;; esac
+  local i a t=""
+  for ((i = SI + 1; i < ${#SW[@]}; i++)); do a=${SW[$i]}; case "$a" in -*) continue ;; esac; t=$a; break; done
+  [ -z "$t" ] && t="~"
+  [ "$t" = "-" ] && return 0
+  resolve_tok "$t" && cwd=$RP
+  return 0
+}
+
 # 같은 명령 안에서 대입한 단순 변수(NAME=값, PowerShell $name = 값)를 값으로 펼친다 — 두 번 돌려 한 단계 안쪽 변수까지 → EV
 expand_vars() {
   EV=$1
@@ -832,7 +957,7 @@ norm_dirvars() {
   NV=$s
 }
 
-# 명령 조각 하나를 단어로 나누고(따옴표·괄호는 지움) 앞에 붙은 래퍼(sudo·env·nohup·xargs·if/then·cmd /c·powershell -c·bash -c …)를 건너뛴다
+# 명령 조각 하나를 단어로 나누고(따옴표·괄호는 지움) 앞에 붙은 래퍼(sudo·env·nohup·xargs·if/then·eval·corepack·cmd /c·powershell -c·bash -c …)를 건너뛴다
 # → SW(단어 배열), SI(명령 이름 위치), SCMD(명령 이름: 경로·.exe 뗌), INCMD(cmd /c 안), XARGS(xargs 로 받음)
 seg_words() {
   local s=$1 n re_cmdopt='^/{1,2}[a-z](:[a-z]+)?$' re_shc='^-[a-z]*c[a-z]*$'
@@ -842,7 +967,7 @@ seg_words() {
   while [ "$SI" -lt "$n" ]; do
     case "${SW[$SI]}" in env|nice|stdbuf|timeout|xargs|cmd|cmd.exe|powershell|pwsh|bash|sh|nohup|command|exec|builtin|sudo|time) LASTWRAP=${SW[$SI]} ;; esac
     case "${SW[$SI]}" in
-      sudo|doas|nohup|command|exec|builtin|time|'!'|if|then|else|elif|do|while|until|'&') SI=$((SI + 1)) ;;
+      sudo|doas|nohup|command|exec|builtin|time|'!'|if|then|else|elif|do|while|until|'&'|eval|corepack) SI=$((SI + 1)) ;;   # eval "…"·corepack pnpm … 는 안의 명령으로 본다
       -*) break ;;
       *=*) SI=$((SI + 1)) ;;
       env|nice|stdbuf|timeout|xargs)
@@ -879,11 +1004,11 @@ seg_words() {
 #  TGK: 알려진 쓰기 명령만(플러그인 폴더·읽기 전용 단계 보호용 — 스크립트 실행 인자를 쓰기로 오해하지 않게)
 #  공통: 리다이렉트(> >>) 대상, 쓰기 옵션 값(of= --output -o(curl·sort) -O(wget) -C(tar) -d(unzip) -o<폴더>(7z) --directory -t …)
 #  읽기 명령(cat·grep·ls·echo …)의 인자는 대상이 아니다. 줄 머리: f=파일, d=폴더(그 안에 무엇이든 생길 수 있음)
-#  복사·이동: CPDST(목적지), CPSRC(원본들, 줄바꿈 구분), SEGMV=1(이동·개명)
+#  복사·이동: CPDST(목적지), CPSRC(원본들, 줄바꿈 구분), SEGMV=1(이동·개명), SEGDEL=1(지우기 명령)
 seg_targets() {
   local s=$1 i n t a nx cls="" sub="" wf=0 skip=0 nargs=0 last="" tarf=0 tarc=0
   local args=()
-  TGA=""; TGK=""; CPDST=""; CPSRC=""; SEGMV=0
+  TGA=""; TGK=""; CPDST=""; CPSRC=""; SEGMV=0; SEGDEL=0
   local re_rd='(^|[^=>-])[0-9&]?>>?[|]?[[:space:]]*([^[:space:]<>;&|]+)' rr=$s
   while [[ $rr =~ $re_rd ]]; do
     t=${BASH_REMATCH[2]}; rr=${rr#*"${BASH_REMATCH[0]}"}
@@ -922,7 +1047,8 @@ seg_targets() {
       cls=r ;;
     mv|move|move-item|mi|ren|rename|rni|rename-item) cls=mv; SEGMV=1 ;;
     cp|copy|copy-item|cpi|install|rsync|scp|xcopy|robocopy|ln|mklink) cls=cp ;;
-    rm|unlink|rmdir|rd|del|erase|remove-item|ri|touch|mkdir|md|new-item|ni|truncate|shred|chmod|chown|chgrp|tee|patch|set-content|sc|add-content|ac|out-file|clear-content|clc|rimraf|trash|srm|tee-object) cls=w ;;
+    rm|unlink|rmdir|rd|del|erase|remove-item|ri|touch|mkdir|md|new-item|ni|truncate|shred|chmod|chown|chgrp|tee|patch|set-content|sc|add-content|ac|out-file|clear-content|clc|rimraf|trash|srm|tee-object)
+      cls=w; case "$SCMD" in rm|unlink|rmdir|rd|del|erase|remove-item|ri|shred|rimraf|trash|srm) SEGDEL=1 ;; esac ;;
     prettier|eslint|biome|ruff|black|isort|gofmt|dprint|rubocop|autopep8|standard|stylelint|rome|oxlint) cls=fmt ;;
     *) cls=u ;;
   esac
@@ -1092,7 +1218,10 @@ del_seg() { # $1 조각 $2 파이프 앞 조각
   local msg=$MSG_RM_BIG
   [ "$ps" = 1 ] && msg="Remove-Item -Recurse 로 프로젝트·홈 전체를 지우는 명령은 막혀 있습니다."
   case "$c" in rd|rmdir|del|erase) [ "$ps" = 0 ] && msg="폴더 통째 삭제(rd /s·del /s)로 프로젝트·홈 전체를 지우는 명령은 막혀 있습니다." ;; esac
-  for a in "${tg[@]}"; do big_tok "$a" && block "$msg" "$MSG_RM_HINT"; done
+  for a in "${tg[@]}"; do
+    big_tok "$a" && block "$msg" "$MSG_RM_HINT"
+    resolve_tok "$a" && is_record_path "$RP" && block "$MSG_RDOC" "$MSG_RDOC2"   # cd docs && rm -rf refactor 처럼 경로로 따진 기록 폴더
+  done
   # xargs rm -r: 파이프 앞 명령이 큰 폴더를 넘기는가(pwd, echo ~, ls -d .., 조건 없는 find .)
   if [ "${#tg[@]}" -eq 0 ] && [ "$XARGS" = 1 ] && [ -n "${2:-}" ]; then
     seg_words "$2"
@@ -1109,11 +1238,12 @@ del_seg() { # $1 조각 $2 파이프 앞 조각
   fi
   return 0
 }
-del_scan() { # $1 명령(lq) — && || ; 로 나눈 명령마다 파이프 조각을 차례로 본다
-  local s=$1 cl pl seg prev
+del_scan() { # $1 명령(lq) — && || ; 로 나눈 명령마다 파이프 조각을 차례로 본다(cd·pushd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준)
+  local s=$1 cl pl seg prev CWD_BASE=$cwd
   s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//\`/$NL}
   while [ -n "$s" ]; do
     cl=${s%%"$NL"*}; if [ "$cl" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    cd_seg "$cl" && continue
     prev=""; pl=$cl
     while [ -n "$pl" ]; do
       seg=${pl%%|*}; if [ "$seg" = "$pl" ]; then pl=""; else pl=${pl#*|}; fi
@@ -1121,6 +1251,7 @@ del_scan() { # $1 명령(lq) — && || ; 로 나눈 명령마다 파이프 조�
       prev=$seg
     done
   done
+  cwd=$CWD_BASE
 }
 # 인터프리터 코드로 큰 폴더를 통째로 지우는가(shutil.rmtree('.'), fs.rmSync(process.cwd(),{recursive:true}) …)
 interp_del_big() {
@@ -1201,7 +1332,7 @@ env_dump_seg() {
 }
 # 코드 한 줄(node -e·python -c …)이 보는 환경변수가 모두 안전 이름인가(process.env.NODE_ENV 등). 통째(process.env)·dotenv 는 아니다
 env_refs_safe() {
-  local rest=$1 re='(process[.]env|os[.]environ|import[.]meta[.]env|deno[.]env[.]get|os[.]getenv|getenv|env)((\.|\[|\.get\(|\()[[:space:]]*["'"'"']?([A-Za-z_][A-Za-z0-9_]*))?' any=0 nm
+  local rest=$1 re='(process[.]env|os[.]environ|import[.]meta[.]env|deno[.]env[.]get|os[.]getenv|getenv|env)((\.|\[|[{]|\.get\(|\()[[:space:]]*["'"'"']?([A-Za-z_][A-Za-z0-9_]*))?' any=0 nm
   has "$rest" 'dotenv|load_dotenv' && return 1
   while [[ $rest =~ $re ]]; do
     rest=${rest#*"${BASH_REMATCH[0]}"}
@@ -1218,12 +1349,13 @@ env_refs_safe() {
 MSG_RDOC="리팩토링 기록(docs/refactor)은 지우지 않습니다."
 MSG_RDOC2="다시 하려면 /refactor:go 다시 <단계> 를 쓰세요(이전 파일은 *-prev.md로 남음)."
 # 셸 명령의 쓰기 대상(목적지)으로 판정: 사람 전용 파일, 기록 폴더 이동·개명, 플러그인 폴더, 읽기 전용 단계의 프로젝트 파일
-shell_targets() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨)
-  local s=$1 seg tl line kind t b src
+shell_targets() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨) — cd·pushd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준
+  local s=$1 seg tl line kind t b src CWD_BASE=$cwd
   s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
     case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
+    cd_seg "$seg" && continue
     seg_targets "$seg"
     tl=$TGA
     while [ -n "$tl" ]; do
@@ -1235,6 +1367,8 @@ shell_targets() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨)
         case "$RP" in "$rdir"|"$rdir"/*) block "리팩토링 기록 폴더(docs/refactor)에 압축을 풀거나 파일을 한꺼번에 넣지 않습니다(사람 전용 파일을 덮어쓸 수 있음)." "$MSG_HUMAN" ;; esac
       fi
       if [ "$SEGMV" = 1 ] && [ "$t" != "$CPDST" ] && is_record_path "$RP"; then block "$MSG_RDOC" "$MSG_RDOC2"; fi
+      # 리팩토링 진행 중: 기록 폴더 안 파일 지우기(cd docs/refactor && rm STATE.md 처럼 경로로 따진 것)
+      if [ "$SEGDEL" = 1 ] && [ "$refactor_on" = 1 ]; then case "$RP" in "$rdir"|"$rdir"/*) block "$MSG_RDOC" "$MSG_RDOC2" ;; esac; fi
     done
     # 기록 폴더로 복사·이동해 들어가면서 사람 전용 파일 이름을 쓰는가(cp /tmp/APPROVALS.log docs/refactor/)
     if [ -n "$CPDST" ] && resolve_tok "$CPDST"; then
@@ -1261,6 +1395,7 @@ shell_targets() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨)
       fi
     done
   done
+  cwd=$CWD_BASE
 }
 # 8.3 짧은 이름(ENV~1) 인자가 비밀값 파일일 수 있는가
 seg_short_secret() {
@@ -1283,6 +1418,42 @@ ps_env_provider() {
     [ -z "$nm" ] && return 0
     case "$nm" in *'*'*|*'?'*|*'['*) return 0 ;; esac
     safe_env_name "$nm" || return 0
+  done
+  return 1
+}
+# <<< 로 비밀값 이름의 변수를 넘기는가(cat <<< "$OPENAI_API_KEY")
+herestr_sens() {
+  local rest=$1 re="<<<[[:space:]]*[\"']?[$][{]?([A-Za-z_][A-Za-z0-9_]*)"
+  while [[ $rest =~ $re ]]; do
+    rest=${rest#*"${BASH_REMATCH[0]}"}
+    sens_name "${BASH_REMATCH[1]}" && return 0
+  done
+  return 1
+}
+# awk 가 ENVIRON(환경변수)을 찍는가 — 안전 이름(ENVIRON["HOME"])만 보면 통과
+awk_env_print() {
+  has "$1" "${S}(g|m|n)?awk[[:space:]]" && has "$1" 'environ' && has "$1" 'print' || return 1
+  local rest=$1 re="environ([[][[:space:]]*[\"']?([A-Za-z_][A-Za-z0-9_]*))?"
+  while [[ $rest =~ $re ]]; do
+    rest=${rest#*"${BASH_REMATCH[0]}"}
+    [ -z "${BASH_REMATCH[2]}" ] && return 0
+    safe_env_name "${BASH_REMATCH[2]}" || return 0
+  done
+  return 1
+}
+# jq 가 환경변수(env · $ENV)를 통째로 또는 비밀값 이름으로 찍는가(jq -n env · jq -n '$ENV' · env.API_KEY) — .env 같은 필드·파일 이름은 아니다
+jq_env() {
+  has "$1" "${S}jq[[:space:]]" || return 1
+  local seg nm rest=$1 re_seg="${S}jq[[:space:]][^;&|]*" re='(^|[^./[:alnum:]_-])([$]?env)([.]([A-Za-z_][A-Za-z0-9_]*))?([^[:alnum:]_]|$)' s2
+  while [[ $rest =~ $re_seg ]]; do
+    seg=${BASH_REMATCH[0]}; rest=${rest#*"$seg"}; s2=${seg#*jq}
+    while [[ $s2 =~ $re ]]; do
+      s2=${s2#*"${BASH_REMATCH[0]}"}
+      nm=${BASH_REMATCH[4]}
+      [ -z "$nm" ] && return 0
+      hascs "$nm" '[A-Z]' || continue   # env.json 같은 파일 이름은 아니다(환경변수 이름은 대문자)
+      safe_env_name "$nm" || return 0
+    done
   done
   return 1
 }
@@ -1349,10 +1520,43 @@ tok_wide() {
   case "$proj/" in "$RP"/*) return 0 ;; esac
   return 1
 }
-# 비밀값 파일이 무시되지 않은 넓은 범위를 내용 검색하는 조각인가(grep -r · rg -uu/--hidden/--no-ignore · findstr /s · Select-String)
+# 명령 조각이 숨김 파일까지 넓은 범위의 파일 이름을 내놓는가(find . · find <프로젝트> · ls -A · ls -a) — xargs grep · grep $(…) 의 파일 목록 판정
+lists_wide() {
+  seg_words "$1"
+  local i a st=1 starts=() filt=0 all=0
+  case "$SCMD" in
+    find)
+      for ((i = SI + 1; i < ${#SW[@]}; i++)); do
+        a=${SW[$i]}
+        if [ "$st" = 1 ]; then case "$a" in -*|'!'|'\(') st=0 ;; *) starts+=("$a"); continue ;; esac; fi
+        case "$a" in -name|-iname|-path|-ipath|-wholename|-iwholename|-regex|-iregex) glob_hits_secret "${SW[$((i + 1))]:-}" || filt=1 ;; esac
+      done ;;
+    ls|dir|gci|get-childitem)
+      for ((i = SI + 1; i < ${#SW[@]}; i++)); do
+        a=${SW[$i]}
+        case "$a" in --all|--almost-all|-force) all=1 ;; --*) ;; -*a*) all=1 ;; -*) ;; *) starts+=("$a") ;; esac
+      done
+      [ "$all" = 1 ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  [ "$filt" = 1 ] && return 1
+  [ "${#starts[@]}" -eq 0 ] && return 0
+  for a in "${starts[@]}"; do tok_wide "$a" && return 0; done
+  return 1
+}
+# 비밀값 파일이 무시되지 않은 넓은 범위를 내용 검색하는 조각인가(grep -r · rg -uu/--hidden/--no-ignore · findstr /s · Select-String
+# · 앞 명령이 넓은 파일 목록을 넘기는 xargs grep). $2 = 바로 앞 조각(파이프 앞)
 wide_search_seg() {
   local s=$1 c i a skip=0 toks=() np=0
   seg_words "$s"; c=$SCMD
+  # find . | xargs grep … : 파일 목록을 받는 검색은 목록이 넓으면(숨김 파일 포함) 넓은 검색이다
+  if [ "$XARGS" = 1 ] && [ -n "${2:-}" ]; then
+    case "$c" in
+      grep|egrep|fgrep|rg)
+        hascs "$s" '[[:space:]](-[a-zA-Z]*[lLcq][a-zA-Z]*|--files-with(out)?-match(es)?|--files-with-matches|--count|--quiet)([[:space:]]|$)' && return 1
+        lists_wide "$2"; return $? ;;
+    esac
+  fi
   case "$c" in
     grep|egrep|fgrep)
       hascs "$s" '[[:space:]](-[a-zA-Z]*[rR][a-zA-Z]*|--recursive|--dereference-recursive)([[:space:]]|$)' || return 1
@@ -1411,9 +1615,12 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   jget cwd; unesc_line "$JV"; cwd=${UV//"$BS"/$SL}; cwd=${cwd%/}; [ -z "$cwd" ] && cwd=$proj
   normpath "$cwd" /; cwd=$NP
 
-  # 판정 전 정규화: 전각 글자 → 반각, 같은 명령 안에서 대입한 단순 변수 → 값(F=.env; cat $F → cat .env)
+  # 판정 전 정규화: 전각 글자 → 반각, 단어 안의 빈 따옴표 쌍 지우기(re''set → reset),
+  # 같은 명령 안에서 대입한 단순 변수 → 값(F=.env; cat $F → cat .env), 패키지 실행기 셸 모드(npx -c '…') → 안의 명령
   fw_norm "$cmd"; cmd=$FW
+  rm_empty_quotes "$cmd"; cmd=$EQ
   expand_vars "$cmd"; cmd=$EV
+  strip_call_opt "$cmd"; cmd=$SC
   # git -c 로 별칭을 만들어 실행하거나 clean 안전 설정을 끄는 길, 위험 명령 별칭을 저장하는 길
   if has "$cmd" "git[[:space:]]+([^;&|]*[[:space:]])?-c[[:space:]]*[\"']?alias[.]"     || has "$cmd" "git[[:space:]][^;&|]*config[^;&|]*alias[.][^[:space:]]+[[:space:]][^;&|]*(reset|clean|checkout|restore|push|stash|branch|filter|reflog|gc|update-ref|!)"; then
     block "git 별칭(alias)으로 명령 이름을 바꿔 실행하지 않습니다(안전장치 판정을 피하는 길)." "원래 git 명령을 그대로 쓰세요."
@@ -1444,7 +1651,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # lq: 위험 명령 판정용 — 검색·출력·커밋 메시지의 따옴표 인자는 빼고 본다(grep "vercel --prod" 같은 검색이 막히지 않게).
   #     단, $( ) · ` ` 명령 치환이 든 문자열은 실행되는 명령이므로 그대로 둔다.
   blank_quoted "(^|[;&|(])[[:space:]]*(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep|git[[:space:]]+log|git[[:space:]]+commit|echo|printf|write-host|write-output)([^;&|\"']*)(\"[^\"]*\"|'[^']*')" 4 "$lr"
-  lq=$BQ
+  unquote_simple "$BQ"; lq=$UQ   # 검색어·문구를 뺀 뒤 단순 따옴표 인자는 벗긴다(git reset "--hard" → git reset --hard)
 
   # lx: 비밀값 판정용 — 따옴표 속 파일 경로는 남기고(grep KEY ".env" 도 잡게), 검색어·커밋 메시지·echo 문구만 뺀다
   blank_quoted "(^|[;&|(])[[:space:]]*(sudo[[:space:]]+)?(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep)(([[:space:]]+-[^[:space:]]+)*)[[:space:]]+(\"[^\"]*\"|'[^']*')" 6 "$lr"
@@ -1472,9 +1679,15 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
     lx=${lx/"$m0"/"$m4 true "}
   done
   while [[ $lx =~ $re_ex ]]; do lx=${lx/"${BASH_REMATCH[0]}"/ }; done
+  # lq·lx 를 만든 뒤에는 나머지 판정용 lr 도 단순 따옴표 인자를 벗긴다('node' -e … · cat '.env' 도 같은 명령으로)
+  unquote_simple "$lx"; lx=$UQ
+  unquote_simple "$lr"; lr=$UQ
 
   # 1) 사람 전용 ------------------------------------------------------------
-  has "$lr" 'refactor-approve' && block "승인 스크립트는 사용자가 /refactor:approve 명령으로만 실행합니다." "$MSG_APPROVE"
+  # 새 Claude 세션(claude -p "/refactor:approve …")으로 승인하는 길 — 새 세션의 입력 훅은 그것을 사람 입력으로 본다
+  nested_claude_approve "$lr" && block "승인은 사용자가 입력창에서 직접 합니다 — 새 Claude 세션을 띄워 승인하는 것도 우회입니다." "$MSG_APPROVE"
+  # 승인 스크립트는 실행하는 모양만 막는다(cat·grep·head 로 읽는 것은 통과)
+  if has "$lq" 'refactor-approve' && approve_exec "$lq"; then block "승인 스크립트는 사용자가 /refactor:approve 명령으로만 실행합니다." "$MSG_APPROVE"; fi
   # 플러그인 훅 진입점(turn·guard·post-check·session-start)을 직접 실행하는 길 — 입력 훅을 흉내 내 승인을 처리하는 우회(읽기는 통과)
   if has "$lq" "run\\.sh[\"']?[[:space:]]+[\"']?(turn|guard|post-check|session-start)([\"'[:space:];&|)]|$)" \
     || has "$lq" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|exec|\\.)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
@@ -1546,12 +1759,23 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # .env가 있는 프로젝트에서 프로젝트 전체(또는 그 위 폴더)를 셸 명령으로 내용 검색하면 .env 줄이 찍힌다
   # (grep -r · rg -uu/--hidden/--no-ignore · findstr /s · Select-String · gci -Recurse | sls). 좁은 --include·-g·폴더 지정은 통과
   local MSG_WS="검색할 폴더를 지정하거나(예: src), -l(파일 이름만), --include=\"*.ts\" 로 파일 종류를 좁히세요."
-  rest=$segs
+  rest=$segs; local wprev=""
   while [ -n "$rest" ]; do
     seg=${rest%%"$NL"*}
     if [ "$seg" = "$rest" ]; then rest=""; else rest=${rest#*"$NL"}; fi
-    case "$seg" in *grep*|*rg*|*findstr*|*select-string*|*sls*) ;; *) continue ;; esac
-    if wide_search_seg "$seg" && env_near; then
+    case "$seg" in *grep*|*rg*|*findstr*|*select-string*|*sls*) ;; *) wprev=$seg; continue ;; esac
+    if wide_search_seg "$seg" "$wprev" && env_near; then
+      block "이 프로젝트에는 .env가 있어서, 프로젝트 전체를 내용 검색하면 비밀값 줄이 찍힐 수 있습니다." "$MSG_WS"
+    fi
+    wprev=$seg
+  done
+  # grep … $(ls -A) · grep … $(find .) 처럼 명령 치환으로 넓은 파일 목록(숨김 파일 포함)을 넘기는 검색
+  local re_gls="(^|[;&|(\`[:space:]])(e|f)?grep[[:space:]]([^;&|]*)[$][(]([^)]*)[)]|(^|[;&|(\`[:space:]])rg[[:space:]]([^;&|]*)[$][(]([^)]*)[)]"
+  rest=$lx
+  while [[ $rest =~ $re_gls ]]; do
+    rest=${rest#*"${BASH_REMATCH[0]}"}; m0=" ${BASH_REMATCH[3]}${BASH_REMATCH[6]} "; m4="${BASH_REMATCH[4]}${BASH_REMATCH[7]}"
+    hascs "$m0" '[[:space:]](-[a-zA-Z]*[lLcq][a-zA-Z]*|--files-with(out)?-match(es)?|--count|--quiet)[[:space:]]' && continue
+    if lists_wide "$m4" && env_near; then
       block "이 프로젝트에는 .env가 있어서, 프로젝트 전체를 내용 검색하면 비밀값 줄이 찍힐 수 있습니다." "$MSG_WS"
     fi
   done
@@ -1566,9 +1790,12 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
     || echo_sens "$lr" \
     || { [ "$tool" = "PowerShell" ] && ps_env_read; } \
     || { has "$lr" '<<-?[[:space:]]*[A-Za-z_]' && vars_sensitive "$lr"; } \
-    || { has "$lr" "${S}(node|python3?|py|deno|bun|ruby|php|perl|tsx|ts-node)([[:space:]][^;&|]*)?[[:space:]](-e|-c|-p|-r|--eval|--print)[[:space:]]" \
-         && has "$lr" 'process[.]env|os[.]environ|import[.]meta[.]env|getenv|env\[|dotenv|load_dotenv' \
-         && { has "$lr" "[[:space:]](-p|--print)[[:space:]]" || has "$lr" 'console[.](log|dir|error|info|table)|print|json[.](stringify|dumps)|puts|echo|var_dump'; } \
+    || herestr_sens "$lr" \
+    || awk_env_print "$lr" \
+    || jq_env "$lr" \
+    || { has "$lr" "${S}(node|python3?|py|deno|bun|ruby|php|perl|tsx|ts-node)([[:space:]][^;&|]*)?[[:space:]](-e|-c|-p|-r|--eval|--print|-[a-z]*e)[[:space:]]" \
+         && has "$lr" 'process[.]env|os[.]environ|import[.]meta[.]env|getenv|env\[|dotenv|load_dotenv|%env|[$]env[{]' \
+         && { has "$lr" "[[:space:]](-p|--print)[[:space:]]" || has "$lr" 'console[.](log|dir|error|info|table|warn|debug|trace)|std(out|err)[.]write|print|json[.](stringify|dumps)|puts|echo|var_dump|say[[:space:]]'; } \
          && ! env_refs_safe "$lr"; }; then
     block "환경변수(비밀값이 들어 있을 수 있음)를 화면에 출력하는 명령은 막혀 있습니다." "변수가 있는지만 확인하려면: [ -n \"\$변수이름\" ] && echo 있음 — 어떤 이름이 있는지는 안전 실행기 --check 로 보세요."
   fi
@@ -1626,6 +1853,9 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   done
   del_scan "$tq"
   interp_del_big "$lr" && block "$MSG_RM_BIG" "$MSG_RM_HINT"
+  # 지울·옮길 대상이 명령 치환($( )·` `)이면 무엇을 지우는지 판정할 수 없다(rm -rf "$(git rev-parse --show-toplevel)")
+  local q_="[\"']?" re_csdel; re_csdel="${S}(sudo[[:space:]]+)?(rm[[:space:]]+([^;&|]*[[:space:]])?(-[a-z]*r[a-z]*|--recursive)[[:space:]]+([^;&|]*[[:space:]])?|(rmdir|rd)[[:space:]]+([^;&|]*[[:space:]])?|(mv|move-item|mi)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*)${q_}([$][(]|\`)"
+  has "$tq" "$re_csdel" && block "지울 대상이 명령 결과라 판정할 수 없습니다 — 경로를 직접 쓰세요." "지울 폴더를 정확한 경로로 적으세요. 큰 삭제는 사람이 직접 합니다."
   has "$lq" "${S}(rmdir|rd)[[:space:]]+(/{1,2}[a-z][[:space:]]+)*/{1,2}s([[:space:]]|$)" && block "폴더 통째 삭제(rmdir /s)는 막혀 있습니다." "사람이 직접 하세요."
   if has "$lq" 'remove-item[^;&|]*-recurse' && has "$lq" "remove-item[^;&|]*[[:space:]][\"']?([.]|[*]|~|[a-z]:[/\\\\]?|[.]git)[\"']?([[:space:]]|$)"; then
     block "Remove-Item -Recurse 로 프로젝트·홈 전체를 지우는 명령은 막혀 있습니다." "사람이 직접 하세요."

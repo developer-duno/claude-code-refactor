@@ -37,7 +37,7 @@ rdir="$proj/docs/refactor"
 # 입력은 앞 4KB 만 읽는다(세션 ID·입력 첫머리만 필요). 리팩토링 폴더가 없고 /refactor:go·/refactor:approve 도 아니면 바로 끝낸다
 # (외부 명령 대신 bash 내장 read 로 — 이 훅은 매 입력마다 돌고, 바쁜 PC 에서는 외부 명령 한 번이 0.3초 넘게 걸린다)
 input=""
-IFS= read -r -N 4096 input || :
+IFS= read -r -d '' -n 4096 input || :   # -N(bash 4.1+) 대신 -d '' -n: NUL 이 없는 JSON 이면 같게 앞 4KB 를 읽는다(bash 3.2 호환)
 if [ ! -d "$rdir" ]; then
   case "$input" in *'/refactor:go'*|*'/refactor:approve'*) ;; *) exit 0 ;; esac
 fi
@@ -66,7 +66,8 @@ re_sys='^([[:space:]]|\\[nrt])*<(task-notification|system-reminder|agent-message
 T="$rdir/.turn.$sid"
 [ -d "$rdir" ] && {
   # 하루 지난 표시 파일 정리는 하루에 한 번만(오늘 날짜를 .turn-sweep 에 적어 두고 날짜가 바뀌었을 때만 find)
-  printf -v today '%(%Y%m%d)T' -1
+  today=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && printf -v today '%(%Y%m%d)T' -1   # %(…)T 는 bash 4.2+ 에서만
+  [ -n "$today" ] || today=$(date +%Y%m%d)
   swept=""
   [ -f "$rdir/.turn-sweep" ] && read -r swept < "$rdir/.turn-sweep"
   if [ "$swept" != "$today" ]; then

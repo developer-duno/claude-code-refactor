@@ -20,7 +20,7 @@ if [ "${1:-}" = "--log" ]; then
     if [ -n "$det" ]; then LC_ALL=C.UTF-8; msg="$msg ${det:0:60}"; fi
     D=$(data_dir ""); L="$D/problems.log"
     [ -d "$D" ] || mkdir -p "$D"
-    TZ=KST-9 printf -v t '%(%Y-%m-%d %H:%M)T' -1; [ -n "$t" ] || t=$(now '%Y-%m-%d %H:%M')
+    t=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && TZ=KST-9 printf -v t '%(%Y-%m-%d %H:%M)T' -1; [ -n "$t" ] || t=$(now '%Y-%m-%d %H:%M')   # %(…)T 는 bash 4.2+ 에서만
     printf '%s | %s | %s\n' "$t" "$src" "$msg" >> "$L"
     sz=$(wc -c < "$L"); sz=${sz//[!0-9]/}
     if [ "${sz:-0}" -gt 204800 ]; then tail -c 102400 "$L" | tail -n +2 > "$L.tmp" && mv -f "$L.tmp" "$L"; fi
@@ -48,7 +48,9 @@ N='[A-Za-z0-9_.-]'
 SED_REDACT="
 s#(${N}*(${SECRET_WORDS})${N}*[\"']?[[:space:]]*[=:][[:space:]]*)(\"[^\"]*\"|'[^']*'|[^[:space:]\"',;]+)#\\1****#g
 s#://[^/@[:space:]]+@#://****@#g
-s#(^|[^A-Za-z0-9_])(sk_live|sk-|ghp_|github_pat_|xox[abp]-|AKIA|eyJ)[A-Za-z0-9_./+=-]{6,}#\\1****#g
+s#(^|[^A-Za-z0-9_])(sk_live|sk-|ghp_|github_pat_|xox[abp]-|AKIA|eyJ|sb_secret_|whsec_|rk_live_)[A-Za-z0-9_./+=-]{6,}#\\1****#g
+s#AIza[0-9A-Za-z_-]{20,}#****#g
+s#([Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+)[A-Za-z0-9._~+/=-]{8,}#\\1****#g
 s#((/[A-Za-z])|[A-Za-z]:)?[\\\\/]Users[\\\\/][^\\\\/[:space:]\"']+#<홈>#g
 s#/home/[^/[:space:]\"']+#<홈>#g
 "
