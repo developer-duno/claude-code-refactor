@@ -522,25 +522,35 @@ check_grep_tool() {
 # SQL 을 문장으로 나누는 awk(LC_ALL=C 에서 한 글자씩): -- 줄 주석·/* */ 주석은 지우고, 작은따옴표 안(값)은 '_' 로 비우고,
 # 큰따옴표 안(이름)은 그대로, 따옴표 밖의 ; 에서만 문장을 나눈다. 줄바꿈은 문장 구분이 아니라 칸이다(UPDATE x⏎SET …⏎WHERE …).
 # 위험 낱말이 든 문장만 한 줄에 하나씩(16KB 까지) 내보낸다. 값 속 글자('a;b', 'where')가 판정을 흔들지 않게.
+# 작은따옴표 안 역슬래시는 글자다(표준 문자열 'C:\' 는 거기서 끝난다) — E'…' 에서만 \' 를 이스케이프로 본다.
+# 달러 따옴표($$…$$ · $tag$…$tag$)는 값('_')으로 비우되, 그 안을 SQL 로도 따로 한 번 더 나눠 본다(함수 본문일 수도, 글자일 수도 있으니 두 해석 모두).
 AWK_SQL='function fl(e) { if (e > r0) b = b substr(s, r0, e - r0) }
 function em(   t) { t = b; gsub(/[\n\r\t]/, " ", t); if (tolower(t) ~ /drop|alter|truncate|flush|delete|update|remove/) print substr(t, 1, 16384); b = "" }
-BEGIN { RS = "\001" }
-{ s = $0; n = length(s); st = 0; b = ""; r0 = 1
+function lex(x,   i, c, p, rest, tag, bs) {
+  s = x; n = length(s); st = 0; b = ""; r0 = 1
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
     if (st == 0) {
-      if (c == "\047") { fl(i); b = b "\047_\047"; st = 1 }
+      if (c == "\047") { fl(i); b = b "\047_\047"; st = 1; p = (i > 1) ? substr(s, i - 1, 1) : ""; es = ((p == "e" || p == "E") && (i == 2 || substr(s, i - 2, 1) !~ /[A-Za-z0-9_$]/)) }
       else if (c == "\"") st = 2
       else if (c == "-" && substr(s, i + 1, 1) == "-") { fl(i); b = b " "; st = 3; i++ }
       else if (c == "/" && substr(s, i + 1, 1) == "*") { fl(i); b = b " "; st = 4; i++ }
+      else if (c == "$" && (i == 1 || substr(s, i - 1, 1) !~ /[A-Za-z0-9_$]/)) {
+        rest = substr(s, i)
+        if (match(rest, /^[$]([A-Za-z_][A-Za-z0-9_]*)?[$]/)) { tag = substr(rest, 1, RLENGTH); fl(i); b = b "\047_\047"; st = 5; i += RLENGTH - 1; bs = i + 1 }
+      }
       else if (c == ";") { fl(i); em(); r0 = i + 1 }
-    } else if (st == 1) { if (c == "\\") i++; else if (c == "\047") { st = 0; r0 = i + 1 } }
+    } else if (st == 1) { if (c == "\\" && es) i++; else if (c == "\047") { st = 0; r0 = i + 1 } }
     else if (st == 2) { if (c == "\"") st = 0 }
     else if (st == 3) { if (c == "\n") { st = 0; r0 = i } }
     else if (st == 4) { if (c == "*" && substr(s, i + 1, 1) == "/") { st = 0; i++; r0 = i + 1 } }
+    else if (st == 5) { if (c == "$" && substr(s, i, length(tag)) == tag) { if (nq < 50) q[++nq] = substr(s, bs, i - bs); st = 0; i += length(tag) - 1; r0 = i + 1 } }
   }
   if (st == 0 || st == 2) fl(n + 1)
-  em() }'
+  if (st == 5 && nq < 50) q[++nq] = substr(s, bs)
+  em() }
+BEGIN { RS = "\001" }
+{ nq = 1; q[1] = $0; for (k = 1; k <= nq; k++) lex(q[k]) }'
 # SQL·DB 명령이 데이터를 통째로 지우거나 구조를 삭제하는가
 #  $2 = sql  : 순수 SQL(MCP 도구의 query·sql 칸, 줄바꿈 그대로) — AWK_SQL 로 문장을 나눠 문장마다 아래 판정
 #  $2 = shell: 셸 명령(줄바꿈 그대로) — 따옴표 안 문자열은 SQL 로(psql -c "UPDATE …⏎WHERE …"), 따옴표 밖(히어독·redis-cli FLUSHALL)은
@@ -972,8 +982,32 @@ mk_variant() {
   esac
   unbs "$s"; unquote_simple "$BSV"; VV=$UQ
 }
+# 고가치 규칙 전용 사본 → BV: 변수 참조 표기를 문자열 처리로만 지운다(가드 자신의 환경을 쓰지 않는다 — eval·산술·명령 치환 없음).
+#   정의되지 않은 변수를 bash 가 어떻게 풀지 흉내: ${NAME}·$NAME·$1..$9·${9}·$@·$*·$#·$?·$$·$!·$- → 빈 글자,
+#   ${x:-word}·${x-word}·${x:=word}·${x=word} → word, ${x:+word}·${x+word}·${x:?..}·${x/a/b}·${x#p}·${x:1} → 빈 글자.
+#   (치환·자르기는 값을 알아야 정확하므로 "정의 안 됨"으로만 흉내 낸다 — x=abc; git re${x/b/}set 같은 드문 모양은 과잉차단될 수 있다)
+#   이미 정의된 사용자 변수(a=x; …$a)는 expand_vars 가 먼저 값으로 바꾸므로 여기 남지 않는다 → 과잉차단 없음.
+blank_vars() {
+  BV=$1
+  case "$BV" in *'$'*) ;; *) return 0 ;; esac
+  local s=$1 out m op word k=0
+  local re1='[$][{]([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[-@*#?!$])(([:]?[-=+?])([^{}]*)|([/#%^,:][^{}]*))?[}]'   # ${x/a/b}·${x#p}·${x:1} 등은 정의 안 된 변수로 보고 빈 글자
+  local re2='[$]([A-Za-z_][A-Za-z0-9_]*|[0-9]|[-@*#?!$])'
+  out=""
+  while [[ $s =~ $re1 ]] && [ "$k" -lt 200 ]; do
+    k=$((k + 1)); m=${BASH_REMATCH[0]}; op=${BASH_REMATCH[3]}; word=${BASH_REMATCH[4]}
+    out="$out${s%%"$m"*}"; s=${s#*"$m"}
+    case "$op" in *-|*=) out="$out$word" ;; esac   # :-·-·:=·= 는 기본값(word)으로, 그 밖(:+·+·:?·없음)은 빈 글자
+  done
+  s="$out$s"; out=""; k=0
+  while [[ $s =~ $re2 ]] && [ "$k" -lt 200 ]; do
+    k=$((k + 1)); m=${BASH_REMATCH[0]}
+    out="$out${s%%"$m"*}"; s=${s#*"$m"}
+  done
+  BV="$out$s"
+}
 # 와일드카드로 쓴 보호 이름을 실행하는가(bash …/refactor-appro?e.sh · bash …/hooks/tur?.sh · run.sh tu?n) — bash 글로브로 대 본다.
-# 글로브 앞에 글자가 하나도 없는 토큰(*.sh)은 보지 않는다
+# 기본 이름 글로브(* · *.sh · *.*)만 보지 않는다(bash -n hooks/*.sh 같은 문법 검사)
 glob_protected_exec() {
   case "$1" in *[\*\?\[]*) ;; *) return 1 ;; esac
   local s seg a b i nm names="refactor-approve.sh refactor-approve turn.sh guard.sh post-check.sh session-start.sh turn guard post-check session-start run.sh"
@@ -985,7 +1019,7 @@ glob_protected_exec() {
     case "$SCMD" in bash|sh|zsh|dash|ksh|source|.|exec|run.sh|*[\*\?\[]*) ;; *) continue ;; esac
     for ((i = SI; i < ${#SW[@]}; i++)); do
       a=${SW[$i]}; case "$a" in *[\*\?\[]*) ;; *) continue ;; esac
-      b=${a##*/}; case "${b%%[\*\?\[]*}" in "") continue ;; esac
+      b=${a##*/}; case "$b" in '*'|'*.sh'|'*.*') continue ;; esac   # 기본 이름(* · *.sh · *.*)만 건너뛴다 — [t]urn.sh · ?urn.sh 는 대 본다
       for nm in $names; do [[ $nm == $b ]] && return 0; done
     done
   done
@@ -995,7 +1029,11 @@ glob_protected_exec() {
 # — subprocess·child_process·os.system 으로 부르는 길(문자열을 이어 붙여 --from-hook 을 만들어도). cat·grep·head 로 읽는 것은 아니다
 interp_approve() {
   has "$1" "refactor-approve|[/\\\\](turn|guard|post-check|session-start)[.]sh|run[.]sh[^;&|]{0,24}(turn|guard|post-check|session-start)" || return 1
-  has "$1" "${S}(python3?|py|pypy3|node|ruby|perl|php|deno|bun)([[:space:]][^;&|]*)?[[:space:]](-[a-z]*[ecpr]|--eval|--print)[[:space:]]|${S}(python3?|py|pypy3|node|ruby|perl|php|deno|bun)([[:space:]]+-)?[[:space:]]*<<"
+  has "$1" "${S}(python3?|py|pypy3|node|ruby|perl|php|deno|bun)([[:space:]][^;&|]*)?[[:space:]](-[a-z]*[ecpr]|--eval|--print)[[:space:]]|${S}(python3?|py|pypy3|node|ruby|perl|php|deno|bun)([[:space:]]+-)?[[:space:]]*<<" || return 1
+  # 읽기만 하는 코드(print(open(…).read()) · console.log)는 통과 — 프로그램을 띄우거나 모듈을 불러올 수 있는 낱말이 하나라도 있으면 막는다
+  #   (넓게 잡는다: import·require·os.·process.·getattr·eval·` 등. 승인 스크립트 이름과 같이 나올 때만 보므로 과잉차단 비용이 작다)
+  local t=$1; t=${t//\'/}; t=${t//\"/}
+  has "$t" 'subprocess|popen|system|spawn|exec|fork|child|shell|passthru|proc_open|pty|pexpect|plumbum|sh[.]|os[.]|commands|__|import|require|getattr|globals|eval|compile|deno[.]|bun[.]|process[.]|module|_load|dlopen|ffi|ctypes|win32|wsh|activex|check_output|startfile|call[(]|run[(]|`|qx|%x|open3|kernel|open[^)]*[|]|[$][(]|command|use[[:space:]]|load'
 }
 MSG_HOOK_EXEC="플러그인 훅(turn·guard·post-check·session-start)은 Claude Code 가 사용자 입력·도구 호출 때 실행합니다(사람 전용). 승인은 사용자가 /refactor:approve 를 입력할 때 입력 훅이 처리합니다."
 MSG_APPROVE_EXEC="승인 스크립트는 사용자가 /refactor:approve 명령으로만 실행합니다."
@@ -1004,7 +1042,8 @@ MSG_NESTED="승인은 사용자가 입력창에서 직접 합니다 — 새 Clau
 hv_human() {
   nested_claude_approve "$2" && block "$MSG_NESTED" "$MSG_APPROVE"
   # 명령 치환·경로·winpty 로 부르는 claude(“$(which claude)” -p …): claude 낱말과 승인 명령이 한 명령에 같이 있으면 막는다
-  if has "$1" "(^|[^[:alnum:]._/-])claude([.]exe|[.]cmd)?([^[:alnum:]_-]|$)" && has "$1" 'refactor:(approve|go)|from-hook'; then block "$MSG_NESTED" "$MSG_APPROVE"; fi
+  #   뒤 경계에 점을 넣지 않는다 — CLAUDE.md 같은 파일 이름은 claude 실행이 아니다(.exe·.cmd 만 실행 파일로 본다)
+  if has "$1" "(^|[^[:alnum:]._/-])claude([.](exe|cmd))?([^[:alnum:]_.-]|$)" && has "$1" 'refactor:(approve|go)|from-hook'; then block "$MSG_NESTED" "$MSG_APPROVE"; fi
   if has "$1" 'refactor-approve' && approve_exec "$1"; then block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"; fi
   glob_protected_exec "$1" && block "$MSG_HOOK_EXEC" "$MSG_APPROVE"
   if has "$1" "run\\.sh[\"']?[[:space:]]+[\"']?(turn|guard|post-check|session-start)([\"'[:space:];&|)]|$)" \
@@ -1130,19 +1169,31 @@ cd_seg() {
 }
 # 명령 속 cd 가 거쳐 가는 폴더들 → CDC(줄마다 하나): cd 로 들어간 폴더 모두 + 실패해도 뒤가 이어지는 cd(; · || · 줄바꿈 뒤,
 # 서브셸 (cd …) 안)의 바로 앞 폴더. 실패하는 cd·서브셸·cd - 로 기준 폴더를 속여도 이 폴더들 하나하나를 기준으로 다시 보면
-# 보호 경로를 놓치지 않는다(cd /tmp && rm -rf docs 처럼 && 로 이은 cd 는 실패하면 뒤가 돌지 않으니 앞 폴더는 보지 않는다)
+# 보호 경로를 놓치지 않는다. 앞 폴더를 보지 않는 경우: cd X && … 뒤에 ; · || · 줄바꿈이 더는 없을 때(실패하면 뒤가 돌지 않음),
+# cd X || exit(실패하면 끝남), (cd X && …) 서브셸 안에서 끝날 때(닫는 괄호 뒤에 명령이 없음).
+# 서로 다른 후보가 CDC_MAX(8)개를 넘으면 모으기를 멈추고 CDC_OVER=1 — 후보마다 다시 보는 비용이 cd 개수의 제곱이 되지 않게(cd_all 이 보수적으로 판정)
+CDC_MAX=8
 cd_cands() {
-  CDC=""
+  CDC=""; CDC_OVER=0
   case "$1" in *cd*|*pushd*|*popd*|*location*|*chdir*|*sl\ *) ;; *) return 0 ;; esac
-  local s=$1 seg c0=$cwd pre CWD_BASE=$cwd CD_PREV=$cwd CD_FIXED=0 AND=$'\003'
-  s=${s//&&/$AND$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}
+  local s=$1 seg c0=$cwd pre CWD_BASE=$cwd CD_PREV=$cwd CD_FIXED=0 AND=$'\003' OR=$'\004' n=0 addpre r
+  s=${s//&&/$AND$NL}; s=${s//||/$OR$NL}; s=${s//;/$NL}; s=${s//|/$AND$NL}; s=${s//\`/$NL}
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
     pre=$cwd
-    cd_seg "${seg%$AND}" || continue
-    case "$seg" in *"$AND") ;; *) case "$NL$CDC" in *"$NL$pre$NL"*) ;; *) CDC="$CDC$pre$NL" ;; esac ;; esac
-    case "$seg" in *'('*) case "$NL$CDC" in *"$NL$pre$NL"*) ;; *) CDC="$CDC$pre$NL" ;; esac ;; esac
-    case "$NL$CDC" in *"$NL$cwd$NL"*) ;; *) CDC="$CDC$cwd$NL" ;; esac
+    cd_seg "${seg%["$AND$OR"]}" || continue
+    addpre=1
+    case "$seg" in
+      *"$AND") r=${s//"$AND$NL"/}; case "$r" in *"$NL"*) ;; *) addpre=0 ;; esac ;;   # && · | 만 이어지면 cd 실패 시 뒤가 안 돈다
+      *"$OR") r=${s%%"$NL"*}; r=${r#"${r%%[![:space:]]*}"}; case "$r" in exit|exit[[:space:]]*|return|return[[:space:]]*) addpre=0 ;; esac ;;
+    esac
+    case "$seg" in *'('*)   # 서브셸: 닫는 괄호 뒤에 명령이 남을 때만 앞 폴더(서브셸 밖) 후보
+      r="$seg$NL$s"; addpre=0
+      case "$r" in *')'*) r=${r#*')'}; r=${r//[$' \t)']/}; r=${r//"$NL"/}; r=${r//"$AND"/}; r=${r//"$OR"/}; [ -n "$r" ] && addpre=1 ;; esac ;;
+    esac
+    if [ "$addpre" = 1 ]; then case "$NL$CDC" in *"$NL$pre$NL"*) ;; *) CDC="$CDC$pre$NL"; n=$((n + 1)) ;; esac; fi
+    case "$NL$CDC" in *"$NL$cwd$NL"*) ;; *) CDC="$CDC$cwd$NL"; n=$((n + 1)) ;; esac
+    if [ "$n" -gt "$CDC_MAX" ]; then CDC_OVER=1; break; fi
   done
   cwd=$c0
 }
@@ -1151,6 +1202,12 @@ cd_all() {
   local c cands c0=$cwd
   cd_cands "$2"; cands=$CDC
   "$1" "$2"
+  # 후보가 너무 많으면(cd 를 8곳 넘게) 후보마다 다시 보지 않는다 — 대신 기록 폴더·상위 폴더를 가리키는 상대 이름이 보이면 보수적으로 막는다
+  if [ "$CDC_OVER" = 1 ]; then
+    has "$2" '(^|[^[:alnum:]_-])(docs|refactor|approved|approvals[.]log|state[.]md|refactor_plan[.]md|baseline[.]md|plugins)([^[:alnum:]_-]|$)|[.]allow-|[.]turn|[.][.]' &&
+      block "cd 로 여러 폴더(8곳 넘게)를 오가면서 기록 폴더(docs/refactor)·상위 폴더를 가리키는 명령은 판정할 수 없어 막습니다." "명령을 나누거나 절대경로로 적으세요."
+    cands=""
+  fi
   if [ -n "$cands" ]; then
     CD_FIXED=1
     while IFS= read -r c; do [ -n "$c" ] || continue; cwd=$c; "$1" "$2"; done <<< "$cands"
@@ -1902,6 +1959,14 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   #     단, $( ) · ` ` 명령 치환이 든 문자열은 실행되는 명령이므로 그대로 둔다.
   blank_quoted "(^|[;&|(])[[:space:]]*(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep|git[[:space:]]+log|git[[:space:]]+commit|echo|printf|write-host|write-output)([^;&|\"']*)(\"[^\"]*\"|'[^']*')" 4 "$lr"
   unquote_simple "$BQ"; lq=$UQ   # 검색어·문구를 뺀 뒤 단순 따옴표 인자는 벗긴다(git reset "--hard" → git reset --hard)
+  # 보내는 데이터는 실행되지 않는다 — curl·wget 류의 -d·--data·--json·-F 따옴표 값과 JSON 값("키":"값")은 비운다
+  #   (curl -d '{"cmd":"git reset --hard"}' …). $( )·` ` 가 든 큰따옴표 값은 실행되므로 그대로 둔다
+  local re_http="(^|[;&|(])[[:space:]]*(curl|wget|http|https|xh|iwr|irm|invoke-webrequest|invoke-restmethod)([[:space:]][^;&|]*)?[[:space:]](-d|--data[a-z-]*|--json|-f|--form[a-z-]*|--body[a-z-]*|--post-data|-body)(=|[[:space:]]+)('[^']*'|\"[^\"\$\`]*\")"
+  local re_jsv="\"[[:space:]]*:[[:space:]]*\"[^\"\$\`]*\"" dk=0 dv
+  while [[ $lq =~ $re_http ]] && [ "$dk" -lt 20 ]; do
+    dk=$((dk + 1)); m0=${BASH_REMATCH[0]}; dv=${BASH_REMATCH[6]}; lq=${lq/"$m0"/"${m0%"$dv"}_"}
+  done
+  while [[ $lq =~ $re_jsv ]] && [ "$dk" -lt 40 ]; do dk=$((dk + 1)); lq=${lq/"${BASH_REMATCH[0]}"/\":_}; done
 
   # lx: 비밀값 판정용 — 따옴표 속 파일 경로는 남기고(grep KEY ".env" 도 잡게), 검색어·커밋 메시지·echo 문구만 뺀다
   blank_quoted "(^|[;&|(])[[:space:]]*(sudo[[:space:]]+)?(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep)(([[:space:]]+-[^[:space:]]+)*)[[:space:]]+(\"[^\"]*\"|'[^']*')" 6 "$lr"
@@ -1909,6 +1974,9 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   blank_quoted "(^|[;&|(])[[:space:]]*(sudo[[:space:]]+)?(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep)(([[:space:]]+-[^[:space:]]+)*)[[:space:]]+([^-[:space:]\"'_][^[:space:];&|]*)" 6 "$BQ"
   blank_quoted "(-m|--message|--grep|--author|-S|-G)(=|[[:space:]]+)(\"[^\"]*\"|'[^']*')" 3 "$BQ"
   blank_quoted "(^|[;&|(])[[:space:]]*(echo|printf|write-host|write-output)([^;&|\"']*)(\"[^\"]*\"|'[^']*')" 4 "$BQ"
+  # jq·yq 의 첫 따옴표 인자는 필터(jq '.env' config/env.json 의 .env 는 필드 이름)라 뺀다. 옵션은 인자 개수를 아는 것만 건너뛴다
+  #   (--arg 이름 값 · --indent n · -r 등). -f/--from-file 이 있으면 첫 인자가 파일이라 맞지 않게 f 는 뺐다
+  blank_quoted "(^|[;&|(])[[:space:]]*(sudo[[:space:]]+)?(jq|gojq|jaq|yq([[:space:]]+(e|eval|ea|eval-all))?)(([[:space:]]+(--(arg|argjson|slurpfile|rawfile)[[:space:]]+[^[:space:];&|]+[[:space:]]+[^[:space:];&|]+|--indent[[:space:]]+[0-9]+|-[a-eg-zA-Z]+|--[a-eg-z][a-z0-9-]*))*)[[:space:]]+(\"[^\"]*\"|'[^']*')" 10 "$BQ"
   blank_echo_words "$BQ"
   local lx=$BQ conv
   # Windows 경로의 \ 를 / 로: PowerShell은 전부, Bash는 경로처럼 생긴 조각(C:\ .\ ..\ ~\)만 — 정규식 속 \. 은 건드리지 않는다
@@ -1940,12 +2008,20 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # lz: 따옴표 글자를 모두 뺀 사본(claude -p '/refactor:app'"rove" · bash -c "git re"'set --hard' · eval "n"'pm test') —
   #     공백 든 문자열까지 붙여 버리므로 과잉차단을 피해 고가치 규칙(승인·훅 진입점·중첩 claude·git 파괴·go 안전 실행기)에만 쓴다
   lz=${lqv//\'/}; lz=${lz//\"/}; [ "$lz" = "$lqv" ] && lz=""
+  # hv: 고가치 규칙 전용 — 정의되지 않은 변수 참조를 문자열 처리로 지운 사본(refactor-app${m}rove → refactor-approve · git re${x:-s}et → git reset).
+  #     가드 자신의 환경을 안 쓰므로 가드 내부 변수명이 입력에 영향을 주지 않는다. 이미 정의된 사용자 변수는 expand_vars 가 먼저 값으로 바꾸므로 여기 안 남는다.
+  #     고가치 규칙(승인·훅 진입점·중첩 claude·git 파괴·go 안전 실행기)에만 쓴다 → 지워서 위험 이름이 사라지면 못 잡을 뿐(거짓 음성), 없던 위험을 만들지 않는다.
+  local hv="" hvz=""
+  blank_vars "$lq"; [ "$BV" != "$lq" ] && hv=$BV
+  [ -n "$lz" ] && { blank_vars "$lz"; [ "$BV" != "$lz" ] && hvz=$BV; }
 
   # 1) 사람 전용 ------------------------------------------------------------
   # 승인·훅 진입점·중첩 claude(새 Claude 세션은 그 입력을 사람 입력으로 본다) — 원형과 따옴표를 모두 뺀 사본(lz) 둘 다.
   # 승인 스크립트는 실행하는 모양만 막는다(cat·grep·head 로 읽는 것은 통과)
   hv_human "$lq" "$lr"
   [ -n "$lz" ] && hv_human "$lz" "$lz"
+  [ -n "$hv" ] && hv_human "$hv" "$hv"
+  [ -n "$hvz" ] && hv_human "$hvz" "$hvz"
   interp_approve "$lr" && block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"
   if writes_to '(docs/refactor/)?\.allow-[a-z-]+|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/' || interp_writes '\.allow-|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/'; then
     block "허용 파일(.allow-*)·승인 기록(APPROVALS.log)·.turn 은 사람과 플러그인만 만들고 지웁니다." "$MSG_HUMAN"
@@ -1979,6 +2055,19 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # 내용을 읽기·옮기기·보내기·실행하는 동작이 있으면 막는다. 조각마다 따로 보면 파이프·$( )로 나뉜 명령을 놓친다.
   local sx=$lx re_codeenv='(process|import[.]meta|deno|bun)[.]env([^[:alnum:]_]|$)'
   while [[ $sx =~ $re_codeenv ]]; do sx=${sx/"${BASH_REMATCH[0]}"/ }; done
+  # 정의되지 않은 변수로 비밀값 이름을 쪼갠 것(cat .e${s}nv · cat .${x:-env})도 함께 본다 — 지운 사본을 덧붙인다
+  blank_vars "$lx"
+  if [ "$BV" != "$lx" ]; then
+    local sxb=$BV; while [[ $sxb =~ $re_codeenv ]]; do sxb=${sxb/"${BASH_REMATCH[0]}"/ }; done; sx="$sx$NL$sxb"
+  fi
+  # 래퍼(bash -c · sh -c · eval) 안에서 섞인 따옴표로 비밀값 이름을 쪼갠 것(bash -c "cat .e'n'v" · eval "cat .e"'nv')도 본다 —
+  # 래퍼가 있을 때만 따옴표 글자를 모두 뺀 사본을 덧붙인다(래퍼 없는 보통 명령은 공백 든 문자열이 붙어 과잉차단이 나므로 제외)
+  if has "$lx" "(^|[;&|({[:space:]])(eval|(sudo[[:space:]]+)?(ba|z|da|k)?sh[[:space:]]+(-[^[:space:]]+[[:space:]]+)*-[a-z]*c)([[:space:]]|$)"; then
+    local sxz=${lx//\'/}; sxz=${sxz//\"/}
+    if [ "$sxz" != "$lx" ]; then
+      while [[ $sxz =~ $re_codeenv ]]; do sxz=${sxz/"${BASH_REMATCH[0]}"/ }; done; sx="$sx$NL$sxz"
+    fi
+  fi
   local SEC_ALT='\.env([._-][[:alnum:]_.-]*)?|\.dev\.vars([.][[:alnum:]_.-]+)?|\.git-credentials|\.npmrc|\.pgpass|\.git/config|\.aws/credentials|\.docker/config\.json|\.kube/config'
   local re_env="(^|[[:space:]\"'=:/<>(|;&@])(${SEC_ALT}|[[:alnum:]_-]+\\.env|/proc/[^[:space:]/]+/environ)([^[:alnum:]_.-]|$)"
   local re_key="(\\.(pem|p12|pfx|jks|keystore)|(^|[^[:alnum:]])id_(rsa|dsa|ecdsa|ed25519)|service[-_]?account[^[:space:]\"']*\\.json|firebase-adminsdk[^[:space:]\"']*\\.json|client_secret[^[:space:]\"']*\\.json|(^|[^[:alnum:]_])(credentials\\.json|secrets\\.(json|ya?ml|toml)|\\.netrc|\\.pypirc|\\.secrets))([^[:alnum:]_.]|$)"
@@ -2072,6 +2161,8 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # 3) 되돌릴 수 없는 git 명령 ---------------------------------------------
   hv_git "$lq"
   [ -n "$lz" ] && hv_git "$lz"
+  [ -n "$hv" ] && hv_git "$hv"
+  [ -n "$hvz" ] && hv_git "$hvz"
 
   # 4) 대량 삭제 ------------------------------------------------------------
   local re_rm="${S}(sudo[[:space:]]+)?rm[[:space:]][^;&|]*"
@@ -2177,6 +2268,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   if [ "$go_turn" = 1 ]; then
     go_runner "$lq" 0
     [ -n "$lz" ] && go_runner "$lqv" 1
+    [ -n "$hv" ] && go_runner "$hv" 0
   fi
 
   if [ "$fence" = 1 ]; then

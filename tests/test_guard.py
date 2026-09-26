@@ -1092,6 +1092,71 @@ UP_D5C_ON = [(B, bash("cd docs/refactor; (cd ..); rm REFACTOR_PLAN.md")), (B, ba
              (OK, bash("cd docs/refactor && cat STATE.md"))]
 
 
+# ── 0.2.1 D5e·D5f(검사관 재확인 30861a2 새 지적 N1~N9, N7 은 원리상 한계라 제외) ──────────
+_R = "/x/plugins/refactor"
+_RUN = _R + "/hooks/run.sh"
+_SC = _R + "/scripts"
+UP_N1 = [  # 빈 변수 판정은 가드 자신의 변수가 아니라 문자열로(${m}·${s}·${out}·${tool}), ${x:-}·${x-}·$9·${9} 도 빈 글자
+    (B, bash(f'bash {_RUN} refactor-app${{m}}rove "$PWD" --from${{m}}-hook <<< P1-1')),
+    (B, bash(f'bash {_RUN} refactor-app${{s}}rove "$PWD" --from${{s}}-hook <<< P1-1')),
+    (B, bash(f'bash {_RUN} refactor-app${{out}}rove "$PWD" --from${{out}}-hook <<< P1-1')),
+    (B, bash(f'bash {_RUN} refactor-app${{tool}}rove "$PWD" --from${{tool}}-hook <<< P1-1')),
+    (B, bash(f'bash {_RUN} refactor-app${{x:-}}rove "$PWD" --from${{x:-}}-hook <<< P1-1')),
+    (B, bash(f'bash {_RUN} refactor-app$9rove "$PWD" --from$9-hook <<< P1-1')),
+    (B, bash(f'bash {_SC}/refactor-app${{x:-}}rove.sh "$PWD" --from${{x:-}}-hook <<< P1-1')),
+    (B, bash("git re${m}set --hard")), (B, bash("git re${out}set --hard")), (B, bash("cat .e${s}nv")),
+    (B, bash("git re${x:-}set --hard")), (B, bash("git re${x-}set --hard")), (B, bash("git re$9set --hard")), (B, bash("git re${9}set --hard")),
+    (B, bash("cat .e${x:-}nv")), (B, bash("cat .e$9nv")),
+    (OK, bash("echo ${HOME}/x")), (OK, bash("rm -rf ${TMPDIR}/build")), (OK, bash("git diff ${BASE:-main}")),
+]
+UP_N1_GO = [(B, bash("n${m}pm test")), (B, bash("n${x:-}pm test")), (B, bash("n$9pm test")), (B, bash("py${s}test")),
+            (OK, bash(f'bash {_RUN} refactor-safe-run -- npm test'))]   # EXECUTE + go 턴
+UP_N1B = [  # 매개변수 펼치기 기본값(${x:-word}) 조립 — 정의된 변수의 ${x/a/b} 치환은 원리상 한계(값 계산 안 함)라 제외
+    (B, bash("git ${x:-reset} --hard")), (B, bash("git re${x:-s}et --hard")), (B, bash("cat .${x:-env}")),
+    (B, bash("git reset ${x:---hard}")),
+]
+UP_N2 = [  # SQL 문장 나누기: 표준 문자열의 \ 는 이스케이프가 아니고, $$…$$·$tag$…$tag$ 안의 ; 는 문장 경계가 아니다
+    (B, _sql("INSERT INTO p(path) VALUES ('C:\\'); DROP TABLE users; --'")),
+    (B, _sql("INSERT INTO logs(path) VALUES ('C:\\temp\\'); DELETE FROM sessions;")),
+    (B, _sql("COMMENT ON TABLE t IS $$don't$$; DROP TABLE users;")),
+    (B, _sql("INSERT INTO messages(body) VALUES ($$It's done$$); DELETE FROM queue;")),
+    (B, _sql("SELECT $x$it's$x$; TRUNCATE orders;")),
+    (B, _sql("SELECT E'it\\'s'; DROP TABLE users;")),
+    (OK, _sql("CREATE FUNCTION f() RETURNS void AS $$ BEGIN DELETE FROM t WHERE id = 1; END; $$ LANGUAGE plpgsql;")),
+    (OK, _sql("INSERT INTO t(note) VALUES (E'a\\'b; update later');")),
+    (OK, _sql('UPDATE "a;b" SET x = 1 WHERE id = 2;')),
+    (OK, _sql("UPDATE t\nSET a = 1\nWHERE id = 3;")),
+]
+UP_N3 = [(B, bash("; ".join(f"cd d{i} && ls" for i in range(120)) + "; supabase db reset"))]   # cd 여러 번(300번은 아래 timed)
+UP_N3_GO = [(B, bash("; ".join(f"cd d{i} && ls" for i in range(300)) + "; npm test"))]         # EXECUTE + go 턴
+UP_N4 = [  # CLAUDE.md 는 claude 명령이 아니다(읽기 통과) — 진짜 claude 호출은 계속 막는다
+    (OK, bash("grep -n refactor:approve CLAUDE.md")), (OK, bash("sed -n '/refactor:go/p' CLAUDE.md")),
+    (OK, bash("awk '/refactor:approve/' CLAUDE.md")), (OK, bash("cat CLAUDE.md | grep refactor:go")),
+    (B, bash('"$(which claude)" -p "/refactor:approve P1-1"')), (B, bash('winpty claude -p "/refactor:approve P1-1"')),
+]
+UP_N5 = [  # 글로브 앞에 글자가 없는 토큰([t]urn.sh · ?urn.sh)도 보호 이름과 맞춰 본다
+    (B, bash(f"bash {_R}/hooks/[t]urn.sh <<< x")), (B, bash(f"bash {_R}/hooks/?urn.sh <<< x")),
+    (B, bash(f'bash {_SC}/[r]efactor-approve.sh "$PWD" --from${{x:-}}-hook <<< P1-1')),
+]
+UP_N6 = [  # 래퍼(bash -c · sh -c · eval) 안 섞인 따옴표로 쪼갠 비밀값 이름
+    (B, bash("""bash -c "cat .e'n'v" """)), (B, bash("""sh -c 'cat ".e"nv'""")), (B, bash("""eval "cat .e"'nv'""")),
+    (OK, bash("""bash -c "echo 'env' done" """)), (OK, bash("""sh -c 'ls "src" && cat README.md'""")),
+]
+UP_N8 = [  # 드문 과잉차단: 승인 스크립트 읽기 한 줄 코드 · 서브셸/|| exit 뒤 cd · JSON 문자열 속 git 글자
+    (OK, bash("""python3 -c "print(open('plugins/refactor/scripts/refactor-approve.sh').read()[:200])" """)),
+    (OK, bash("wc -l plugins/refactor/scripts/refactor-approve.sh && node -e 'console.log(1)'")),
+    (OK, bash("(cd site && rm -rf docs)")), (OK, bash("cd site || exit 1; rm -rf docs")),
+    (OK, bash("""curl -d '{"cmd":"git reset --hard"}' https://api.example.com""")),
+    (B, bash("cd website; rm -rf docs")),   # 설계 판단: ; 뒤는 cd 실패 가능 → 보수적으로 막는다
+]
+UP_N9 = [  # jq·yq 의 첫 따옴표 인자는 필터 — 필드 이름 .env 는 파일이 아니다. 파일 자리의 .env 는 계속 막는다
+    (OK, bash("""jq '.env' config/env.json""")), (OK, bash("""jq --arg env prod '.env = $env' config/env.json""")),
+    (OK, bash("""jq --arg env prod '.stage = $env' config/env.json""")), (OK, bash("yq e '.env' config/env.json")),
+    (B, bash("jq . .env")), (B, bash("jq -r '.' '.env'")), (B, bash("jq -f prog.jq '.env'")), (B, bash("jq --rawfile x .env '.'")),
+    (B, bash("jq --arg a b;cat '.env'")),
+]
+
+
 def check_upgrade_021(res):
     """0.2.1 보강 항목의 회귀 케이스(목록 + 실제 폴더가 필요한 경우)."""
     for title, kw, cases in [
@@ -1115,6 +1180,11 @@ def check_upgrade_021(res):
         ("0.2.1 D5b 역슬래시 go 턴", dict(phase="EXECUTE", allow=(".turn",)), UP_D5B_BS_GO), ("0.2.1 D5b jq", dict(), UP_D5B_JQ),
         ("0.2.1 D5c 재검 지적", dict(), UP_D5C), ("0.2.1 D5c go 턴", dict(phase="EXECUTE", allow=(".turn",)), UP_D5C_GO),
         ("0.2.1 D5c 진행 중", dict(phase="EXECUTE"), UP_D5C_ON),
+        ("0.2.1 D5e N1 빈 변수 조립", dict(), UP_N1), ("0.2.1 D5e N1 go 턴", dict(phase="EXECUTE", allow=(".turn",)), UP_N1_GO),
+        ("0.2.1 D5e N1b 매개변수 기본값", dict(), UP_N1B), ("0.2.1 D5e N2 SQL 문자열 경계", dict(), UP_N2),
+        ("0.2.1 D5e N3 cd 여러 번", dict(), UP_N3), ("0.2.1 D5e N3 cd 여러 번 go 턴", dict(phase="EXECUTE", allow=(".turn",)), UP_N3_GO),
+        ("0.2.1 D5e N5 글로브 앞 글자 없음", dict(), UP_N5), ("0.2.1 D5f N6 래퍼 안 섞인 따옴표", dict(), UP_N6),
+        ("0.2.1 D5e N8 드문 과잉차단", dict(), UP_N8),
     ]:
         proj = make_project(**kw)
         try:
@@ -1145,6 +1215,20 @@ def check_upgrade_021(res):
         (proj / "pkg" / f"d{i:04d}").mkdir(parents=True)
     timed("9 폴더 1,500개 Grep 차단", proj, B, "Grep", {"pattern": "KEY", "output_mode": "content"}, 5)   # 한가할 때 약 0.7~1초(부하 시 느려짐)
     timed("9 폴더 1,500개라도 path 지정은 통과", proj, OK, "Grep", {"pattern": "KEY", "output_mode": "content", "path": "src"}, 5)
+    shutil.rmtree(proj, ignore_errors=True)
+
+    # D5e N3: cd 300번 뒤 위험 명령 — 훅 제한(30초)에 걸려 판정 없이 통과하지 않게 5초 안에 차단
+    proj = make_project()
+    timed("D5e N3 cd 300번 뒤 db reset 차단", proj, B, *bash("; ".join(f"cd d{i} && ls" for i in range(300)) + "; supabase db reset"), 5)
+    shutil.rmtree(proj, ignore_errors=True)
+
+    # D5e N4·D5f N9: CLAUDE.md·config/env.json 이 있는 프로젝트에서 읽기·jq 필터는 통과
+    proj = make_project()
+    lf(proj / "CLAUDE.md", "refactor:approve / refactor:go\n")
+    (proj / "config").mkdir(exist_ok=True)
+    lf(proj / "config/env.json", "{}\n")
+    check(res, "0.2.1 D5e N4 CLAUDE.md 읽기", proj, UP_N4)
+    check(res, "0.2.1 D5f N9 jq 필터 속 .env", proj, UP_N9)
     shutil.rmtree(proj, ignore_errors=True)
 
     # V M1: cd .. 뒤 프로젝트 폴더 이름으로 통째 삭제
