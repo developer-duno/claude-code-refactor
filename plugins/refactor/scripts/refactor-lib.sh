@@ -22,6 +22,15 @@ RL_TAB=$'\t'
 
 rl_now() { TZ=KST-9 date '+%Y-%m-%d %H:%M'; }
 rl_today() { TZ=KST-9 date '+%Y-%m-%d'; }
+# 아래 함수들은 RL_TODAY(날짜)가 있으면 date 를 다시 부르지 않는다 — 승인 스크립트가 rl_now 한 번으로 정해 둔다
+# (바쁜 PC 에서는 외부 명령 한 번이 0.3초 넘게 걸려, 승인 처리가 입력 훅 제한 시간에 닿지 않게 외부 명령 수를 줄인다)
+
+# cksum 출력("CRC 길이 …") → "CRC.길이" (awk 없이)
+rl_cksum_fmt() {
+  local s=$1 crc rest
+  s=${s#"${s%%[![:space:]]*}"}; crc=${s%%[[:space:]]*}; rest=${s#"$crc"}; rest=${rest#"${rest%%[![:space:]]*}"}
+  printf '%s.%s\n' "$crc" "${rest%%[[:space:]]*}"
+}
 
 RL_AWK='
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
@@ -102,7 +111,7 @@ BEGIN {
           cur = ++nc; ID[cur] = card_id(s); CNT[ID[cur]]++
           t = s; sub(/^###[ \t]*\[[A-Za-z0-9_-]+\][ \t]*/, "", t); TITLE[cur] = trim(t)
           BOX[cur] = "none"; DONE[cur] = 0; NB[cur] = 0
-          addtxt(cur, s)
+          addtxt(cur, s); if (ALT) addtxt("a" cur, s)
         } else cur = 0
         continue
       }
@@ -114,7 +123,7 @@ BEGIN {
       }
       if (!INF[i] && is_done(s)) {
         if (boxof(s, "완료") == "x") DONE[cur] = 1
-        else if ((r = rest_of(s, "완료")) != "") addtxt(cur, "(완료 줄 덧붙임) " r)
+        else if ((r = rest_of(s, "완료")) != "") { addtxt(cur, "(완료 줄 덧붙임) " r); if (ALT) addtxt("a" cur, "(완료 줄 덧붙임) " r) }
         continue
       }
       if (!INF[i]) {
@@ -122,10 +131,11 @@ BEGIN {
         if ((v = field(s, "위험도")) != "") RISK[cur] = v
         if ((v = field(s, "사람이 직접 할 일")) != "") HUMAN[cur] = v
       }
-      addtxt(cur, s)
+      addtxt(cur, s); if (ALT) addtxt("a" cur, s)
     }
     for (c = 1; c <= nc; c++) {
       f = DIR "/c" c; printf "%s", TXT[c] > f; close(f)
+      if (ALT) { f = DIR "/a" c; printf "%s", TXT["a" c] > f; close(f) }
       print "CARD" US c US ID[c] US TITLE[c] US BOX[c] US DONE[c] US CNT[ID[c]] US KIND[c] US RISK[c] US HUMAN[c]
     }
     if (UNCLOSED) print "WARN" US "fence" US UNCLOSED
@@ -180,15 +190,17 @@ MODE == "join" { print }
 # 계획서 카드 목록(표준출력, 칸 구분 = \037):
 #   CARD 순번 ID 제목 체크(x/o/?/none) 완료(0/1) 같은ID개수 종류 위험도 사람할일 지문(card=…) 기록상태(approved/changed/held/pending)
 #   WARN fence <닫히지 않은 코드 블록 수>
+#   RL_CARDDIR(빈 임시 폴더)를 주면 그 폴더를 쓰고 지우지 않는다 — c<순번>(카드 본문)·sums(지문)를 다시 쓸 수 있게.
+#   RL_ALT=1 이면 a<순번>(승인 줄을 표준 모양으로 다시 쓴 뒤의 본문 = 승인 줄 덧붙임 제외)과 그 지문도 남긴다(승인 직후 상태를 다시 읽지 않고 알려고)
 rl_cards() {
-  local plan=$1 log=${2:-} tmp
+  local plan=$1 log=${2:-} tmp=${RL_CARDDIR:-}
   [ -f "$plan" ] || return 0
-  tmp=$(mktemp -d 2>/dev/null) || tmp=$(mktemp -d -t rlcards 2>/dev/null) || return 1
-  if awk -v MODE=cards -v PLAN="$plan" -v DIR="$tmp" "$RL_AWK" > "$tmp/rec"; then
-    (set +f; cd "$tmp" && set -- c[0-9]* && [ -f "$1" ] && cksum "$@") > "$tmp/sums" 2>/dev/null
+  [ -n "$tmp" ] || tmp=$(mktemp -d 2>/dev/null) || tmp=$(mktemp -d -t rlcards 2>/dev/null) || return 1
+  if awk -v MODE=cards -v PLAN="$plan" -v DIR="$tmp" -v ALT="${RL_ALT:-}" "$RL_AWK" > "$tmp/rec"; then
+    (set +f; cd "$tmp" && set -- [ac][0-9]* && [ -f "$1" ] && cksum "$@") > "$tmp/sums" 2>/dev/null
     awk -v MODE=join -v LOG="$log" -v SUMS="$tmp/sums" "$RL_AWK" < "$tmp/rec"
   fi
-  rm -rf "$tmp"
+  [ -n "${RL_CARDDIR:-}" ] || rm -rf "$tmp"
 }
 
 # 카드 한 장의 지문용 본문(표준출력) — 승인할 때 approved/<ID>.md 로 남기고, 바뀐 내용을 보여 줄 때 쓴다
@@ -229,31 +241,50 @@ rl_base_state() {
 # 계획서 승인 줄 다시 쓰기: $1 계획서 $2 "x"(승인)/"o"(보류) $3 대상 ID들(공백 구분)
 rl_rewrite_plan() {
   local tmp="$1.tmp.$$"
-  awk -v MODE=rewrite -v PLAN="$1" -v ACT="$2" -v IDS=" $3 " -v TODAY="$(rl_today)" "$RL_AWK" > "$tmp" && [ -s "$tmp" ] && mv "$tmp" "$1"
-  rm -f "$tmp"
+  awk -v MODE=rewrite -v PLAN="$1" -v ACT="$2" -v IDS=" $3 " -v TODAY="${RL_TODAY:-$(rl_today)}" "$RL_AWK" > "$tmp" && [ -s "$tmp" ] && mv "$tmp" "$1"
+  if [ -e "$tmp" ]; then rm -f "$tmp"; fi
 }
 rl_rewrite_base() {
   local tmp="$1.tmp.$$"
-  awk -v MODE=baserewrite -v PLAN="$1" -v ACT="$2" -v TODAY="$(rl_today)" "$RL_AWK" > "$tmp" && [ -s "$tmp" ] && mv "$tmp" "$1"
-  rm -f "$tmp"
+  awk -v MODE=baserewrite -v PLAN="$1" -v ACT="$2" -v TODAY="${RL_TODAY:-$(rl_today)}" "$RL_AWK" > "$tmp" && [ -s "$tmp" ] && mv "$tmp" "$1"
+  if [ -e "$tmp" ]; then rm -f "$tmp"; fi
 }
 
 # 승인 기록의 지문(없으면 none) — 턴 중에 바뀌었는지 확인할 때 쓴다. 줄 끝 \r 은 빼고 잰다(git 이 CRLF 로 바꿔 받아도 같은 지문)
-rl_log_sum() { if [ -f "$1" ]; then tr -d '\r' < "$1" | cksum | awk '{ print $1 "." $2 }'; else echo none; fi; }
+#   read 가 0 을 돌려주면 NUL 에서 멈춘 것(파일 끝까지 못 읽음) → \r 이 있을 때처럼 tr 로 전체를 잰다
+rl_log_sum() {
+  local c="" s
+  [ -f "$1" ] || { echo none; return 0; }
+  if IFS= read -r -d '' c < "$1" || case "$c" in *$'\r'*) true ;; *) false ;; esac; then
+    s=$(tr -d '\r' < "$1" | cksum)
+  else
+    s=$(cksum < "$1")
+  fi
+  rl_cksum_fmt "$s"
+}
 # 승인 기록이 /refactor:approve 가 마지막으로 남긴 모양 그대로인가(approved/.log-sum 과 비교). 기록이 없으면 그대로로 본다
 #   0.2.0 이 원본 바이트로 잰 봉인값과 맞아도 그대로로 본다(다음 승인 때 새 방식으로 다시 봉인된다)
 rl_log_intact() { # $1 docs/refactor 폴더
-  local want
+  local want="" s
   [ -f "$1/APPROVALS.log" ] || return 0
   [ -f "$1/approved/.log-sum" ] || return 1
-  want=$(tr -d '\r\n' < "$1/approved/.log-sum")
+  IFS= read -r -d '' want < "$1/approved/.log-sum" || :
+  want=${want//$'\r'/}; want=${want//$'\n'/}
   [ "$(rl_log_sum "$1/APPROVALS.log")" = "$want" ] && return 0
-  [ "$(cksum < "$1/APPROVALS.log" | awk '{ print $1 "." $2 }')" = "$want" ]
+  s=$(cksum < "$1/APPROVALS.log")
+  [ "$(rl_cksum_fmt "$s")" = "$want" ]
 }
 # 봉인: 지문과 기록 사본을 남기고, docs/refactor/.gitattributes 가 없으면 만들어 기록이 LF 로 유지되게 한다
+#   사본은 파일 끝까지 읽혔으면(NUL 없음) 읽은 그대로 써서 cp 를 부르지 않는다
 rl_log_seal() {
+  local c=""
   [ -f "$1/.gitattributes" ] || printf '* text eol=lf\n' > "$1/.gitattributes" 2>/dev/null
-  mkdir -p "$1/approved" && rl_log_sum "$1/APPROVALS.log" > "$1/approved/.log-sum" && { cp "$1/APPROVALS.log" "$1/approved/.log-copy" 2>/dev/null || :; }
+  { [ -d "$1/approved" ] || mkdir -p "$1/approved"; } && rl_log_sum "$1/APPROVALS.log" > "$1/approved/.log-sum" || return 1
+  if [ -f "$1/APPROVALS.log" ] && ! IFS= read -r -d '' c < "$1/APPROVALS.log"; then
+    printf '%s' "$c" > "$1/approved/.log-copy" 2>/dev/null || :
+  else
+    cp "$1/APPROVALS.log" "$1/approved/.log-copy" 2>/dev/null || :
+  fi
 }
 # 봉인 뒤에 달라진 줄(최대 10줄): "+ 더해진 줄" / "- 없어진 줄". 봉인이 아예 없으면 NOSEAL 한 줄
 rl_log_changes() { # $1 docs/refactor 폴더

@@ -47,9 +47,12 @@ if [ -z "$root" ] || [ ! -f "$lib" ]; then
   say "⚠️ 승인 도구 파일(refactor-lib.sh)을 찾지 못해 아무것도 바꾸지 않았습니다. 플러그인을 다시 설치해 주세요."
   exit 0
 fi
-eval "$(tr -d '\r' < "$lib")"
+# 외부 명령 없이 읽는다(tr 대신 내장 read — 입력 훅 안에서 돌므로 외부 명령 수가 곧 걸리는 시간이다)
+libsrc=""; IFS= read -r -d '' libsrc < "$lib" || :
+eval "${libsrc//$'\r'/}"; unset libsrc
 US=$RL_US
 now=$(rl_now)
+RL_TODAY=${now%% *}   # 날짜는 이 한 번으로 정한다(라이브러리의 다시 쓰기 함수도 이 값을 쓴다)
 
 if [ ! -d "$dir" ]; then
   say "❓ 이 폴더에는 리팩토링 기록(docs/refactor)이 없습니다: $proj"
@@ -73,8 +76,19 @@ case "$raw" in *[![:space:]]*) rw=1 ;; esac
 # ── 인자 해석 ────────────────────────────────────────────────────────────────
 # '보류'는 맨 앞에만 쓴다(P1-1 보류 P1-2 처럼 섞으면 무엇을 보류하려는지 모호하므로 거절).
 mode="approve"; want_base=0; ids=""; phases=""; bad=""; pos=0; conflict=""; special=""
+# 영문 소문자만 대문자로(tr '[:lower:]' '[:upper:]' 를 LC_ALL=C 에서 쓴 것과 같게, 외부 명령 없이)
+upper_ascii() {
+  local s=$1 o="" c lo=abcdefghijklmnopqrstuvwxyz UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ p i
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case "$c" in [a-z]) p=${lo%%"$c"*}; c=${UP:${#p}:1} ;; esac
+    o=$o$c
+  done
+  UPV=$o
+}
 for tok in $raw; do
-  up=$(printf '%s' "$tok" | tr -d ';.()[]' | tr '[:lower:]' '[:upper:]')
+  t_=${tok//[;.()\[\]]/}
+  upper_ascii "$t_"; up=$UPV
   [ -z "$up" ] && continue
   pos=$((pos + 1))
   case "$up" in
@@ -120,7 +134,7 @@ set_state_front() { # $1 awk 변수 이름=값들 — STATE.md 앞머리 칸 갱
     fm && U != "" && $0 ~ /^updated:/ { print "updated: " U; next }
     { print }
   ' "$state" > "$tmp" && [ -s "$tmp" ] && mv "$tmp" "$state"
-  rm -f "$tmp"
+  if [ -e "$tmp" ]; then rm -f "$tmp"; fi
 }
 
 # ── 승인 기록 봉인 확인 ──────────────────────────────────────────────────────
@@ -163,7 +177,7 @@ RECS_DONE
   rl_log_seal "$dir"
   if [ -f "$state" ]; then
     tmp="$state.tmp.$$"
-    awk -v U="$(rl_today)" '
+    awk -v U="$RL_TODAY" '
       NR == 1 && $0 ~ /^---/ { fm = 1; print; next }
       fm && $0 ~ /^---/ { fm = 0; print; next }
       fm && $0 ~ /^phase:/ { print "phase: DONE"; next }
@@ -171,7 +185,7 @@ RECS_DONE
       fm && $0 ~ /^next:/ { print "next: \"한두 달 뒤 /refactor:go 다시 CHECKUP\""; next }
       fm && $0 ~ /^updated:/ { print "updated: " U; next }
       { print }' "$state" > "$tmp" && [ -s "$tmp" ] && mv "$tmp" "$state"
-    rm -f "$tmp"
+    if [ -e "$tmp" ]; then rm -f "$tmp"; fi
   fi
   say "✅ 리팩토링을 마무리했습니다(DONE). 이제 리팩토링 중에만 켜지는 안전장치(push·배포 차단, 기준선 보호, 안전 실행기 강제 등)가 꺼집니다."
   say "   비밀값·되돌릴 수 없는 명령 보호는 계속 켜져 있습니다. 다시 점검하려면 한두 달 뒤 /refactor:go 다시 CHECKUP"
@@ -198,7 +212,7 @@ if [ "$want_base" = 1 ]; then
           rl_rewrite_base "$base" x
           say "✅ 기준선 계획을 승인했습니다. 이제 /refactor:go 를 실행하면 기준선 테스트를 만듭니다."
           say "   (기준선 작성 중에는 tests/baseline/ 아래 새 파일과 docs/refactor/ 만 만들고, 기존 코드는 고치지 않습니다.)"
-          set_state_front -v N="/refactor:go 로 기준선 작성" -v U="$(rl_today)"
+          set_state_front -v N="/refactor:go 로 기준선 작성" -v U="$RL_TODAY"
         fi
       else
         if [ "$ph" != "BASELINE_PLAN" ] && [ "$RL_STATE" = "approved" ]; then
@@ -208,7 +222,7 @@ if [ "$want_base" = 1 ]; then
           rl_log_seal "$dir"
           rl_rewrite_base "$base" o
           say "⏸ 기준선 계획 승인을 취소했습니다."
-          set_state_front -v N="기준선 계획 확인 후 /refactor:approve baseline" -v U="$(rl_today)"
+          set_state_front -v N="기준선 계획 확인 후 /refactor:approve baseline" -v U="$RL_TODAY"
         else
           say "ℹ️ 기준선 계획은 승인된 적이 없습니다."
         fi
@@ -221,7 +235,14 @@ if [ -n "$ids$phases" ] || [ "$want_base" = 0 ]; then
   if [ ! -f "$plan" ]; then
     [ -n "$ids$phases" ] && say "❓ 계획서(REFACTOR_PLAN.md)가 아직 없습니다. /refactor:go 로 계획서 단계까지 진행하세요."
   else
-    recs=$(rl_cards "$plan" "$log")
+    # 카드는 한 번만 읽는다: 본문(c<순번>)·다시 쓴 뒤 본문(a<순번>)·지문(sums)을 임시 폴더 하나에 남겨
+    # 승인 때 남길 카드 내용과 승인 뒤 현황을 여기서 얻는다(계획서를 두 번 읽지 않는다)
+    cdir=""
+    if [ "$rw" = 1 ]; then
+      cdir=$(mktemp -d 2>/dev/null) || cdir=$(mktemp -d -t rlcards 2>/dev/null) || cdir=""
+      [ -n "$cdir" ] && trap 'rm -rf "$cdir"' EXIT
+    fi
+    recs=$(RL_CARDDIR=$cdir RL_ALT=${cdir:+1} rl_cards "$plan" "$log")
     # 묶음(P1)을 단계 ID로 펼친다(완료된 단계는 건너뜀)
     targets=$ids
     for ph_ in $phases; do
@@ -240,11 +261,13 @@ EOF
 
     acted=""; lines=""
     for id in $targets; do
-      rec=$(printf '%s\n' "$recs" | awk -F "$US" -v ID="$id" '$1 == "CARD" && $3 == ID && !f { print; f = 1 }')
-      if [ -z "$rec" ]; then say "❓ 계획서에 없는 단계 번호: $id"; continue; fi
-      IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st <<EOF
-$rec
+      found=0
+      while IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st; do
+        [ "$kind_" = "CARD" ] && [ "$id_" = "$id" ] && { found=1; break; }
+      done <<EOF
+$recs
 EOF
+      if [ "$found" = 0 ]; then say "❓ 계획서에 없는 단계 번호: $id"; continue; fi
       if [ "${cnt:-1}" -gt 1 ]; then say "⛔ [$id] 같은 번호의 단계가 ${cnt}개 있어 어느 것인지 알 수 없습니다 — /refactor:go 로 계획서 번호를 고치게 한 뒤 다시 승인하세요."; continue; fi
       if [ "$box" = "none" ]; then say "❓ 승인 줄이 없는 단계: [$id] $t — 계획서 형식을 /refactor:go 로 고치게 하세요."; continue; fi
       if [ "$done_" = 1 ]; then say "ℹ️ 이미 완료된 단계라 바꾸지 않음: [$id] $t"; continue; fi
@@ -274,19 +297,46 @@ EOF
       printf '%s' "$lines" >> "$log"
       rl_log_seal "$dir"
       # 승인한 카드의 내용을 남겨 둔다(나중에 카드가 바뀌면 무엇이 바뀌었는지 보여 주려고)
-      if [ "$mode" = "approve" ] && mkdir -p "$dir/approved"; then
-        for id in $acted; do rl_card_text "$plan" "$id" > "$dir/approved/$id.md"; done
+      if [ "$mode" = "approve" ] && { [ -d "$dir/approved" ] || mkdir -p "$dir/approved"; }; then
+        for id in $acted; do
+          ctext=""
+          if [ -n "$cdir" ]; then   # 위에서 읽은 카드 본문 그대로(rl_card_text 와 같은 내용)
+            while IFS="$US" read -r kind_ n_ id_ rest_; do
+              [ "$kind_" = "CARD" ] && [ "$id_" = "$id" ] && { [ -f "$cdir/c$n_" ] && { IFS= read -r -d '' ctext < "$cdir/c$n_" || :; }; break; }
+            done <<EOF
+$recs
+EOF
+            printf '%s' "$ctext" > "$dir/approved/$id.md"
+          else
+            rl_card_text "$plan" "$id" > "$dir/approved/$id.md"
+          fi
+        done
       fi
       if [ "$mode" = "approve" ]; then rl_rewrite_plan "$plan" x "$acted"; else rl_rewrite_plan "$plan" o "$acted"; fi
     fi
 
-    # 현황(기록 기준으로 다시 읽음)
-    recs=$(rl_cards "$plan" "$log")
+    # 현황(기록 기준): 계획서를 다시 읽지 않고, 이번에 처리한 단계만 기록에 남긴 대로 바꿔 본다
+    #   승인 → 체크 x, 기록의 지문(승인 줄 덧붙임 포함)이 다시 쓴 뒤 본문의 지문(a<순번>)과 같으면 승인됨, 다르면 바뀜
+    #   보류 → 체크 칸 비움, 보류됨. 기록에는 이번 단계 줄만 더했으므로 다른 단계의 상태는 그대로다
+    alt_sums=""; adj=$acted
+    if [ -n "$acted" ] && [ -n "$cdir" ] && [ -f "$cdir/sums" ]; then
+      while read -r s1_ s2_ s3_; do case "$s3_" in a[0-9]*) alt_sums="$alt_sums ${s3_#a}=card=$s1_.$s2_ " ;; esac; done < "$cdir/sums"
+    elif [ -n "$acted" ]; then   # 임시 폴더를 못 만들었으면 예전처럼 다시 읽는다
+      recs=$(rl_cards "$plan" "$log"); adj=""
+    fi
     n_total=0; n_ap=0; n_done=0; ready=""; pending=""; changed=""; unlogged=""; dups=""; fence_warn=""
     while IFS="$US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
       case "$kind_" in
         WARN) [ "$n_" = "fence" ] && fence_warn=$id ;;
         CARD)
+          case " $adj " in *" $id "*)
+            if [ "$mode" = "approve" ]; then
+              box=x
+              case "$alt_sums" in *" $n_=$hv "*) st=approved ;; *) st=changed ;; esac
+            else
+              box=o; st=held
+            fi ;;
+          esac
           if [ "${cnt:-1}" -gt 1 ]; then case " $dups " in *" $id "*) ;; *) dups="$dups $id" ;; esac; fi
           [ "$box" = "none" ] && continue
           n_total=$((n_total + 1))
@@ -322,7 +372,7 @@ EOF
       first_ready=${ready# }; first_ready=${first_ready%% *}
       if [ -n "$acted" ]; then
         if [ -n "$first_ready" ]; then nxt="/refactor:go 로 승인된 단계 실행 (다음: $first_ready)"; else nxt="계획서 확인 후 /refactor:approve <단계ID>"; fi
-        set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total" -v N="$nxt" -v U="$(rl_today)"
+        set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total" -v N="$nxt" -v U="$RL_TODAY"
       elif [ "$rw" = 1 ]; then
         set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total"
       fi

@@ -891,6 +891,38 @@ UP_14 = [  # 읽기 전용 단계(CHECKUP + go 턴): docs/refactor 밖 파일을
     (OK, bash("echo '# 보고' > docs/refactor/AUDIT_REPORT.md")), (OK, bash("cp src/app.ts /tmp/")), (OK, bash("cat src/app.ts > /tmp/x.txt")),
     (OK, bash("mkdir -p /tmp/work")),
 ]
+UP_F1 = [  # 읽기 전용 단계(CHECKUP + go 턴): 패키지 실행기(npx·pnpm exec·yarn·bunx …)로 부른 포맷터·린터의 쓰기 옵션
+    (B, bash("npx prettier --write src/app.ts")), (B, bash("npx prettier -w src/app.ts")), (B, bash("npx eslint --fix src/app.ts")),
+    (B, bash("prettier --write .")), (B, bash("npx biome format --write src")), (B, bash("black src/")),
+    (B, bash("ruff format src/")), (B, bash("gofmt -w main.go")), (B, bash("sed -i s/a/b/ src/app.ts")),
+    (B, bash("npx eslint . --fix")), (B, bash("pnpm exec prettier -w src")), (B, bash("npx eslint --fix")),
+    (B, bash("npx --yes prettier@3 --write src/app.ts")), (B, bash("yarn prettier --write src/app.ts")),
+    (B, bash("yarn dlx @biomejs/biome check --apply src/app.ts")), (B, bash("bunx stylelint --fix src/a.css")),
+    (B, bash("pnpm dlx oxlint --fix src")), (B, bash("npm exec -- prettier --write src/app.ts")),
+    (B, bash("node_modules/.bin/prettier --write src/app.ts")), (B, bash("npx standard --fix src/app.ts")),
+    (OK, bash("npx tsc --noEmit")), (OK, bash("npx prettier --check src/app.ts")), (OK, bash("npx eslint src/app.ts")),
+    (OK, bash("npx prettier --list-different src")), (OK, bash("npx prettier -l src/app.ts")),
+    (OK, bash("npx eslint --fix-dry-run src/app.ts")), (OK, bash("npx dprint check")),
+    (OK, bash("npx prettier --write docs/refactor/AUDIT_REPORT.md")), (OK, bash("npx prettier --write /tmp/x.ts")),
+]
+UP_F1_EXEC = [  # 대조군: 실행 대기 단계가 있는 EXECUTE + go 턴에서는 단계 파일 포맷을 막지 않는다(사람 전용 파일은 계속 막음)
+    (OK, bash("npx prettier --write src/app.ts")), (OK, bash("npx eslint --fix src/app.ts")), (OK, bash("pnpm exec prettier -w src/app.ts")),
+    (B, bash("npx prettier --write docs/refactor/APPROVALS.log")),
+]
+UP_F5 = [  # /refactor:go 중(EXECUTE + go 턴): 플러그인 신고 명령은 안전 실행기 없이, 승인 스크립트 직접 실행은 계속 막음
+    (OK, bash("bash /x/hooks/run.sh refactor-report --collect . --data /tmp/d")), (OK, bash("bash /x/hooks/run.sh refactor-report --send /tmp/d")),
+    (B, bash("bash /x/hooks/run.sh refactor-approve . --from-hook")), (B, bash("bash /x/hooks/run.sh refactor-report --collect . && npm test")),
+]
+UP_F6 = [  # 환경변수 이름만 출력(값이 안 남는 거르개 하나)은 통과, 값이 남는 형태는 계속 차단
+    (OK, bash("env | cut -d= -f1")), (OK, bash("printenv | cut -d= -f1")), (OK, bash("env | sed 's/=.*//'")),
+    (OK, bash("env | awk -F= '{print $1}'")), (OK, bash("compgen -e")), (OK, ps("Get-ChildItem Env: | Select-Object Name")),
+    (OK, bash("env | cut -d= -f1 | sort")), (OK, bash("env | cut -d '=' -f1")), (OK, bash("printenv | cut -f1 -d=")),
+    (OK, ps("Get-ChildItem Env: | Select-Object -ExpandProperty Name")),
+    (B, bash("env | grep KEY")), (B, bash("env | cut -d= -f2")), (B, bash("env | sort")), (B, bash("env | head")),
+    (B, bash("env | cut -d= -f1,2")), (B, bash("env | cut -d= -f1-")), (B, bash("env | sed 's/=.*//' ; env")),
+    (B, bash("env | awk -F= '{print $2}'")), (B, bash("env | sed 's/x//'")), (B, ps("Get-ChildItem Env: | Select-Object Name,Value")),
+    (B, ps("Get-ChildItem Env:")), (B, bash("env | cut -d= -f1 && cat .env")),
+]
 UP_15 = [  # Windows·변형 삭제·전각 글자·SQL 주석
     (B, bash('cmd //c "rd //s //q ."')), (B, bash("cmd //c del /s /q *")), (B, ps("rm -r -Force ~")),
     (B, bash("ｒｍ -rf ～")), (B, bash("rm -rf ．")), (B, bash('psql -c "DELETE FROM orders -- where id=1"')),
@@ -931,6 +963,10 @@ def check_upgrade_021(res):
         ("0.2.1 14 읽기 전용 단계 셸 쓰기", dict(phase="CHECKUP", allow=(".turn",)), UP_14),
         ("0.2.1 15 Windows·DB", dict(), UP_15), ("0.2.1 15 진행 중 DB 초기화", dict(phase="EXECUTE"), UP_15_ON),
         ("0.2.1 16 Windows 경로", dict(), UP_16), ("0.2.1 R4 훅 진입점 직접 실행", dict(), UP_R4),
+        ("0.2.1 F1 읽기 전용 단계 포맷터(실행기)", dict(phase="CHECKUP", allow=(".turn",)), UP_F1),
+        ("0.2.1 F1 대조군 EXECUTE", dict(phase="EXECUTE", allow=(".turn",)), UP_F1_EXEC),
+        ("0.2.1 F5 go 중 신고 명령", dict(phase="EXECUTE", allow=(".turn",)), UP_F5),
+        ("0.2.1 F6 환경변수 이름만 출력", dict(), UP_F6),
     ]:
         proj = make_project(**kw)
         try:

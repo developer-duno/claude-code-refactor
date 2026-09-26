@@ -892,6 +892,22 @@ seg_targets() {
   done
   seg_words "$s"
   n=${#SW[@]}
+  # 패키지 실행기(npx·pnpm exec/dlx·yarn·bunx·npm exec …)로 부른 포맷터·린터는 그 도구 이름으로 판정한다
+  case "$SCMD" in
+    npx|pnpx|bunx|pnpm|yarn|npm|bun)
+      local j=$((SI + 1))
+      case "$SCMD:${SW[$j]:-}" in pnpm:exec|pnpm:dlx|yarn:exec|yarn:dlx|npm:exec|npm:x|bun:x) j=$((j + 1)) ;; esac
+      while [ "$j" -lt "$n" ]; do
+        case "${SW[$j]}" in
+          -p|--package|-c|--call) j=$((j + 2)) ;;
+          --) j=$((j + 1)); break ;;
+          -*) j=$((j + 1)) ;;
+          *) break ;;
+        esac
+      done
+      t=${SW[$j]:-}; t=${t##*/}; t=${t%%@*}
+      case "$t" in prettier|eslint|biome|stylelint|standard|dprint|rome|oxlint) SI=$j; SCMD=$t ;; esac ;;
+  esac
   for ((i = SI + 1; i < n; i++)); do
     a=${SW[$i]}
     if [ "$skip" = 1 ]; then skip=0; continue; fi
@@ -907,7 +923,7 @@ seg_targets() {
     mv|move|move-item|mi|ren|rename|rni|rename-item) cls=mv; SEGMV=1 ;;
     cp|copy|copy-item|cpi|install|rsync|scp|xcopy|robocopy|ln|mklink) cls=cp ;;
     rm|unlink|rmdir|rd|del|erase|remove-item|ri|touch|mkdir|md|new-item|ni|truncate|shred|chmod|chown|chgrp|tee|patch|set-content|sc|add-content|ac|out-file|clear-content|clc|rimraf|trash|srm|tee-object) cls=w ;;
-    prettier|eslint|biome|ruff|black|isort|gofmt|dprint|rubocop|autopep8|standard) cls=fmt ;;
+    prettier|eslint|biome|ruff|black|isort|gofmt|dprint|rubocop|autopep8|standard|stylelint|rome|oxlint) cls=fmt ;;
     *) cls=u ;;
   esac
   # 읽기 명령 중 옵션에 따라 쓰는 것
@@ -1239,7 +1255,8 @@ shell_targets() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨)
       if [ -n "$plugroot" ]; then
         case "$RP" in "$plugroot"|"$plugroot"/*) block "플러그인 폴더는 고치지 않습니다." "플러그인 수정은 사람이 원본 저장소에서 합니다." ;; esac
       fi
-      if [ "$fence" = 1 ] && under_proj "$RP" && ! under_refactor_docs "$RP"; then
+      # 프로젝트 폴더 자체(npx eslint . --fix, 대상 없는 --write)도 그 안 전부를 바꾸는 것이다
+      if [ "$fence" = 1 ] && { [ "$RP" = "$proj" ] || under_proj "$RP"; } && ! under_refactor_docs "$RP"; then
         block "$fence_why docs/refactor 밖의 파일을 셸 명령으로 바꾸지 않습니다." "발견한 문제는 보고서와 계획서 후보로만 적으세요. 임시 파일은 /tmp 나 \$TMPDIR 에 쓰세요. (리팩토링과 상관없는 평소 작업이면 사용자에게 새 대화에서 하자고 안내하세요.)"
       fi
     done
@@ -1259,8 +1276,10 @@ seg_short_secret() {
 # PowerShell Env: 드라이브로 환경변수를 찍는가(gci env:, Get-ChildItem -Path env:, Get-Item Env:*) — 안전 이름 하나만 보면 통과
 ps_env_provider() {
   local rest=$1 nm re="(^|[;&|({\`\"'[:space:]])(get-childitem|gci|dir|ls|get-item|gi|get-content|gc|type|cat|get-itemproperty|gp)([[:space:]]+-(path|literalpath|name))?[[:space:]]+[\"']?env:[/\\\\]?([^[:space:]\"';&|)]*)"
+  local re_nmo="^[\"']?[[:space:]]*[|][[:space:]]*(select-object|select)[[:space:]]+(-property[[:space:]]+|-expandproperty[[:space:]]+)?[\"']?name[\"']?[[:space:]]*($|[;|)])"
   while [[ $rest =~ $re ]]; do
     nm=${BASH_REMATCH[5]}; rest=${rest#*"${BASH_REMATCH[0]}"}
+    [[ $rest =~ $re_nmo ]] && continue   # 이름만 고르는 목록(gci env: | select-object name)은 값이 안 나온다
     [ -z "$nm" ] && return 0
     case "$nm" in *'*'*|*'?'*|*'['*) return 0 ;; esac
     safe_env_name "$nm" || return 0
@@ -1407,6 +1426,12 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   while [[ $cmd =~ $re_egs ]]; do
     safe_env_name "${BASH_REMATCH[6]}" || break
     m0=${BASH_REMATCH[0]}; cmd=${cmd/"$m0"/"${BASH_REMATCH[1]}true | ${BASH_REMATCH[3]} ${BASH_REMATCH[6]}${BASH_REMATCH[7]}"}
+  done
+  # 이름만 남기는 환경변수 목록(env | cut -d= -f1, sed 's/=.*//', awk -F= '{print $1}')도 덤프가 아니다 — 바로 뒤 거르개가 그 명령 하나일 때만
+  local re_d="-d[[:space:]]*[\"']?=[\"']?" re_f='-f[[:space:]]*1'
+  local re_enm="(^|[;&|({[:space:]])(env|printenv)[[:space:]]*[|][[:space:]]*(cut[[:space:]]+${re_d}[[:space:]]+${re_f}|cut[[:space:]]+${re_f}[[:space:]]+${re_d}|sed[[:space:]]+(-e[[:space:]]+)?[\"']?s/=[.][*][$]?//g?[\"']?|g?awk[[:space:]]+-F[[:space:]]*[\"']?=[\"']?[[:space:]]+[\"']?[{][[:space:]]*print[[:space:]]+[$]1[[:space:]]*;?[[:space:]]*[}][\"']?)([[:space:]]*($|[;&|)]))"
+  while [[ $cmd =~ $re_enm ]]; do
+    m0=${BASH_REMATCH[0]}; cmd=${cmd/"$m0"/"${BASH_REMATCH[1]}true | ${BASH_REMATCH[3]}${BASH_REMATCH[5]}"}
   done
 
   # lr: 무해한 리다이렉트 제거 + git 전역 옵션 정리(git -C . reset → git reset)
@@ -1686,7 +1711,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   if [ "$go_turn" = 1 ]; then
     local rq=$lq rseg runsh=${REFACTOR_ROOT:-<플러그인 폴더>}
     local re_mark="run\\.sh[\"']?[[:space:]]+refactor-safe-run[[:space:]]+(--|--check)([[:space:]]|$)"
-    local re_plug="run\\.sh[\"']?[[:space:]]+refactor-(status|board)([[:space:]]|$)"
+    local re_plug="run\\.sh[\"']?[[:space:]]+refactor-(status|board|report)([[:space:]]|$)"
     runsh=${runsh//"$BS"/$SL}; runsh="${runsh%/}/hooks/run.sh"
     # 안전 실행기 뒤에 따옴표로 넘긴 명령(sh -c "npm test && npm run build")은 통째로 감싼 것이니 쪼개지 않는다
     blank_quoted "(refactor-safe-run[[:space:]]+--[[:space:]][^;&|]*)(\"[^\"]*\"|'[^']*')" 2 "$rq"; rq=$BQ
