@@ -7,5 +7,6 @@
 # - REFACTOR_ROOT(플러그인 폴더)를 알려 준다. 아래 명령 줄 끝의 # 은 이 파일에 \r이 들어와도 주석이 되게 하려는 것이니 지우지 마세요.
 s=${BASH_SOURCE[0]}; s=${s//\\//}; case "$s" in */*) d=${s%/*} ;; *) d=. ;; esac; REFACTOR_ROOT=${d%/hooks}; [ "$REFACTOR_ROOT" = "$d" ] && REFACTOR_ROOT="$d/.."; export REFACTOR_ROOT #
 n=${1:-}; h=0; case "$n" in guard|turn|post-check|session-start) h=1 ;; esac; f=""; case "$n" in *[!A-Za-z0-9_-]*|"") ;; *) if [ -f "$d/$n.sh" ]; then f="$d/$n.sh"; h=1; elif [ -f "$d/../scripts/$n.sh" ]; then f="$d/../scripts/$n.sh"; fi ;; esac #
+trap 'x=${r:-$?}; [ -z "$f" ] && x=127; case "$n" in *[!A-Za-z0-9_-]*|"") n="?" ;; esac; case "$n:$x" in refactor-report:*|refactor-safe-run:*) ;; *:2|*:124|*:127) bash "$d/run.sh" refactor-report --log run.sh "$n exit $x" </dev/null >/dev/null 2>&1 ;; esac' EXIT # 하위 스크립트가 2(문법 오류 등)·124(시간 초과)·127(없음)로 끝나면 문제 기록(problems.log)에 이름·종료 코드만 한 줄 남긴다
 if [ -z "$f" ]; then printf '[refactor] 스크립트 없음: %s\n' "$n" >&2; [ "$h" = 1 ] && exit 1; exit 127; fi #
 shift; c=$(<"$f"); case "$c" in *$'\r'*) bash <(printf '%s\n' "$c" | tr -d '\r') "$@" ;; *) bash "$f" "$@" ;; esac; r=$?; if [ "$h" = 1 ]; then [ "$r" = 42 ] && exit 2; [ "$r" = 2 ] && exit 1; fi; exit "$r" #

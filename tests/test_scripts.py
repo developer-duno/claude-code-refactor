@@ -642,6 +642,101 @@ def main():
     check("현황표: 실행 대기 → ▶", "▶ 다음 단계 가능" in board_row())
     shutil.rmtree(d, ignore_errors=True)
 
+    # 24) 문제 신고(/refactor:report): 묶음 가리기 · 보내지 않음 · 동의 뒤 gh 호출 · gh 없음 · 문제 기록
+    tmpr = pathlib.Path(tempfile.mkdtemp(prefix="reporttest-"))
+    data = tmpr / "data"
+    fakebin = tmpr / "bin"
+    fakebin.mkdir()
+    ghlog = tmpr / "gh.log"
+    lf(fakebin / "gh", '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$FAKE_GH_LOG"\n'
+       '[ "$1 $2" = "auth status" ] && exit "${FAKE_GH_AUTH:-0}"\n'
+       '[ "$1 $2" = "issue create" ] && echo "https://github.com/owner/repo/issues/7"\nexit 0\n')
+    os.chmod(fakebin / "gh", 0o755)
+    plug = tmpr / "plug"
+    shutil.copytree(ROOT / "plugins/refactor", plug / "refactor")
+    pj = plug / "refactor/.claude-plugin/plugin.json"
+    lf(pj, pj.read_text(encoding="utf-8").replace("https://github.com/developer-duno/claude-code-refactor", "https://github.com/owner/repo"))
+    prun = (plug / "refactor/hooks/run.sh").as_posix()
+
+    def rep(args, stdin="", path_prefix=None, path_filter=False, extra=None):
+        e = env()
+        e["CLAUDE_PLUGIN_DATA"] = str(data)
+        e["FAKE_GH_LOG"] = str(ghlog)
+        if path_prefix:
+            e["PATH"] = str(path_prefix) + os.pathsep + e["PATH"]
+        if path_filter:   # gh 가 없는 컴퓨터처럼: gh 가 든 폴더를 PATH 에서 뺀다
+            e["PATH"] = os.pathsep.join(p for p in e["PATH"].split(os.pathsep)
+                                        if not (os.path.exists(os.path.join(p, "gh")) or os.path.exists(os.path.join(p, "gh.exe"))))
+        if extra:
+            e.update(extra)
+        r = subprocess.run([BASH, prun, "refactor-report", *args], input=stdin.encode("utf-8"),
+                           capture_output=True, env=e, timeout=120)
+        return r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace"), r.returncode
+
+    # 가짜 비밀값(시험용 자리표시자 — 실행 중에 조각을 이어 붙여 만든다)
+    fk = "FAKE" + "TESTVALUE" + "0000"
+    fakes = {
+        "kv": "PAY_SECRET_KEY=" + fk + "kv",
+        "url": "postgres://admin:" + fk + "pw@db.example.test/x",
+        "gh": "gh" + "p_" + fk + "gh",
+        "slack": "xo" + "xb-" + fk + "sl",
+        "aws": "AK" + "IA" + fk + "AW",
+        "jwt": "ey" + "J" + fk + "jw",
+        "home": "C:\\Users\\" + "fakeperson" + "\\proj",
+    }
+    data.mkdir()
+    lf(data / "problems.log", "2026-09-26 10:00 | run.sh | x exit 2 " + fakes["kv"] + "\n")
+    desc = "결제가 안 돼요 " + " ".join(fakes.values())
+    out, rc = rep(["--collect", str(tmpr), "--data", str(data)], desc, path_prefix=fakebin)
+    files = sorted(data.glob("report-*.md"))
+    body = files[-1].read_text(encoding="utf-8") if files else ""
+    leaked = [s[max(0, s.find(fk) - 30):s.find(fk) + 30] for s in (out, body) if fk in s] + [s for s in (out, body) if "fakeperson" in s][:1]
+    check("신고: 묶음 가리기(화면·파일에 가짜 비밀값 0)", rc == 0 and files and not leaked and "****" in body and "<홈>" in body, f"{rc} {leaked} {out[-800:]}")
+    check("신고: 묶음 내용(버전·상태·설명)", "플러그인 버전: 0.2.1" in out and "결제가 안 돼요" in out and "아직 아무 데도 보내지 않았습니다" in out, out[-800:])
+    check("신고: 묶음은 폴더 이름만", tmpr.as_posix() not in out and str(tmpr) not in out and f"폴더 이름: {tmpr.name}" in out, out[:600])
+    check("신고: --collect 는 gh 를 부르지 않음", not ghlog.exists(), ghlog.read_text(encoding="utf-8") if ghlog.exists() else "")
+
+    out, rc = rep(["--send", "--data", str(data), "--title", "결제 오류"], path_prefix=fakebin)
+    calls = ghlog.read_text(encoding="utf-8") if ghlog.exists() else ""
+    check("신고: --send 가 gh 를 정확한 인자로", rc == 0 and "issues/7" in out and "issue create --repo owner/repo --title [refactor] 결제 오류 --body-file " in calls
+          and "--label bug" in calls, f"{rc} {out} {calls}")
+    sent = (data / ".send-body.md").read_text(encoding="utf-8") if (data / ".send-body.md").exists() else ""
+    check("신고: 보낸 본문도 가려짐", "플러그인 버전" in sent and fk not in sent, sent[-400:])
+
+    out, rc = rep(["--send", "--data", str(data), "--title", "결제 오류"], path_filter=True)
+    check("신고: gh 없음 → exit 4 + 링크", rc == 4 and "https://github.com/owner/repo/issues/new?template=bug.yml&title=%5Brefactor%5D%20" in out
+          and "묶음 파일:" in out, f"{rc} {out}")
+    out, rc = rep(["--send", "--data", str(data)], path_prefix=fakebin, extra={"FAKE_GH_AUTH": "1"})
+    check("신고: gh 로그인 안 됨 → exit 4", rc == 4 and "issues/new?template=bug.yml" in out, f"{rc} {out}")
+    out, rc = rep(["--send", "--data", str(data), "--file", ".env"], path_prefix=fakebin)
+    check("신고: 묶음이 아닌 파일은 보내지 않음", rc == 3, f"{rc} {out}")
+
+    # 문제 기록: 실행기(문법 오류 스크립트) · 안전장치 차단 — 이름·종료 코드·규칙 설명만
+    lf(plug / "refactor/scripts/zz-bad.sh", "if then\n")
+    e = env()
+    e["CLAUDE_PLUGIN_DATA"] = str(tmpr / "d2")
+    r = subprocess.run([BASH, prun, "zz-bad"], capture_output=True, env=e, timeout=90)
+    plog = (tmpr / "d2/problems.log").read_text(encoding="utf-8") if (tmpr / "d2/problems.log").exists() else ""
+    check("문제 기록: 문법 오류 스크립트", r.returncode == 2 and plog.count("\n") == 1 and plog.rstrip().endswith(" | run.sh | zz-bad exit 2"), f"{r.returncode} {plog}")
+    gp = tmpr / "gproj"
+    gp.mkdir()
+    e["CLAUDE_PROJECT_DIR"] = str(gp)
+    pl = json.dumps({"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "cat .env.production"}}).encode()
+    r = subprocess.run([BASH, prun, "guard"], input=pl, capture_output=True, env=e, timeout=90)
+    plog = (tmpr / "d2/problems.log").read_text(encoding="utf-8")
+    last = plog.rstrip().splitlines()[-1]
+    check("문제 기록: 안전장치 차단(명령은 적지 않음)", r.returncode == 2 and " | guard | 차단: " in last and "cat " not in last
+          and len(last.split("차단: ", 1)[1]) <= 60, last)
+    # 기록이 200KB 를 넘으면 최근 절반만(안전장치 줄의 정리 부분을 가끔이 아니라 바로 실행해 확인)
+    gline = next((l for l in (ROOT / "plugins/refactor/hooks/guard.sh").read_text(encoding="utf-8").splitlines() if "problems.log" in l and "printf" in l), "")
+    lf(tmpr / "d2/problems.log", "".join(f"2026-09-01 10:00 | guard | 차단: 채움 {i:06d} {'가' * 20}\n" for i in range(4000)))
+    r = subprocess.run([BASH, "-c", "NL=$'\\n'; BS='\\\\'; SL=/; f() { " + gline.split("   # ")[0].replace("(( RANDOM % 64 ))", "false") + "\n}; f 규칙설명"],
+                       capture_output=True, env=e, timeout=90)
+    sz = (tmpr / "d2/problems.log").stat().st_size
+    tail = (tmpr / "d2/problems.log").read_text(encoding="utf-8").splitlines()
+    check("문제 기록: 200KB 넘으면 최근 절반", 90000 < sz <= 102400 and tail[-1].endswith("차단: 규칙설명") and tail[0].startswith("2026-09-01"), f"{sz} {tail[:1]} {tail[-1:]}")
+    shutil.rmtree(tmpr, ignore_errors=True)
+
     for label, detail in fails:
         print(f"FAIL {label}\n      {detail}")
     print(f"\n{total - len(fails)}/{total} 통과 · bash={BASH}{' · PATH+' + PATH_PREFIX if PATH_PREFIX else ''}")
