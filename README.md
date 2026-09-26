@@ -7,7 +7,7 @@
 
 > **English summary**
 > - **What it is:** A Korean-only Claude Code plugin that refactors a live service in a fixed order — code map, 25-item health check, deep audit, rebuttal review, baseline tests, plan — and then changes code only for steps a human approved, one step at a time.
-> - **What it blocks:** Hooks stop common accidents before they run: secret exposure (`.env`, environment dumps, tokens in git remotes), irreversible commands (force push, `reset --hard`, dropping databases) and approval bypasses; tests and builds run with production URLs and keys swapped for dummy values.
+> - **What it blocks:** Hooks stop common accidents before they run: secret exposure (`.env`, environment dumps, tokens in git remotes), irreversible commands (force push, `reset --hard`, dropping databases) and common approval-bypass tricks; tests and builds run with production URLs and keys swapped for dummy values.
 > - **Install:** `claude plugin marketplace add developer-duno/claude-code-refactor` then `claude plugin install refactor@vibe-consulting`.
 
 바로 가기: [설치](#3-설치) · [명령](#4-명령-5개) · [사용 순서](#5-사용-순서) · [안전장치](#6-안전장치) · [한계](#6-4-한계) · [문제 신고](#11-피드백기여라이선스)
@@ -116,7 +116,7 @@ claude --plugin-dir ./claude-code-refactor/plugins/refactor
 | `/refactor:board` | 여러 프로젝트를 급한 순서로 한 표에. 예: `/refactor:board ~/projects` | 사람·Claude |
 | `/refactor:report` | 문제 신고 묶음을 만들어 **먼저 보여 주고**, 동의하면 GitHub 이슈로 보냄([§11](#11-피드백기여라이선스)) | 사람만 |
 
-- **승인은 사람만 할 수 있습니다.** `/refactor:approve`를 입력창에 치면 입력 훅(UserPromptSubmit)이 승인 스크립트를 실행하고, 결과를 `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록으로 Claude에게 전합니다. Claude가 승인 스크립트나 훅을 직접 부르는 것은 안전장치가 막고, 스크립트도 훅 밖에서는 아무것도 바꾸지 않습니다(현황만 보여 줌). 따옴표로 이름을 쪼개거나(`app''rove`) 새 Claude 세션을 띄워(`claude -p "/refactor:approve …"`) 승인하려는 것도 막습니다.
+- **승인은 사람만 할 수 있습니다.** `/refactor:approve`를 입력창에 치면 입력 훅(UserPromptSubmit)이 승인 스크립트를 실행하고, 결과를 `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록으로 Claude에게 전합니다. Claude가 승인 스크립트나 훅을 직접 부르는 것은 안전장치가 막고, 스크립트도 훅 밖에서는 아무것도 바꾸지 않습니다(현황만 보여 줌). 따옴표나 역슬래시로 이름을 쪼개기(`app''rove`), 새 Claude 세션에 승인 명령 넘기기(`claude -p "/refactor:approve …"`), 한 줄 파이썬·노드 코드 안에서 부르기처럼 **알려진 우회 모양**도 막습니다. 다만 글자를 조립하거나 파일에 적어 두었다가 넘기는 우회까지 모두 막지는 못합니다([§6-4](#6-4-한계)).
 - 계획서의 체크 표시를 손으로 고쳐도 승인으로 치지 않습니다. 승인의 근거는 `docs/refactor/APPROVALS.log` 한 곳입니다.
 - `/refactor:board`는 지금 프로젝트에 `docs/refactor/STATE.md`가 있으면 그 상위 폴더를, 없으면 지금 폴더 아래를 훑습니다. 상태는 🔴 급한 구멍 · 🙋 사장님 차례(화면 문구 그대로 — 승인·답변만 하면 진행) · 🙋 마무리 확인 필요(STATE는 DONE인데 `/refactor:approve 마무리`로 아직 확인 안 함) · ▶ 다음 단계 가능 · ⏳ 진행 중 · ✅ 완료 · ⏰ 14일 넘게 멈춤 · ⚠허용파일(허용 파일이 남아 있음)로 표시됩니다.
 
@@ -160,7 +160,7 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 | **항상** (플러그인이 켜진 모든 대화) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기·출력·복사·전송·수정하는 명령과 도구, 환경변수 전체 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색, git이 무시하지 않는 `.env`가 든 범위의 내용 검색 · 강제 push, `reset --hard`, `clean -f`, `checkout .`, `branch -D`, 기록 다시 쓰기, `rm -rf ~`·프로젝트 통째 삭제 같은 대량 삭제, DB 삭제·초기화 · 승인 스크립트와 플러그인 훅을 직접 부르기, 승인 기록(`APPROVALS.log`)·허용 파일(`.allow-*`)·`.turn*`을 만들기·복사·이동·개명·압축 해제로 바꾸기, 계획서 승인 칸 체크, 플러그인 폴더 수정 · MCP 도구나 하위 에이전트 지시로 위 금지를 우회하기 |
 | **리팩토링 진행 중** (`docs/refactor/STATE.md`가 있고 마무리 전) | push·배포·원격 서버 명령, DB 구조 적용(마이그레이션), 원격 DB 접속, MCP로 운영 DB 조회·배포·메시지 발송, 플러그인 끄기, Claude 설정 수정, `git stash`, 파일을 지정하지 않은 `git log -p`, 프로젝트 전체 포맷터 · 커밋된 기준선 테스트와 마이그레이션 파일 수정(스냅숏 갱신 옵션 포함) |
 | **`/refactor:go` 실행 중** | 대표 실행 명령(npm·pnpm·yarn·bun·npx, python·node·deno, pytest, uv·poetry·pipenv run, make, turbo·nx, docker compose 등)은 안전 실행기로만 · 읽기 전용 단계, 그리고 승인된 실행 대기 단계가 없을 때는 `docs/refactor/` 밖 수정 금지 |
-| **너무 긴 입력** | 셸 명령 16KB · Grep 입력·Edit의 바꿀 부분·파일 경로 32KB · 하위 에이전트(Agent) 지시문 32KB를 넘거나, Grep 검색 범위가 너무 넓으면(폴더 200개 또는 5초 이상) 판정하지 않고 막습니다 — 파일로 저장해 실행하거나 범위를 좁히세요. **Write 본문과 MCP 도구(노션·DB·메일 등) 입력은 크기로 막지 않습니다** — 큰 파일 쓰기·긴 문서·큰 SQL은 정상 작업이기 때문입니다. 대신 그 안의 경로·명령·SQL 규칙은 크기와 상관없이 적용됩니다 |
+| **너무 긴 입력** | 셸 명령 16KB(MCP 도구의 명령 칸 포함) · Grep 입력·Edit의 바꿀 부분·파일 경로 32KB · 하위 에이전트(Agent) 지시문 32KB(바이트 기준이라 한글만 쓰면 약 1만 글자) 또는 2,000줄을 넘거나, Grep 검색 범위가 너무 넓으면(폴더 200개 또는 5초 이상) 판정하지 않고 막습니다 — 파일로 저장해 실행하거나 범위를 좁히세요. **Write 본문과 MCP 도구(노션·DB·메일 등) 입력은 크기로 막지 않습니다** — 큰 파일 쓰기·긴 문서·큰 SQL은 정상 작업이기 때문입니다. 대신 그 안의 경로·명령 규칙은 크기와 상관없이 적용되고, SQL은 256KB까지 문장마다 판정하며 그보다 크면 위험한 낱말(DROP·DELETE 등)이 하나라도 있을 때 막습니다 |
 
 명령이 끝난 뒤에도(PostToolUse 훅) 한 번 더 확인해서, **이번 턴에** 커밋된 기준선·마이그레이션 파일이나 승인 기록이 바뀌었으면 그 턴의 Claude에게 바로 알립니다. 승인 기록은 `/refactor:approve`가 쓸 때마다 봉인되므로, 그 밖에서 바뀐 기록은 사람이 `/refactor:approve 확인`을 입력하기 전까지 인정되지 않습니다.
 
@@ -186,6 +186,7 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 ### 6-4. 한계
 
 - 안전장치는 **흔한 위험 명령을 모양으로 알아보고 막는 보조 장치**입니다. 스크립트를 거친 수정, 일부러 꼬아 쓴 명령 등 모든 우회를 막지는 못합니다. 사고(실수)를 줄이는 장치이지, 악의적인 공격을 막는 장치가 아닙니다. **보조 안전망이지 벽이 아닙니다.**
+- 이름을 쪼개거나 조립하는 우회는 **알려진 모양만** 막습니다. 따옴표·역슬래시·빈 변수·`$'…'`·글로브로 쪼갠 이름, 새 Claude 세션에 넘긴 승인 명령, 한 줄 인터프리터 코드 안의 승인 스크립트는 막습니다. 하지만 `printf`·`eval`로 글자를 이어 붙이거나, 명령을 파일에 적어 두었다가 다음 도구 호출에서 실행하거나, 새 Claude 세션에 파일로 넘기는 것(`claude -p < 파일`)은 명령 글자만 보고는 알아볼 수 없습니다.
 - 안전장치 스크립트가 고장 나거나 실행되지 못하면(Windows에서 Git Bash를 못 찾을 때 등) **막지 않고 통과**시킵니다. 모든 작업이 멈추는 것을 막기 위해서이고, 그래서 준비 단계에서 작동 시험을 합니다.
 - 플러그인 스크립트를 통째로 복사해 훅과 같은 입력을 흉내 내는 것, 승인 기록과 봉인을 함께 다시 쓰는 스크립트까지는 막지 못합니다. 커밋 전에 `git diff`로 계획서·승인 기록의 변화를 한 번 보는 습관이 가장 확실합니다.
 - 코드·설정 파일에 직접 적힌 키는 안전 실행기도 가리지 못합니다([§7](#7-안전-실행기)).
@@ -351,7 +352,7 @@ claude-code-refactor/
 
 ## 13. 0.2.1 변경점
 
-- **승인을 입력 훅이 처리** — 스킬의 `!` 명령이 입력 훅보다 먼저 돌아 승인이 사라지던 문제를 고쳤습니다. `refactor-approve.sh`는 입력 훅이 붙이는 `--from-hook` 없이는 아무것도 바꾸지 않고, Claude가 훅 진입점(`run.sh turn|guard|post-check|session-start`)을 직접 부르는 것은 안전장치가 막습니다. 따옴표로 이름을 쪼개거나 새 Claude 세션을 띄워 승인하려는 것도 막습니다.
+- **승인을 입력 훅이 처리** — 스킬의 `!` 명령이 입력 훅보다 먼저 돌아 승인이 사라지던 문제를 고쳤습니다. `refactor-approve.sh`는 입력 훅이 붙이는 `--from-hook` 없이는 아무것도 바꾸지 않고, Claude가 훅 진입점(`run.sh turn|guard|post-check|session-start`)을 직접 부르는 것은 안전장치가 막습니다. 따옴표·역슬래시로 이름을 쪼개기, 새 Claude 세션에 넘기기, 한 줄 인터프리터 코드 안에서 부르기 같은 알려진 우회 모양도 막습니다(글자 조립·파일 경유 우회의 한계는 [§6-4](#6-4-한계)).
 - **문제 신고 `/refactor:report`(동의형)와 문제 기록 `problems.log`** 추가([§11](#11-피드백기여라이선스)).
 - **안전장치 보강** — 목적지 기준 판정·경로 정규화, 너무 긴 입력·너무 넓은 검색 범위 차단, 승인 기록·허용 파일을 복사·이동·개명·압축 해제·우회 도구로 건드리는 것 차단. 과잉 차단 완화: 안전한 환경변수 이름 조회, `.env`가 없을 때의 `.env.example` 복사, `git config --list`, `.envrc` 읽기.
 - **표시 파일 세션별 분리** — `.turn.<세션ID>`, `.turn-dirty.<세션ID>`.
