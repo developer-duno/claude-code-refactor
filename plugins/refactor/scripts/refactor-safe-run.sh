@@ -69,14 +69,17 @@ allowed_ok() { # $1 이름 $2 값 — 허용 목록에 있고(호스트를 적�
   while IFS= read -r line; do [ "${line%%=*}" = "$1" ] && want=${line#*=}; done <<AH
 $allow_hosts
 AH
-  host_of "$2"
   if [ -z "${want:-}" ]; then
     # 이름만 적은 경우: 주소 모양의 값이면 호스트가 없으므로 허용하지 않는다
-    case "$2" in *://*) return 1 ;; esac
-    looks_domain "$2" && return 1
+    is_address "$2" && return 1
     return 0
   fi
-  [ "$HOSTV" = "$want" ]
+  # 호스트를 적은 경우: 값에 든 호스트가 모두(쉼표 목록 포함) 적어 둔 호스트와 같을 때만
+  host_of "$2"
+  [ -n "$HOSTS" ] || return 1
+  local h
+  for h in $HOSTS; do [ "$h" = "$want" ] || return 1; done
+  return 0
 }
 
 # ── 이름·값 분류 ─────────────────────────────────────────────────────────────
@@ -87,25 +90,56 @@ is_untouchable() {
     SSH_AUTH_SOCK|SSH_AGENT_PID|SSH_TTY|SSH_CONNECTION|SSH_CLIENT) return 0 ;;
     HTTP_PROXY|HTTPS_PROXY|NO_PROXY|ALL_PROXY|http_proxy|https_proxy|no_proxy|all_proxy) return 0 ;;
     GIT_DIR|GIT_WORK_TREE|GIT_EXEC_PATH|GIT_ASKPASS|GIT_EDITOR|GIT_PAGER|GIT_SSH|GIT_SSH_COMMAND|GIT_TERMINAL_PROMPT|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*|GIT_CONFIG_PARAMETERS|GIT_AUTHOR_*|GIT_COMMITTER_*) return 0 ;;
-    LC_*|XDG_*|GPG_*|CLAUDE*|npm_config_*|npm_lifecycle_*|npm_package_*|npm_node_execpath|npm_execpath|npm_command|REFACTOR_*|BASH*|COLOR*|TERM_*|ITERM*|VSCODE_*) return 0 ;;
+    LC_*|XDG_*|GPG_*|npm_config_*|npm_lifecycle_*|npm_package_*|npm_node_execpath|npm_execpath|npm_command|REFACTOR_*|BASH*|COLOR*|TERM_*|ITERM*|VSCODE_*) return 0 ;;
+    CLAUDE_CODE_*|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_*|CLAUDECODE) return 0 ;;   # Claude Code 자체 변수만(CLAUDE_API_KEY 는 가린다)
+    NODE_OPTIONS|*_OPTS|*_FLAGS) return 0 ;;
   esac
+  # Windows·Git Bash(MSYS) 기본 변수(ProgramData·PSModulePath 처럼 대소문자가 섞여 들어온다)
+  shopt -s nocasematch
+  case "$1" in
+    USERDOMAIN*|LOGONSERVER|MSYSTEM*|MINGW*|ORIGINAL_*|SSH_ASKPASS|COMPUTERNAME|SESSIONNAME|PROCESSOR_*|ALLUSERSPROFILE|APPDATA|LOCALAPPDATA|PROGRAM*|COMMONPROGRAM*|SYSTEMROOT|SYSTEMDRIVE|WINDIR|HOMEDRIVE|HOMEPATH|PSMODULEPATH)
+      shopt -u nocasematch; return 0 ;;
+  esac
+  shopt -u nocasematch
   return 1
 }
 secret_name() { [[ $1 =~ (KEY|SECRET|TOKEN|PASSWORD|PASSWD|PASS$|PWD$|PRIVATE|CREDENTIAL|AUTH|COOKIE|SESSION|SIGNING|SALT|WEBHOOK|DSN|BEARER|JWT) ]]; }
 endpoint_name() { [[ $1 =~ (URL|URI|HOST|ENDPOINT|DSN|ADDR|SERVER|DOMAIN|ORIGIN|BACKEND|TARGET|WEBSITE|DATABASE|_DB$|^DB_|REDIS|MONGO|POSTGRES|MYSQL|SMTP|PROXY) ]]; }
 service_name() { [[ $1 =~ (SUPABASE|TOSS|KAKAO|ALIMTALK|SOLAPI|ALIGO|NAVER|OPENAI|ANTHROPIC|GEMINI|GOOGLE|STRIPE|PORTONE|IAMPORT|NICEPAY|INICIS|AWS_|FIREBASE|SENTRY|SLACK|TWILIO|SENDGRID|MAILGUN|RESEND|VERCEL|NETLIFY|CLOUDFLARE|GITHUB|DISCORD|TELEGRAM) ]]; }
-# 값이 가리키는 호스트(주소) → HOSTV. 주소 모양이 아니면 빈 값
+# 값이 가리키는 호스트들 → HOSTS(공백 구분, 쉼표 목록이면 전부), HOSTV(첫 호스트). 값이 비면 둘 다 빈 값
+#   쉼표로 먼저 나누고(postgres://u:p@h1:5432,h2:5432/db), 조각마다 경로·쿼리를 먼저 자른 뒤 사용자 정보(@ 앞)를 뗀다
+#   (https://운영/redirect?to=u@localhost 가 localhost 로 읽히지 않게)
 host_of() {
-  local v=$1
-  HOSTV=""
-  case "$v" in
-    *://*) v=${v#*://}; v=${v##*@}; v=${v%%[/?#]*} ;;
-    *) v=${v%%[/?#]*} ;;
-  esac
-  case "$v" in \[*\]*) v=${v%%\]*}; v="${v}]" ;; *:*) v=${v%%:*} ;; esac
-  HOSTV=$v
+  local rest="$1," p
+  HOSTV=""; HOSTS=""
+  while [ -n "$rest" ]; do
+    p=${rest%%,*}; rest=${rest#*,}
+    p=${p//[[:space:]]/}
+    case "$p" in *://*) p=${p#*://} ;; esac
+    p=${p%%[/?#]*}; p=${p##*@}
+    case "$p" in \[*\]*) p=${p%%\]*}; p="${p}]" ;; *:*:*) ;; *:*) p=${p%%:*} ;; esac
+    [ -z "$p" ] && continue
+    HOSTS="$HOSTS$p "; [ -z "$HOSTV" ] && HOSTV=$p
+  done
 }
-local_host() { case "$1" in localhost|127.*|0.0.0.0|\[::1\]|::1|host.docker.internal) return 0 ;; esac; return 1; }
+local_host() {
+  case "$1" in localhost|0.0.0.0|\[::1\]|::1|host.docker.internal) return 0 ;; esac
+  [[ $1 =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
+}
+all_local() { # 값의 호스트가 하나 이상이고 모두 로컬인가(host_of 를 부른 뒤)
+  local h
+  [ -n "$HOSTS" ] || return 1
+  for h in $HOSTS; do local_host "$h" || return 1; done
+  return 0
+}
+is_address() { case "$1" in *://*) return 0 ;; esac; looks_domain "$1"; }   # 주소(URL·도메인·IP) 모양인가
+# 이름이 목록에 없어도 값 모양만으로 비밀값·접속 주소로 보는가(셸 변수용)
+shape_secret() {
+  case "$1" in *://*|sk_live*|sk-*|rk_live*|ghp_*|github_pat_*|xoxa-*|xoxb-*|xoxp-*|AKIA*|eyJ*) return 0 ;; esac
+  [[ $1 =~ [0-9A-Fa-f]{32,} ]] && return 0
+  case "$1" in /*|*//*) return 1 ;; esac
+  [[ $1 =~ ^[A-Za-z0-9+/_-]{32,}=*$ ]] && [[ $1 =~ [0-9] ]] && [[ $1 =~ [A-Za-z] ]]
+}
 looks_domain() { # 도메인·IP 모양인가(버전 번호·파일 이름 확장자·모델 이름은 제외)
   local re_num='^[0-9]+(\.[0-9]+)*(:[0-9]+)?(/.*)?$' re_ip='^[0-9]{1,3}(\.[0-9]{1,3}){3}(:[0-9]+)?(/.*)?$'
   local re_dom='^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.(com|net|org|io|co|kr|dev|app|ai|jp|cn|me|info|biz|xyz|cloud|site|online|tech|store|shop|us|uk|de|fr|in|edu|gov|so|sh|to|tv|ly|gg|link|page|pro|asia|eu|nz|au|ca|br|vn|th|id|sg|tw|hk|my|ph|es|it|nl|se|no|fi|dk|ch|at|be|pl|ru|ua|tr|il|za|mx|ar|cl|pe|world|work|live|space|website|run|build|click|kim|seoul|busan|xn--[a-z0-9-]+)(:[0-9]+)?(/.*)?$'
@@ -123,23 +157,20 @@ classify() { # $1 이름 $2 값
   is_untouchable "$n" && return 0
   allowed_ok "$n" "$v" && return 0
   shopt -s nocasematch
+  # 로컬 주소(쉼표 목록이면 모든 호스트가 로컬일 때만: ALLOWED_HOSTS=localhost,127.0.0.1)
   host_of "$v"
-  if [ -n "$HOSTV" ] && local_host "$HOSTV"; then shopt -u nocasematch; return 0; fi
-  # 로컬 주소만 쉼표로 나열(ALLOWED_HOSTS=localhost,127.0.0.1)
-  if [[ $v == *,* ]]; then
-    local part all_local=1 rest="$v,"
-    while [ -n "$rest" ]; do part=${rest%%,*}; rest=${rest#*,}; part=${part//[[:space:]]/}; [ -z "$part" ] && continue; host_of "$part"; local_host "$HOSTV" || all_local=0; done
-    [ "$all_local" = 1 ] && { shopt -u nocasematch; return 0; }
-  fi
+  if all_local; then shopt -u nocasematch; return 0; fi
   # 파이썬 모듈 경로 같은 설정(DJANGO_SETTINGS_MODULE=config.settings.local, FLASK_APP=app.main)
   if [[ $n =~ (_MODULE|_APP|_SETTINGS|_CLASS|_BACKEND|_ENGINE|_PATH|_FILE|_DIR)$ ]] && ! [[ $v == *://* ]] && ! secret_name "$n" && ! looks_domain "$v"; then shopt -u nocasematch; return 0; fi
-  case "$v" in sk_test_*|pk_test_*|rk_test_*|test_*|whsec_test*) shopt -u nocasematch; return 0 ;; esac
+  case "$v" in sk_test_*|pk_test_*|rk_test_*|whsec_test*) shopt -u nocasematch; return 0 ;; esac
+  # test_ 로 시작하는 값은 이름이 키(비밀값)이고 주소가 아닐 때만 테스트 키로 본다(TOSS_CLIENT_KEY=test_ck_…)
+  if [[ $v == test_* ]] && secret_name "$n" && ! endpoint_name "$n" && ! is_address "$v"; then shopt -u nocasematch; return 0; fi
   if ! secret_name "$n"; then
     case "$v" in true|false|yes|no|on|off|0|1|none|null) shopt -u nocasematch; return 0 ;; esac
   fi
   local strong=0
   if secret_name "$n" || endpoint_name "$n"; then strong=1; fi
-  case "$v" in *://*|sk_live*|rk_live*|live_*|eyj*|akia*|ghp_*|github_pat_*|xox?-*|aiza*|sb_secret_*|whsec_*|-----begin*) strong=1 ;; esac
+  case "$v" in *://*|sk_live*|sk-*|rk_live*|live_*|eyj*|akia*|ghp_*|github_pat_*|xox?-*|aiza*|sb_secret_*|whsec_*|-----begin*) strong=1 ;; esac
   looks_domain "$v" && strong=1
   if [ "$strong" = 0 ]; then
     # 서비스 이름(SUPABASE_BUCKET, KAKAO_TEMPLATE_CODE 등)이나 평범한 이름: 짧은 값·문장·경로는 설정값으로 보고 그대로
@@ -166,13 +197,28 @@ classify() { # $1 이름 $2 값
 }
 
 names=(); dummies=(); kept=(); from_shell=(); skipped=0
-seen=" "
+swap_set=" "; keep_set=" "; file_set=" "
+# 같은 이름이 여러 곳(.env 여러 파일·셸)에 있으면 값마다 따로 판정한다. 하나라도 운영 모양이면 가짜 값,
+# 모든 출처가 그대로 둘 값일 때만 그대로 둔다(.env=로컬 + .env.local=운영 이면 가짜 값).
 add_name() { # $1 이름 $2 값 $3 출처(file/shell)
-  local n=$1
-  case "$seen" in *" $n "*) return 0 ;; esac
+  local n=$1 k
+  [ "$3" = file ] && file_set="$file_set$n "
   classify "$n" "$2"
-  seen="$seen$n "
-  if [ "$CL" = keep ]; then kept+=("$n"); else names+=("$n"); dummies+=("$CL"); [ "$3" = shell ] && from_shell+=("$n"); fi
+  case "$swap_set" in *" $n "*)   # 이미 가짜 값으로 바꾸기로 함
+    if [ "$3" = shell ]; then case " ${from_shell[*]:-} " in *" $n "*) ;; *) from_shell+=("$n") ;; esac; fi
+    return 0 ;;
+  esac
+  if [ "$CL" = keep ]; then
+    case "$keep_set" in *" $n "*) ;; *) kept+=("$n"); keep_set="$keep_set$n " ;; esac
+    return 0
+  fi
+  case "$keep_set" in *" $n "*)   # 앞 출처에서 그대로 두기로 했던 이름 → 목록에서 뺀다
+    local rest=() ; for k in "${kept[@]}"; do [ "$k" = "$n" ] || rest+=("$k"); done
+    kept=("${rest[@]}"); keep_set=${keep_set/ $n / } ;;
+  esac
+  names+=("$n"); dummies+=("$CL"); swap_set="$swap_set$n "
+  [ "$3" = shell ] && from_shell+=("$n")
+  return 0
 }
 
 re_kv='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$'
@@ -200,11 +246,22 @@ for f in "${files[@]}"; do
     add_name "$n" "$v" file
   done < "$f"
 done
-# 셸에 이미 들어 있는 비밀값·접속 주소 이름의 변수도 가린다(사용자 PC 설정의 운영 키 등)
+# 셸에 이미 들어 있는 비밀값·접속 주소 변수도 가린다(사용자 PC 설정의 운영 키 등)
+#   이름은 대소문자를 가리지 않고 보고(database_url), 이름이 목록에 없어도 값 모양(주소·키 접두·긴 16진/base64)이면 판정한다.
+#   .env 에 같은 이름이 있으면 셸 값도 따로 판정한다.
 while IFS= read -r n; do
   [ -z "$n" ] && continue
   is_untouchable "$n" && continue
-  if secret_name "$n" || service_name "$n" || endpoint_name "$n"; then add_name "$n" "${!n}" shell; fi
+  v=${!n}
+  hit=0
+  case "$file_set" in *" $n "*) hit=1 ;; esac
+  if [ "$hit" = 0 ]; then
+    shopt -s nocasematch
+    if secret_name "$n" || service_name "$n" || endpoint_name "$n"; then hit=1; fi
+    shopt -u nocasematch
+  fi
+  [ "$hit" = 0 ] && shape_secret "$v" && hit=1
+  [ "$hit" = 1 ] && add_name "$n" "$v" shell
 done <<EOF
 $(compgen -e)
 EOF
@@ -233,11 +290,13 @@ if [ "${1:-}" = "--check" ]; then
           [[ $line =~ $re_kv ]] || continue
           n=${BASH_REMATCH[2]}; v=${BASH_REMATCH[3]}; v=${v#\"}; v=${v#\'}; v=${v%%[\"\' ]*}
           case "$allowed" in *" $n "*)
-            host_of "$v"; hv=$HOSTV
+            # 값은 어떤 경우에도 출력하지 않는다: 주소 모양(:// 또는 도메인·IP)일 때만 호스트를 보여 준다
+            hv=""
+            if is_address "$v"; then host_of "$v"; hv=${HOSTS% }; hv=${hv// /, }; fi
             if allowed_ok "$n" "$v"; then echo "   $n → ${hv:-(주소 아님)}"
             else
               case "$allow_hosts" in *"$n="*) echo "   $n → ${hv:-(주소 아님)}  ⚠️ 적어 둔 호스트와 달라 가짜 값으로 바꿈" ;;
-                *) echo "   $n → ${hv:-(주소 아님)}  ⚠️ 주소 값은 호스트를 함께 적어야 그대로 둡니다: $n=${hv}" ;; esac
+                *) echo "   $n → ${hv:-(주소 아님)}  ⚠️ 주소 값은 호스트를 함께 적어야 그대로 둡니다: $n=${hv%%,*}" ;; esac
             fi ;;
           esac
         done < "$f"

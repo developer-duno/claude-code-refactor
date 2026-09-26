@@ -53,7 +53,18 @@ for st in "$root"/docs/refactor/STATE.md "$root"/*/docs/refactor/STATE.md "$root
   for f in "$pdir"/docs/refactor/.allow-*; do [ -e "$f" ] && allow=1; done
   doneok=0
   [ "$have_lib" = 1 ] && rl_done_confirmed "$pdir/docs/refactor" && doneok=1
-  row=$(awk -v NAME="$name" -v TODAY="$today" -v ALLOW="$allow" -v DONEOK="$doneok" '
+  # 실행 대기(승인됨·미완료·번호 하나, 승인 기록이 봉인 그대로) / 승인 대기 단계가 있나 — 상태 명령과 같은 기준
+  ready=0; pend=0
+  if [ "$have_lib" = 1 ] && [ -f "$pdir/docs/refactor/REFACTOR_PLAN.md" ]; then
+    intact=1; rl_log_intact "$pdir/docs/refactor" || { intact=0; pend=1; }
+    while IFS="$RL_US" read -r kind_ n_ id t box done_ cnt k r h hv stt; do
+      [ "$kind_" = CARD ] && [ "$box" != none ] && [ "$done_" != 1 ] || continue
+      if [ "$stt" = approved ] && [ "${cnt:-1}" = 1 ] && [ "$intact" = 1 ]; then ready=1; else pend=1; fi
+    done <<RECS
+$(rl_cards "$pdir/docs/refactor/REFACTOR_PLAN.md" "$pdir/docs/refactor/APPROVALS.log")
+RECS
+  fi
+  row=$(awk -v NAME="$name" -v TODAY="$today" -v ALLOW="$allow" -v DONEOK="$doneok" -v READY="$ready" -v PEND="$pend" '
     function dn(s,   t, y, m, d) { split(s, t, "-"); y = t[1] + 0; m = t[2] + 0; d = t[3] + 0; if (m <= 2) { y--; m += 12 }
       return 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * (m - 3) + 2) / 5) + d }
     function val(s) { sub(/^[^:]*:[ \t]*/, "", s); sub(/\r$/, "", s); gsub(/^"|"$/, "", s); gsub(/\|/, "/", s); return s }
@@ -66,8 +77,8 @@ for st in "$root"/docs/refactor/STATE.md "$root"/*/docs/refactor/STATE.md "$root
       if (ph == "DONE" && DONEOK == 1) { rank = 4; st = "✅ 완료" }
       else if (ph == "DONE") { rank = 1; st = "🙋 마무리 확인 필요(/refactor:approve 마무리)" }
       else if (red > 0) { rank = 0; st = "🔴 급한 구멍" }
-      else if (g == "G1-baseline" || g == "G2-plan" || g == "ask-user") { rank = 1; st = "🙋 사장님 차례" }
-      else if (g == "G3-step") { rank = 2; st = "▶ 다음 단계 가능" }
+      else if (READY == 1) { rank = 2; st = "▶ 다음 단계 가능" }
+      else if (PEND == 1 || g == "G1-baseline" || g == "G2-plan" || g == "ask-user" || g == "G3-step") { rank = 1; st = "🙋 사장님 차례" }
       else { rank = 3; st = "⏳ 진행 중" }
       flag = ""
       if (days > 14 && !(ph == "DONE" && DONEOK == 1)) flag = flag " ⏰" days "일 멈춤"

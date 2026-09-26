@@ -17,6 +17,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 RL_US=$'\037'
+RL_NL=$'\n'
+RL_TAB=$'\t'
 
 rl_now() { TZ=KST-9 date '+%Y-%m-%d %H:%M'; }
 rl_today() { TZ=KST-9 date '+%Y-%m-%d'; }
@@ -70,12 +72,14 @@ function field(s, name,   t) {
   sub("^[ \t>]*([-+*][ \t]+)?\\*\\*[^*]*" name "[^*]*\\*\\*[ \t]*:?[ \t]*", "", t)
   return trim(t)
 }
-function readlog(   line, f, k, act, id, hv) {
+function readlog(   line, f, k, act, id, hv, x) {
   if (LOG == "") return
   while ((getline line < LOG) > 0) {
     k = split(line, f, "|")
     if (k < 4) continue
     act = trim(f[2]); id = toupper(trim(f[3])); hv = trim(f[4])
+    # "/refactor:go 다시" 로 남긴 재설정 줄: 그 앞의 승인·보류는 모두 무효(지문이 같아도 다시 승인해야 한다)
+    if (act == "재설정") { for (x in LAST) delete LAST[x]; for (x in LH) delete LH[x]; continue }
     if (hv !~ /^(card|plan)=[0-9]+\.[0-9]+$/) continue
     if (act == "승인") { LAST[id] = "a"; LH[id] = hv }
     else if (act == "보류" || act == "승인 취소") { LAST[id] = "h"; LH[id] = hv }
@@ -191,7 +195,8 @@ rl_cards() {
 rl_card_text() { # $1 계획서 $2 ID
   local tmp n
   tmp=$(mktemp -d 2>/dev/null) || tmp=$(mktemp -d -t rlcard 2>/dev/null) || return 1
-  n=$(awk -v MODE=cards -v PLAN="$1" -v DIR="$tmp" "$RL_AWK" | awk -F "$RL_US" -v ID="$2" '$1 == "CARD" && $3 == ID { print $2; exit }')
+  # 앞 awk 가 쓰는 중에 뒤 awk 가 먼저 끝나면 "print to standard output failed" 소음이 나므로 끝까지 읽는다
+  n=$(awk -v MODE=cards -v PLAN="$1" -v DIR="$tmp" "$RL_AWK" | awk -F "$RL_US" -v ID="$2" '$1 == "CARD" && $3 == ID && !f { print $2; f = 1 }')
   [ -n "$n" ] && [ -f "$tmp/c$n" ] && cat "$tmp/c$n"
   rm -rf "$tmp"
 }
@@ -233,20 +238,32 @@ rl_rewrite_base() {
   rm -f "$tmp"
 }
 
-# 승인 기록의 지문(없으면 none) — 턴 중에 바뀌었는지 확인할 때 쓴다
-rl_log_sum() { if [ -f "$1" ]; then cksum < "$1" | awk '{ print $1 "." $2 }'; else echo none; fi; }
+# 승인 기록의 지문(없으면 none) — 턴 중에 바뀌었는지 확인할 때 쓴다. 줄 끝 \r 은 빼고 잰다(git 이 CRLF 로 바꿔 받아도 같은 지문)
+rl_log_sum() { if [ -f "$1" ]; then tr -d '\r' < "$1" | cksum | awk '{ print $1 "." $2 }'; else echo none; fi; }
 # 승인 기록이 /refactor:approve 가 마지막으로 남긴 모양 그대로인가(approved/.log-sum 과 비교). 기록이 없으면 그대로로 본다
+#   0.2.0 이 원본 바이트로 잰 봉인값과 맞아도 그대로로 본다(다음 승인 때 새 방식으로 다시 봉인된다)
 rl_log_intact() { # $1 docs/refactor 폴더
+  local want
   [ -f "$1/APPROVALS.log" ] || return 0
   [ -f "$1/approved/.log-sum" ] || return 1
-  [ "$(rl_log_sum "$1/APPROVALS.log")" = "$(tr -d '\r\n' < "$1/approved/.log-sum")" ]
+  want=$(tr -d '\r\n' < "$1/approved/.log-sum")
+  [ "$(rl_log_sum "$1/APPROVALS.log")" = "$want" ] && return 0
+  [ "$(cksum < "$1/APPROVALS.log" | awk '{ print $1 "." $2 }')" = "$want" ]
 }
-rl_log_seal() { mkdir -p "$1/approved" && rl_log_sum "$1/APPROVALS.log" > "$1/approved/.log-sum" && { cp "$1/APPROVALS.log" "$1/approved/.log-copy" 2>/dev/null || :; }; }
+# 봉인: 지문과 기록 사본을 남기고, docs/refactor/.gitattributes 가 없으면 만들어 기록이 LF 로 유지되게 한다
+rl_log_seal() {
+  [ -f "$1/.gitattributes" ] || printf '* text eol=lf\n' > "$1/.gitattributes" 2>/dev/null
+  mkdir -p "$1/approved" && rl_log_sum "$1/APPROVALS.log" > "$1/approved/.log-sum" && { cp "$1/APPROVALS.log" "$1/approved/.log-copy" 2>/dev/null || :; }
+}
 # 봉인 뒤에 달라진 줄(최대 10줄): "+ 더해진 줄" / "- 없어진 줄". 봉인이 아예 없으면 NOSEAL 한 줄
 rl_log_changes() { # $1 docs/refactor 폴더
   [ -f "$1/approved/.log-sum" ] || { echo NOSEAL; return 0; }
   [ -f "$1/approved/.log-copy" ] || { echo "   (봉인 때의 기록 사본이 없어 달라진 줄을 보여 줄 수 없음 — git diff 로 확인)"; return 0; }
-  diff "$1/approved/.log-copy" "$1/APPROVALS.log" 2>/dev/null | grep -E '^[<>]' | sed -e 's/^>/   + 더해진 줄:/' -e 's/^</   - 없어진 줄:/' | head -n 10
+  local tmp
+  tmp=$(mktemp 2>/dev/null) || tmp=$(mktemp -t rllog 2>/dev/null) || return 0
+  tr -d '\r' < "$1/approved/.log-copy" > "$tmp"
+  tr -d '\r' < "$1/APPROVALS.log" | diff "$tmp" - 2>/dev/null | grep -E '^[<>]' | sed -e 's/^>/   + 더해진 줄:/' -e 's/^</   - 없어진 줄:/' | awk 'NR <= 10'
+  rm -f "$tmp"
 }
 # 마무리(DONE)를 사람이 /refactor:approve 마무리 로 확인했나 — 승인 기록의 마지막 줄이 "마무리" 이고 기록이 그대로일 때만
 rl_done_confirmed() { # $1 docs/refactor 폴더
@@ -256,28 +273,26 @@ rl_done_confirmed() { # $1 docs/refactor 폴더
   case "$last" in *"| 마무리 |"*) rl_log_intact "$1" ;; *) return 1 ;; esac
 }
 
-# 보호된 파일(커밋된 기준선·마이그레이션) 중 커밋 안 된 변경 목록: "<git status 줄>\t<내용 지문>" 줄들
+# 보호된 파일(커밋된 기준선·마이그레이션) 중 커밋 안 된 변경 목록: "<상태 두 글자> <경로>\t<내용 지문>" 줄들
+#   -z 로 받아 한글·공백 파일 이름도 따옴표·\ 이스케이프 없이 그대로 쓴다(이름 바꾸기는 새 경로만)
 rl_protected_dirty() {
-  local proj=$1 rdir=$2 raw line path keep h specs=()
+  local proj=$1 rdir=$2 ent xy path old keep h specs=()
   command -v git >/dev/null 2>&1 || return 0
   [ -f "$rdir/.allow-baseline-edit" ] || specs+=('*baseline/*')
   [ -f "$rdir/.allow-migration-edit" ] || specs+=('*supabase/migrations/*' '*prisma/migrations/*' '*alembic/versions/*' '*db/migrate/*' '*database/migrations/*' 'migrations/*' '*/migrations/*' 'drizzle/*.sql' 'drizzle/meta/*')
   [ "${#specs[@]}" -eq 0 ] && return 0
-  raw=$(git -C "$proj" status --porcelain --untracked-files=no -- "${specs[@]}" 2>/dev/null)
-  [ -z "$raw" ] && return 0
   local re_bl='(^|/)(tests?|__tests__|specs?)/([^/]+/)*baseline/'
   local re_mig='(^|/)(supabase/migrations|prisma/migrations|alembic/versions|db/migrate|database/migrations|migrations)/[^/]+|^drizzle/([^/]+[.]sql|meta/)'
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    path=${line:3}; path=${path##* -> }; path=${path//\"/}
-    case "$path" in docs/refactor/*) continue ;; esac
+  while IFS= read -r -d '' ent; do
+    [ "${#ent}" -gt 3 ] || continue
+    xy=${ent:0:2}; path=${ent:3}
+    case "$xy" in *R*|*C*) IFS= read -r -d '' old ;; esac   # 이름 바꾸기·복사: 다음 칸은 옛 경로
+    case "$path" in *"$RL_NL"*|*"$RL_TAB"*|docs/refactor/*) continue ;; esac
     keep=0
     if [ ! -f "$rdir/.allow-baseline-edit" ] && [[ $path =~ $re_bl ]]; then keep=1; fi
     if [ ! -f "$rdir/.allow-migration-edit" ] && [[ $path =~ $re_mig ]]; then keep=1; fi
     [ "$keep" = 1 ] || continue
     if [ -f "$proj/$path" ]; then h=$(git -C "$proj" hash-object -- "$path" 2>/dev/null); else h=gone; fi
-    printf '%s\t%s\n' "$line" "${h:-?}"
-  done <<EOF
-$raw
-EOF
+    printf '%s %s\t%s\n' "$xy" "$path" "${h:-?}"
+  done < <(git -C "$proj" -c core.quotePath=false status --porcelain -z --untracked-files=no -- "${specs[@]}" 2>/dev/null)
 }

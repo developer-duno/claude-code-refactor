@@ -75,10 +75,20 @@ def git(d, *args):
     subprocess.run(["git", "-C", str(d), *args], check=True, capture_output=True)
 
 
-def approve(d, args):
-    """사람이 /refactor:approve 를 입력한 것처럼 승인 스크립트를 실행한다(시험용)."""
-    r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "refactor-approve", str(d)], input=args.encode("utf-8"),
+def approve(d, args, sess="t"):
+    """사람이 /refactor:approve 를 입력한 것처럼 승인 스크립트를 실행한다(시험용).
+    입력 훅(turn.sh)이 남기는 1회용 승인 표(.turn.<세션ID> 첫 줄 "approve <세션ID> <epoch초>")를 직접 써 주고,
+    그 자리에 있던 표시(go 표 등)는 실행 뒤 되돌려 둔다(승인만 흉내 내고 턴 표시는 건드리지 않게)."""
+    t = pathlib.Path(d) / "docs/refactor" / f".turn.{sess}"
+    before = t.read_bytes() if t.exists() else None
+    if t.parent.is_dir():
+        lf(t, f"approve {sess} {int(time.time())}\n")
+    r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "refactor-approve", str(d), "--session", sess], input=args.encode("utf-8"),
                        capture_output=True, env=env_for(d), timeout=60)
+    if before is not None:
+        t.write_bytes(before)
+    elif t.exists():
+        t.unlink()
     return r.stdout.decode("utf-8", "replace")
 
 
@@ -663,7 +673,7 @@ def main():
     res["total"] += 1
     if code != B or "APPROVALS.log" not in err:
         res["fails"].append(("post-check 승인 기록 변경", B, code, "Bash", "", err.strip()[:200]))
-    txt = (proj / "docs/refactor/.turn").read_text()
+    txt = (proj / "docs/refactor/.turn.t").read_text()
     res["total"] += 1
     if "ready P1-1" not in txt:
         res["fails"].append(("turn.sh ready 줄", "ready P1-1", txt, "", "", ""))
@@ -675,10 +685,10 @@ def main():
     lf(stf, "---\nphase: EXECUTE\ngate: G3-step\n---\n")
     turn(proj, "s1", "/refactor:go")
     turn(proj, "s1", "화면 확인하게 개발 서버 켜 줘")
-    ok_g3 = (proj / "docs/refactor/.turn").exists()
+    ok_g3 = (proj / "docs/refactor/.turn.s1").exists()
     lf(stf, "---\nphase: EXECUTE\ngate: none\n---\n")
     turn(proj, "s1", "<pasted_content id=1>에러 로그</pasted_content> 이거 봐 줘")
-    ok_paste = not (proj / "docs/refactor/.turn").exists()
+    ok_paste = not (proj / "docs/refactor/.turn.s1").exists()
     for label, ok in [("G3-step 유지", ok_g3), ("붙여 넣은 글은 사람 입력", ok_paste)]:
         res["total"] += 1
         if not ok:
@@ -689,9 +699,9 @@ def main():
     proj = make_project(phase="CHECKUP")
     lf(proj / "docs/refactor/.gitignore", ".allow-*\n.turn\n")   # 옛 버전이 만든 파일
     turn(proj, "s1", "/refactor:go\n이어서 해 줘")
-    ok1 = (proj / "docs/refactor/.turn").exists() and (proj / "docs/refactor/.turn-dirty").exists()
+    ok1 = (proj / "docs/refactor/.turn.s1").exists() and (proj / "docs/refactor/.turn-dirty.s1").exists()
     turn(proj, "s1", "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>")
-    ok2 = (proj / "docs/refactor/.turn").exists()
+    ok2 = (proj / "docs/refactor/.turn.s1").exists()
     ok3 = ".turn*" in (proj / "docs/refactor/.gitignore").read_text(encoding="utf-8").split()
     for label, ok in [("go⏎내용", ok1), ("알림 무시", ok2), (".gitignore .turn*", ok3)]:
         res["total"] += 1
@@ -714,8 +724,8 @@ def main():
         pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
         subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
                        capture_output=True, env=env_for(proj), timeout=30)
-        exists = (proj / "docs/refactor/.turn").exists()
-        ok = exists == want and (not want or (proj / "docs/refactor/.turn").read_text().splitlines()[0].strip() == "go s1")
+        exists = (proj / "docs/refactor/.turn.s1").exists()
+        ok = exists == want and (not want or (proj / "docs/refactor/.turn.s1").read_text().splitlines()[0].strip() == "go s1")
         res["total"] += 1
         if not ok:
             res["fails"].append(("turn.sh", want, exists, "UserPromptSubmit", f"{sess}: {prompt} (gate {gate})", ""))

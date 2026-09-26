@@ -5,13 +5,14 @@
 
 LC_ALL=C
 export LC_ALL
-IFS= read -r -d '' _input || true
 
 proj=${CLAUDE_PROJECT_DIR:-$PWD}
 proj=${proj//"\\"//}
 proj=${proj%/}
 state="$proj/docs/refactor/STATE.md"
-[ -f "$state" ] || exit 0
+# 리팩토링 중이 아니면 입력을 읽지 않고 바로 끝낸다(입력 내용은 쓰지 않는다)
+[ -d "$proj/docs/refactor" ] && [ -f "$state" ] || exit 0
+IFS= read -r -d '' _input || true
 
 # STATE.md 맨 위 --- 사이의 요약 칸(최대 20줄)
 front=""

@@ -12,7 +12,7 @@ disallowed-tools: Write, Edit, NotebookEdit
 아래는 사용자가 직접 입력한 `/refactor:approve` 명령을 승인 스크립트가 처리한 결과다. 승인은 `APPROVALS.log`에 단계 ID와 카드 지문(그 순간의 카드 내용)으로 기록됐고, 계획서의 승인 칸·STATE도 **이미 바뀌었다.** 승인 뒤 카드 내용이 바뀌면 그 승인은 풀린다는 것을 한 줄로 알려 준다.
 
 ```!
-bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-approve "${CLAUDE_PROJECT_DIR}" <<'VIBE_REFACTOR_ARGS'
+bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-approve "${CLAUDE_PROJECT_DIR}" --session "${CLAUDE_SESSION_ID}" <<'VIBE_REFACTOR_ARGS'
 $ARGUMENTS
 VIBE_REFACTOR_ARGS
 ```

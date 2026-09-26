@@ -4,15 +4,18 @@
 #
 # 사용자가 /refactor:approve 를 입력했을 때만 스킬이 실행한다. Claude가 직접 부르는 것은 안전장치 훅이 막는다.
 # 사용자가 입력한 인자는 표준입력으로 받는다(셸 주입 방지).
-#   $1 = 프로젝트 폴더
+#   $1 = 프로젝트 폴더, --session <세션ID> (스킬이 ${CLAUDE_SESSION_ID} 를 넘긴다)
 #   표준입력 = 인자 (예: "P0-1 P1-2" / "P1" / "baseline" / "보류 P1-2" / "확인" / "마무리" / 비움=현황)
+# 1회용 승인 표: 인자가 있는 실행(승인·취소·마무리·확인)은 입력 훅(turn.sh)이 사람이 친 /refactor:approve 를 보고 남긴
+#   docs/refactor/.turn.<세션ID> 첫 줄 "approve <세션ID> <epoch초>" 가 있고, 세션이 같고, 600초 안일 때만 처리한다.
+#   처리 직전에 표를 지운다(한 번 입력에 한 번만). 표가 없거나 만료면 안내하고 exit 3. 인자 없는 현황 보기는 표 없이 된다.
 # 승인 기록을 남길 때마다 기록의 지문을 approved/.log-sum 에 봉인한다. 기록이 이 스크립트 밖에서 바뀌면(봉인과 다르면)
 # 실행 대기가 비워지고, 사람이 git diff 로 확인한 뒤 "확인"을 입력해야 다시 봉인된다.
 # "마무리"는 실행 대기 단계가 없을 때 리팩토링을 끝낸다(STATE를 DONE으로 — 이 기록이 있어야 안전장치가 DONE을 인정).
 #
 # 승인의 근거는 docs/refactor/APPROVALS.log 에 남기는 한 줄(단계 ID + 카드 지문)이다.
 # 계획서의 체크 표시는 사람이 보기 좋게 옮겨 적을 뿐이며, 승인한 카드의 승인 줄만 표준 모양으로 다시 쓴다.
-# 항상 exit 0 — 실패하면 스킬 전체가 멈추므로, 문제는 메시지로 알린다.
+# exit 0 — 실패하면 스킬 전체가 멈추므로, 문제는 메시지로 알린다. 단 1회용 승인 표가 없을 때만 exit 3(일부러 멈춤).
 # ─────────────────────────────────────────────────────────────────────────────
 
 LC_ALL=C
@@ -22,6 +25,8 @@ set -f
 proj=${1:-$PWD}
 proj=${proj//"\\"//}
 proj=${proj%/}
+sess=""
+[ "${2:-}" = "--session" ] && sess=${3:-}
 IFS= read -r -d '' raw || true
 raw=${raw//,/ }
 raw=${raw//$'\r'/ }
@@ -51,6 +56,26 @@ if [ ! -d "$dir" ]; then
   say "   먼저 /refactor:go 로 시작하세요."
   exit 0
 fi
+
+# ── 1회용 승인 표 확인(인자가 있는 실행만) ──────────────────────────────────
+case "$raw" in *[![:space:]]*)
+  ok=0
+  if [[ $sess =~ ^[A-Za-z0-9_-]{1,128}$ ]] && [ -f "$dir/.turn.$sess" ]; then
+    tk=""; ts=""; te=""
+    read -r tk ts te < "$dir/.turn.$sess"
+    te=${te%$'\r'}
+    if [ "$tk" = approve ] && [ "$ts" = "$sess" ] && [[ $te =~ ^[0-9]{1,12}$ ]]; then
+      age=$(( $(date +%s) - te ))
+      [ "$age" -ge 0 ] && [ "$age" -le 600 ] && ok=1
+    fi
+  fi
+  if [ "$ok" != 1 ]; then
+    say "⛔ 이 명령은 사용자가 입력창에서 /refactor:approve 로 입력할 때만 실행됩니다. 안전장치 훅이 켜져 있는지(/hooks) 확인하세요."
+    say "   (아무것도 바꾸지 않았습니다.)"
+    exit 3
+  fi
+  rm -f "$dir/.turn.$sess" ;;
+esac
 
 # ── 인자 해석 ────────────────────────────────────────────────────────────────
 # '보류'는 맨 앞에만 쓴다(P1-1 보류 P1-2 처럼 섞으면 무엇을 보류하려는지 모호하므로 거절).
@@ -222,7 +247,7 @@ EOF
 
     acted=""; lines=""
     for id in $targets; do
-      rec=$(printf '%s\n' "$recs" | awk -F "$US" -v ID="$id" '$1 == "CARD" && $3 == ID { print; exit }')
+      rec=$(printf '%s\n' "$recs" | awk -F "$US" -v ID="$id" '$1 == "CARD" && $3 == ID && !f { print; f = 1 }')
       if [ -z "$rec" ]; then say "❓ 계획서에 없는 단계 번호: $id"; continue; fi
       IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st <<EOF
 $rec
