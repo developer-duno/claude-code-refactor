@@ -1,164 +1,179 @@
-# claude-code-refactor — Vibe Consulting의 Claude Code 플러그인
+# claude-code-refactor
 
-누구나 쓸 수 있는 공개 플러그인(MIT), 한국어 전용.
+운영 중인 서비스를 AI로 **안전하게** 리팩토링하는 Claude Code 플러그인입니다.
+누구나 쓸 수 있는 공개 플러그인(MIT)이고, 화면 문구와 문서는 모두 한국어입니다(**한국어 전용 플러그인**).
 
-## refactor — 운영 중인 서비스를 안전하게 리팩토링하는 플러그인
+![version](https://img.shields.io/badge/version-0.2.1-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
 
-명령 하나(`/refactor:go`)로 **코드 지도 → 25항목 건강검진 → 정밀검사 → 반박 검증 → 기준선 테스트 → 계획서**까지 순서대로 진행합니다.
+> **English summary**
+> - **What it is:** A Korean-only Claude Code plugin that refactors a live service in a fixed order — code map, 25-item health check, deep audit, rebuttal review, baseline tests, plan — and then changes code only for steps a human approved, one step at a time.
+> - **What it blocks:** Hooks stop common accidents before they run: secret exposure (`.env`, environment dumps, tokens in git remotes), irreversible commands (force push, `reset --hard`, dropping databases) and approval bypasses; tests and builds run with production URLs and keys swapped for dummy values.
+> - **Install:** `claude plugin marketplace add developer-duno/claude-code-refactor` then `claude plugin install refactor@vibe-consulting`.
 
-- 읽기만 하는 단계는 자동으로 이어 갑니다.
-- 코드를 바꾸는 일은 **사장님이 승인한 단계만, 한 번에 하나씩** 합니다. 승인은 `/refactor:approve`가 남기는 기록(`APPROVALS.log`)으로만 인정합니다.
-- `/refactor:go` 중의 테스트·빌드는 **안전 실행기**로 돌립니다. `.env`와 셸 환경에 있는 운영 DB 주소·키를 가짜 값으로 바꿔 실행해, 실수로 운영 데이터를 바꾸거나 알림톡을 보내는 일을 줄입니다. 다만 코드·설정 파일에 직접 적힌 키, `~/.aws` 같은 자격 증명 파일, Cloudflare·docker·Supabase 함수가 직접 읽는 설정 파일, 실제 네트워크 요청은 가려지지 않습니다(§6).
-- **안전장치**가 비밀값 노출, 되돌릴 수 없는 명령, 승인 우회 같은 흔한 사고를 미리 막습니다. 사고를 줄이는 보조 장치이지 모든 우회를 막는 벽은 아니니, 중요한 변경은 사람이 한 번 더 확인하세요(§6 한계).
-- 진행 상황은 프로젝트의 `docs/refactor/` 폴더에 저장되므로 대화를 닫았다 열어도 이어서 할 수 있고, 커밋·푸시해 두면 다른 PC에서도 이어서 할 수 있습니다.
+바로 가기: [설치](#3-설치) · [명령](#4-명령-5개) · [사용 순서](#5-사용-순서) · [안전장치](#6-안전장치) · [한계](#6-4-한계) · [문제 신고](#11-피드백기여라이선스)
 
 ---
 
-## 1. 흐름 한눈에
+## 1. 무슨 문제를 풀어 주나
+
+코딩을 잘 모르는 운영자가 AI에게 "코드 좀 정리해 줘"라고 맡기면 이런 사고가 자주 납니다.
+
+1. **운영 DB·운영 키로 테스트가 돈다** — `.env`에 운영 주소가 들어 있으면 테스트 한 번에 실제 주문 데이터가 바뀌거나 고객에게 알림톡이 나갑니다.
+2. **승인 없이 코드가 바뀐다** — "살펴봐 줘"라고 했는데 여러 파일을 한꺼번에 고쳐, 무엇이 왜 바뀌었는지 모르게 됩니다.
+3. **비밀값이 화면에 찍힌다** — `.env`·환경변수·git 기록 속 옛 키가 대화 기록에 그대로 남습니다.
+
+이 플러그인의 답은 세 가지입니다.
+
+- **순서 강제** — 읽기만 하는 진단을 먼저 끝내고, 지금 동작을 테스트로 찍어 둔(기준선) 뒤, 사람이 승인한 단계만 한 번에 하나씩 고칩니다.
+- **안전장치** — Claude가 명령을 실행하거나 파일을 고치기 **직전에** 훅이 검사해서, 위 사고로 이어지는 흔한 명령을 막습니다.
+- **안전 실행기** — `/refactor:go` 중의 테스트·빌드는 운영 주소·키를 가짜 값으로 바꿔서 돌립니다.
+
+## 2. 30초 요약
 
 ```
 /refactor:go
   준비(질문 6개) → 코드 지도 → 건강검진 25항목 → 정밀검사 → 반박 검증 → 기준선 계획
-                                                                ⏸ /refactor:approve baseline
+                                                        ⏸ /refactor:approve baseline
 /refactor:go
-  기준선 작성(지금 동작을 테스트로 사진 찍기)          ⏸ 사람이 커밋
+  기준선 작성 (지금 동작을 테스트로 사진 찍어 두기)          ⏸ 사람이 커밋
 /refactor:go
-  계획서(무엇을·왜·어떤 순서로·얼마나 위험하게)       ⏸ /refactor:approve P0-1 P1-1 …
+  계획서 (무엇을·왜·어떤 순서로·얼마나 위험하게)             ⏸ /refactor:approve P0-1 P1-1 …
 /refactor:go
-  승인된 단계 하나 실행 → 독립 검사 → 보고           ⏸ 확인하고 커밋 → 다음 /refactor:go
-  …
-  남은 단계가 없거나 /refactor:go 마무리(완료 보고) → /refactor:approve 마무리 → 완료
+  승인된 단계 하나 실행 → 기준선으로 확인 → 독립 검사 → 보고 ⏸ 확인하고 커밋
+  … 승인된 단계가 남아 있으면 /refactor:go 를 반복
+  완료 보고                                                 ⏸ /refactor:approve 마무리 → 끝
 ```
 
-⏸ 표시에서 멈춥니다. 그 사이의 읽기 단계는 알아서 이어 갑니다.
-
-## 2. 명령 5개
-
-| 명령 | 하는 일 | 누가 |
-|---|---|---|
-| `/refactor:go` | 다음 단계 진행. 뒤에 `하나씩`(한 단계만), `다시 CHECKUP`(그 단계부터 다시), `마무리`(완료 보고 — 끝내기는 `/refactor:approve 마무리`)를 붙일 수 있음 | 사장님 |
-| `/refactor:approve` | 승인·취소·마무리. 예: `baseline` / `P0-1 P1-2` / `P1`(묶음 전체) / `보류 P1-2`(보류는 맨 앞에) / `마무리`(리팩토링 끝내기) / `확인`(승인 기록을 직접 고친 뒤 다시 봉인). 인자 없이 치면 승인 현황 | **사장님만** — 사장님이 입력창에 치면 **입력 훅**이 승인을 처리합니다. Claude가 승인 스크립트를 부르는 것은 안전장치가 막고, 스크립트도 훅 밖에서는 아무것도 바꾸지 않습니다. 계획서의 체크 표시를 고쳐도 승인으로 치지 않습니다 |
-| `/refactor:status` | 이 프로젝트가 어디까지 왔는지, 다음에 뭘 치면 되는지 | 사장님·Claude |
-| `/refactor:board` | 여러 프로젝트를 급한 순서로 한 표에. 예: `/refactor:board ~/projects` | 사장님·Claude |
-| `/refactor:report` | 문제를 신고할 진단 묶음을 만들어 먼저 보여 주고, 승인하면 이슈를 만듦(§14) | 사장님·Claude |
+⏸ 표시는 **사람이 확인하고 명령을 쳐야 넘어가는 곳**입니다. 그 사이의 읽기 단계는 알아서 이어 갑니다.
+진행 상황은 프로젝트의 `docs/refactor/` 폴더에 저장되므로, 대화를 닫았다 열어도 이어서 할 수 있습니다.
 
 ---
 
 ## 3. 설치
 
-### 준비물
-- **Claude Code** 최신 버전 (`claude --version`)
+### 3-1. 준비물
+
+- **Claude Code** 최신 버전 (`claude --version`으로 확인)
 - **git** — 리팩토링할 프로젝트는 git 저장소여야 합니다(되돌리기의 바탕).
-- **Windows**: **Git for Windows(Git Bash)** 가 설치돼 있어야 안전장치가 돕니다.
+- **Windows**: **Git for Windows(Git Bash)**. Windows에서 훅 명령은 Git Bash가 있으면 Git Bash로, 없으면 PowerShell로 실행됩니다(공식 문서). 이 플러그인의 훅은 `bash`로 돌기 때문에 Git Bash가 없으면 안전장치가 작동하지 않습니다.
+- macOS·Linux: 기본 bash(3.2 이상)면 됩니다.
 
-### 3-1. 이 폴더를 GitHub 공개 저장소에 올리기 (처음 한 번)
+### 3-2. 범위 고르기 — 여러 프로젝트에 쓸까, 한 프로젝트에서만 쓸까
 
-압축을 푼 `claude-code-refactor` 폴더에서:
+Claude Code는 플러그인을 **어느 설정 파일에 적느냐(범위, `--scope`)** 로 어디서 켜질지 정합니다. `claude plugin install`의 기본값은 `user`입니다(공식 문서).
+
+| 범위 | 적히는 설정 파일 | 켜지는 곳 |
+|---|---|---|
+| `user` (기본값) | `~/.claude/settings.json` | 이 PC의 모든 프로젝트 |
+| `local` | 프로젝트의 `.claude/settings.local.json` (git에 안 올라감) | 이 PC의 이 프로젝트만 |
+| `project` | 프로젝트의 `.claude/settings.json` (git으로 공유) | 이 저장소를 받는 팀원 모두 |
+
+> 알아 둘 것: 안전장치의 **항상 켜진 규칙**(비밀값 노출·되돌릴 수 없는 명령 막기, [§6](#6-안전장치))은 플러그인이 켜진 **모든 대화**에 적용됩니다. 리팩토링 중 규칙은 `docs/refactor/STATE.md`가 있는(리팩토링을 시작한) 프로젝트에서만 켜집니다.
+
+**여러 프로젝트에 쓰는 경우** — 아무 폴더에서 두 줄:
 
 ```bash
-cd claude-code-refactor
-git init
-git add -A
-git commit -m "claude-code-refactor 0.2.0"
-gh repo create claude-code-refactor --public --source . --push
+claude plugin marketplace add developer-duno/claude-code-refactor
+claude plugin install refactor@vibe-consulting
 ```
 
-`gh` 명령이 없으면 GitHub 웹에서 **공개(Public)** 저장소 `claude-code-refactor`를 만들고, 화면에 나오는 안내대로 `git remote add origin …` → `git branch -M main`(로컬 기본 브랜치 이름이 `master`일 수 있으니 `main`으로 맞춰 둡니다) → `git push -u origin main`을 하면 됩니다.
-
-### 3-2. 프로젝트마다 설치 (프로젝트 폴더에서 두 줄)
+**한 프로젝트에서만 쓰는 경우** — 그 프로젝트 폴더에서 두 줄:
 
 ```bash
-claude plugin marketplace add <GitHub아이디>/claude-code-refactor --scope local
+claude plugin marketplace add developer-duno/claude-code-refactor --scope local
 claude plugin install refactor@vibe-consulting --scope local
 ```
 
-- 두 줄 모두 **그 프로젝트의 `.claude/settings.local.json`에만** 적힙니다(git에도 올라가지 않습니다). `~/.claude/settings.json`은 바뀌지 않지만, `~/.claude/plugins/` 아래 마켓플레이스·설치 목록·캐시에는 기록됩니다(이 PC 전체에 남는 흔적이라는 뜻).
-- 공개 저장소라서 로그인 없이도 설치할 수 있습니다. `gh auth login` 후 `gh auth setup-git`으로 git 인증 정보까지 저장해 두면 백그라운드 자동 업데이트가 더 안정적으로 됩니다(선택).
-- 설치 뒤 Claude Code를 다시 열면 적용됩니다.
+- 팀원과 함께 쓰려면 `--scope local` 대신 `--scope project`를 쓰고 `.claude/settings.json`을 커밋합니다. 커밋만으로는 팀원 PC에 내려받아지지 않으므로, 팀원도 각자 한 번 `claude plugin install refactor@vibe-consulting --scope project`를 실행합니다(공식 문서).
+- 어느 범위든 내려받은 플러그인 파일은 이 PC 공용 폴더(`~/.claude/plugins/`)에 저장됩니다.
+- 공개 저장소라서 GitHub 로그인 없이도 설치됩니다.
+- 설치한 뒤 **Claude Code를 다시 열거나**, 열려 있는 대화에서 `/reload-plugins`를 입력하세요.
 
-### 3-3. 잘 깔렸는지 확인
+### 3-3. 잘 깔렸는지 확인 (3단계)
 
 1. Claude Code에서 `/refactor:status` → "아직 시작하지 않았어요"가 나오면 명령 OK.
 2. `/hooks`를 열어 refactor의 훅(PreToolUse·PostToolUse·UserPromptSubmit·SessionStart)이 보이면 안전장치 OK.
-3. 첫 `/refactor:go`의 준비 단계에서 안전장치가 실제로 막는지 스스로 시험합니다(항상 켜진 규칙, 리팩토링 중 규칙, `/refactor:go` 중 규칙 각각 한 번). 막히지 않으면 보고해 줍니다.
+3. 첫 `/refactor:go`의 준비 단계에서 Claude가 안전장치를 스스로 시험합니다(항상 켜진 규칙·리팩토링 중 규칙·`/refactor:go` 중 규칙 각각 한 번). 막히지 않으면 그 사실을 보고합니다.
 
-> 설치 없이 이번 대화에서만 시험해 보기: `claude --plugin-dir ~/claude-code-refactor/plugins/refactor`(PowerShell은 `~`를 홈 폴더로 안 바꿔 주니 `$HOME/claude-code-refactor/plugins/refactor`나 전체 경로를 쓰세요. Git Bash면 그대로 됩니다.)
+### 3-4. 설치 없이 시험해 보기
+
+저장소를 받아서 그 대화에서만 불러올 수 있습니다(설정 파일에 아무것도 적지 않음).
+
+```bash
+git clone https://github.com/developer-duno/claude-code-refactor.git
+claude --plugin-dir ./claude-code-refactor/plugins/refactor
+```
 
 ---
 
-## 4. 쓰는 법
+## 4. 명령 5개
 
-1. **시작** — `/refactor:go` → 준비 질문 6개에 답하기(서비스 종류, 결제·수집 여부, 운영/개발 DB 분리, 멈추면 안 되는 기능, 목표, 작업 브랜치). 그다음 진단 단계는 자동으로 진행하다가 **기준선 계획**에서 멈춥니다.
-2. **기준선** — `docs/refactor/BASELINE.md`를 훑어보고 `/refactor:approve baseline` → `/refactor:go`. 기준선 테스트를 만든 뒤 커밋을 부탁합니다. 알려 준 한 줄(`! git add -A && git commit -m "…"`)을 입력하고 다시 `/refactor:go`.
-3. **계획서** — `docs/refactor/REFACTOR_PLAN.md`를 보고 할 단계만 승인: `/refactor:approve P0-1 P1-1`. 승인하면 "👤 사람이 직접 할 일"(예: 결제사 테스트 키 발급)을 먼저 알려 줍니다. 승인은 그 순간의 카드 내용에 묶입니다 — 승인한 뒤 카드 내용이 바뀌면 그 단계는 실행하지 않고 다시 승인을 받습니다.
-4. **실행** — `/refactor:go` 한 번에 **한 단계만** 고치고, 기준선으로 확인하고, 다른 AI가 독립 검사를 한 뒤 보고하고 멈춥니다. 테스트·빌드는 안전 실행기(운영 키 대신 가짜 값)로 돌립니다. 화면 확인은 **개발용 DB·테스트 키로 켠 개발 서버**에서 하세요(운영 DB가 하나뿐이면 보기만 하고 저장·결제·발송 버튼은 누르지 않기). 알려 준 커밋 한 줄을 입력한 뒤 다음 `/refactor:go`.
-5. **끝** — 승인한 단계가 다 끝나면 완료 보고를 합니다. `/refactor:approve 마무리`를 입력해야 끝납니다(그래야 리팩토링 중 안전장치가 꺼집니다). 남은 단계를 안 할 거면 먼저 `/refactor:approve 보류 <ID>`. 한두 달 뒤 `/refactor:go 다시 CHECKUP`으로 재점검.
+| 명령 | 하는 일 | 누가 |
+|---|---|---|
+| `/refactor:go` | 다음 단계 진행. 뒤에 `하나씩`(한 단계만), `다시 CHECKUP`(그 단계부터 다시), `마무리`(완료 보고)를 붙일 수 있음 | 사람만 |
+| `/refactor:approve` | 승인·취소·마무리. 예: `baseline` / `P0-1 P1-2` / `P1`(묶음 전체) / `보류 P1-2` / `마무리` / `확인`(승인 기록을 손으로 고친 뒤 다시 봉인). 인자 없이 치면 현황만 | **사람만** — 입력창에 직접 칠 때 **입력 훅**이 승인을 처리합니다 |
+| `/refactor:status` | 이 프로젝트가 어디까지 왔는지, 다음에 뭘 치면 되는지 | 사람·Claude |
+| `/refactor:board` | 여러 프로젝트를 급한 순서로 한 표에. 예: `/refactor:board ~/projects` | 사람·Claude |
+| `/refactor:report` | 문제 신고 묶음을 만들어 **먼저 보여 주고**, 동의하면 GitHub 이슈로 보냄([§11](#11-피드백기여라이선스)) | 사람만 |
+
+- **승인은 사람만 할 수 있습니다.** `/refactor:approve`를 입력창에 치면 입력 훅(UserPromptSubmit)이 승인 스크립트를 실행하고, 결과를 `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록으로 Claude에게 전합니다. Claude가 승인 스크립트나 훅을 직접 부르는 것은 안전장치가 막고, 스크립트도 훅 밖에서는 아무것도 바꾸지 않습니다(현황만 보여 줌).
+- 계획서의 체크 표시를 손으로 고쳐도 승인으로 치지 않습니다. 승인의 근거는 `docs/refactor/APPROVALS.log` 한 곳입니다.
+- `/refactor:board`는 지금 프로젝트에 `docs/refactor/STATE.md`가 있으면 그 상위 폴더를, 없으면 지금 폴더 아래를 훑습니다. 상태는 🔴 급한 구멍 · 🙋 사장님 차례(화면 문구 그대로 — 승인·답변만 하면 진행) · ▶ 다음 단계 가능 · ⏳ 진단 중 · ✅ 완료 · ⏰ 14일 넘게 멈춤 · ⚠허용파일(허용 파일이 남아 있음)로 표시됩니다.
+
+---
+
+## 5. 사용 순서
+
+1. **준비** — 프로젝트 폴더에서 Claude Code를 열고 `/refactor:go`. 준비 질문 6개(서비스 종류, 결제 여부, 외부 데이터 수집, 운영/개발 DB 분리, 멈추면 안 되는 기능, 목표와 작업 브랜치)에 답합니다.
+2. **건강검진** — 이어서 코드 지도 → 건강검진 25항목 → 정밀검사 → 반박 검증까지 자동으로 진행하고, **기준선 계획**에서 멈춥니다. 결과는 `docs/refactor/AUDIT_REPORT.md` 등에 남습니다.
+3. **기준선** — `docs/refactor/BASELINE.md`를 훑어보고 아래 두 명령을 차례로 입력합니다.
+   ```
+   /refactor:approve baseline
+   /refactor:go
+   ```
+   기준선 테스트를 만든 뒤 커밋을 부탁합니다. 알려 준 한 줄(`! git add -A && git commit -m "…"`)을 입력하고 다시 `/refactor:go`.
+4. **계획서** — `docs/refactor/REFACTOR_PLAN.md`를 보고 할 단계만 승인합니다.
+   ```
+   /refactor:approve P0-1 P1-1
+   ```
+   승인하면 "👤 사람이 직접 할 일"(예: 결제사 테스트 키 발급)을 먼저 알려 줍니다. 승인은 그 순간의 **카드 내용**에 묶입니다 — 승인한 뒤 카드가 바뀌면 그 단계는 실행하지 않고 다시 승인을 받습니다.
+5. **승인 실행** — `/refactor:go` 한 번에 **한 단계만** 고치고, 기준선으로 확인하고, 다른 AI가 독립 검사를 한 뒤 보고하고 멈춥니다. 알려 준 커밋 한 줄을 입력한 뒤 다음 `/refactor:go`. 화면 확인은 **개발용 DB·테스트 키로 켠 개발 서버**에서 하세요(운영 DB가 하나뿐이면 보기만 하고 저장·결제·발송 버튼은 누르지 않기).
+6. **마무리** — 승인한 단계가 다 끝나면 완료 보고를 합니다. `/refactor:approve 마무리`를 입력해야 끝나고, 그래야 리팩토링 중 안전장치가 꺼집니다. 남은 단계를 안 할 거면 먼저 `/refactor:approve 보류 <ID>`. 한두 달 뒤 `/refactor:go 다시 CHECKUP`으로 재점검할 수 있습니다.
 
 **팁**
+
 - 처음에는 `/refactor:go 하나씩`으로 한 단계씩 보면서 진행하면 이해하기 쉽습니다.
 - 대화가 길어지면 `/clear` 후 `/refactor:go` — 진행 상황은 파일에 있으니 그대로 이어집니다.
-- 입력창에서 `!`로 시작하는 줄은 **사장님이 직접 실행하는 명령**입니다(커밋·허용 파일 만들기 등). 안전장치를 거치지 않습니다.
-
-## 5. 여러 프로젝트 관리
-
-`/refactor:board` — 지금 프로젝트에 `docs/refactor/STATE.md`가 있으면(리팩토링 중인 프로젝트) 그 상위 폴더에 있는 프로젝트들을 모아 급한 순서로 보여 주고, 없으면 지금 폴더 아래를 훑습니다. 이번 주에 먼저 할 일 3개를 골라 줍니다. 다른 폴더를 보고 싶으면 `/refactor:board ~/projects`처럼 알려 주세요.
-
-| 상태 | 뜻 |
-|---|---|
-| 🔴 급한 구멍 | 아직 안 막은 위험(🔴)이 있음 |
-| 🙋 사장님 차례 | 승인·답변이나 마무리 확인만 하면 진행됨 |
-| ▶ 다음 단계 가능 | 승인된 단계가 실행을 기다림 |
-| ⏳ 진행 중 | 진단 중 |
-| ✅ 완료 | `/refactor:approve 마무리`까지 끝남 |
-| ⏰ N일 멈춤 | 14일 넘게 진행이 없음 |
-| ⚠허용파일 | 기준선·마이그레이션 수정 허용 파일이 남아 있음 |
+- 입력창에서 `!`로 시작하는 줄은 **사람이 직접 실행하는 명령**입니다(커밋·허용 파일 만들기 등). 안전장치를 거치지 않습니다.
+- 비용: 건강검진·정밀검사는 보조 AI(감사관)를 여러 명 동시에 써서 토큰을 꽤 씁니다. 감사관은 Sonnet 모델을 씁니다(`plugins/refactor/agents/auditor.md`의 `model:` 줄). 처음 진단(준비~기준선 계획)이 가장 크고, 그 뒤로는 승인한 단계만큼만 씁니다.
 
 ---
 
-## 6. 안전장치가 하는 일
+## 6. 안전장치
 
-Claude가 명령을 실행하거나 파일을 고치기 **직전에** 검사해서 위험하면 막습니다. 막으면 `[refactor 안전장치] …` 메시지와 함께 무엇을 대신하면 되는지(→) 알려 주고, Claude는 우회하지 않고 사장님께 보고합니다.
+Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하면 막습니다. 막으면 `[refactor 안전장치] …` 메시지와 함께 대신 할 방법(→)을 알려 주고, Claude는 우회하지 않고 사용자에게 보고하게 되어 있습니다. 셸 명령(Bash·PowerShell·Monitor), 파일 도구, Grep 도구, MCP 도구, 하위 에이전트에게 보내는 지시를 모두 봅니다.
+
+### 6-1. 막는 것
 
 | 언제 | 막는 것 |
 |---|---|
-| **항상** (이 플러그인을 켠 프로젝트) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기/출력/복사/전송/수정하는 명령(파이프·`$( )`·와일드카드로 나눈 것 포함), 환경변수 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색(`git log -p … \| grep` 등), git이 무시하지 않는 `.env`가 든 범위의 내용 검색(Grep 도구 포함) · 강제 push, `reset --hard`, `clean -f`, `checkout .`, `rm -rf ~` 같은 대량 삭제, DB 테이블 삭제·초기화 · 승인 스크립트, 승인 기록·허용 파일 만들기, 플러그인 폴더 수정 · 승인 기록·허용 파일·`docs/refactor/` 기록 폴더를 복사·이동·개명·압축 해제·패치로 바꾸는 명령, 프로젝트 폴더 자체·상위·홈을 지우는 모든 표현, MCP 파일·실행 도구나 하위 에이전트 프롬프트로 위 금지를 우회하려는 것, `rg`·`findstr`·PowerShell 검색으로 비밀 파일 내용을 찍는 것 |
-| **리팩토링 진행 중** (완료 전) | push·배포·운영 DB 적용·원격 DB 접속, 배포/DB용 npm 스크립트, 플러그인 끄기, Claude 설정 수정, `git stash`, 파일을 지정하지 않은 `git log -p`, 프로젝트 전체 포맷터 · 커밋된 기준선 테스트와 마이그레이션 파일 수정(스냅숏 갱신 옵션 포함) |
-| **`/refactor:go` 실행 중** | 대표 실행 명령(npm·pnpm·yarn·bun·npx, python·node·deno, pytest, uv·poetry·pipenv run, make, turbo·nx, docker compose 등)은 안전 실행기로만 · 읽기 전용 단계, 그리고 실행 대기(승인됨) 단계가 없는 단계 실행 중에는 `docs/refactor/` 밖의 코드 수정 금지 |
-| **너무 긴 입력** | 명령 문자열이 16KB, Grep·파일 도구 입력이 32KB를 넘거나 검색 범위가 너무 넓으면(폴더 200개·5초 이상) 판정하지 않고 그대로 차단합니다 — 파일로 저장해 실행하거나 범위를 좁히세요 |
+| **항상** (플러그인이 켜진 모든 대화) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기·출력·복사·전송·수정하는 명령과 도구, 환경변수 전체 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색, git이 무시하지 않는 `.env`가 든 범위의 내용 검색 · 강제 push, `reset --hard`, `clean -f`, `checkout .`, `branch -D`, 기록 다시 쓰기, `rm -rf ~`·프로젝트 통째 삭제 같은 대량 삭제, DB 삭제·초기화 · 승인 스크립트와 플러그인 훅을 직접 부르기, 승인 기록(`APPROVALS.log`)·허용 파일(`.allow-*`)·`.turn*`을 만들기·복사·이동·개명·압축 해제로 바꾸기, 계획서 승인 칸 체크, 플러그인 폴더 수정 · MCP 도구나 하위 에이전트 지시로 위 금지를 우회하기 |
+| **리팩토링 진행 중** (`docs/refactor/STATE.md`가 있고 마무리 전) | push·배포·원격 서버 명령, DB 구조 적용(마이그레이션), 원격 DB 접속, MCP로 운영 DB 조회·배포·메시지 발송, 플러그인 끄기, Claude 설정 수정, `git stash`, 파일을 지정하지 않은 `git log -p`, 프로젝트 전체 포맷터 · 커밋된 기준선 테스트와 마이그레이션 파일 수정(스냅숏 갱신 옵션 포함) |
+| **`/refactor:go` 실행 중** | 대표 실행 명령(npm·pnpm·yarn·bun·npx, python·node·deno, pytest, uv·poetry·pipenv run, make, turbo·nx, docker compose 등)은 안전 실행기로만 · 읽기 전용 단계, 그리고 승인된 실행 대기 단계가 없을 때는 `docs/refactor/` 밖 수정 금지 |
+| **너무 긴 입력** | 명령 문자열 16KB, Grep·파일 도구 입력 32KB를 넘거나, 검색 범위가 너무 넓으면(폴더 200개 또는 5초 이상) 판정하지 않고 막습니다 — 파일로 저장해 실행하거나 범위를 좁히세요 |
 
-예외(막지 않음): 환경변수 **이름만** 보고 값은 안 보는 명령(`env | cut -d= -f1`, `printenv PATH`, `printenv HOME` 등 PATH·HOME 같은 비밀 아닌 이름), `.env`가 **아직 없을 때만** 하는 `cp .env.example .env`(있으면 덮어쓰기라 막습니다), `git config --list`, `.envrc` 읽기(비밀 파일 목록에서 뺐습니다)는 허용합니다.
+명령이 끝난 뒤에도(PostToolUse 훅) 한 번 더 확인해서, **이번 턴에** 커밋된 기준선·마이그레이션 파일이나 승인 기록이 바뀌었으면 그 턴의 Claude에게 바로 알립니다. 승인 기록은 `/refactor:approve`가 쓸 때마다 봉인되므로, 그 밖에서 바뀐 기록은 사람이 `/refactor:approve 확인`을 입력하기 전까지 인정되지 않습니다.
 
-셸 명령(Bash·PowerShell·Monitor 도구)과 파일 도구, Grep 도구, MCP 도구를 모두 봅니다. 명령이 끝난 뒤에도(백그라운드·Monitor 명령은 시작 직후에) 한 번 더 확인해서, **이번 턴에** 커밋된 기준선·마이그레이션 파일이나 승인 기록(`APPROVALS.log`)이 바뀌었으면 그 턴의 Claude에게 바로 알립니다(사장님이 원래 고치던 파일은 알리지 않습니다). 승인 기록은 `/refactor:approve`가 쓸 때마다 봉인되므로, 그 밖에서 바뀐 기록은 사장님이 `/refactor:approve 확인`을 입력하기 전까지 다음 대화에서도 인정되지 않습니다(`/refactor:status`가 봉인 뒤 달라진 줄을 보여 줍니다). 다만 승인 기록과 봉인을 함께 다시 쓰는 스크립트까지는 막지 못합니다(아래 한계).
+### 6-2. 막지 않는 것 (일부러 허용)
 
-`/refactor:approve`(승인·취소·마무리·확인)는 사장님이 입력창에 치면 **입력 훅**이 승인을 처리합니다 — 결과는 같은 턴에 `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록으로 Claude에게 전해집니다. Claude가 승인 스크립트를 부르는 것은 안전장치가 막고, 스크립트도 훅 밖에서는 아무것도 바꾸지 않습니다(현황만 보여 줌). 안전장치 훅 자체가 꺼져 있으면(Windows에서 Git Bash를 못 찾을 때 등) 승인이 처리되지 않으니, 안 되면 `/hooks`로 refactor 훅이 보이는지 먼저 확인하세요. 인자 없이 `/refactor:approve`만 치면 현황만 봅니다.
+- 비밀이 아닌 환경변수 이름만 지정해 보는 명령: `printenv PATH`, `printenv HOME`, `env | grep PATH`, `echo $HOME` 등. (`env | cut -d= -f1`처럼 전체 목록을 흘리는 명령은 막힙니다 — 어떤 이름이 있는지는 안전 실행기 `--check`로 보세요.)
+- `.env`가 **아직 없을 때만** 하는 `cp .env.example .env`(이미 있으면 덮어쓰기라 막음). `.env.local`처럼 없는 파일로 복사하는 것도 허용.
+- `git config --list`, `.envrc`(direnv) 읽기.
+- `node_modules`·`.next`·`dist`·`build` 같은 폴더 지우기.
 
-### 안전 실행기 (운영 키 대신 가짜 값)
+> 훅은 도구를 쓸 때마다 실행되므로 조금 느려집니다. 이 PC 실측으로 호출마다 0.15~0.4초 정도이고, 컴퓨터가 매우 바쁠 때는 몇 초까지 늘 수 있습니다.
 
-`/refactor:go` 중 Claude는 테스트·빌드를 이렇게 돌립니다(대표 실행 명령은 안전장치가 강제하고, 그 밖의 실행 명령에도 Claude가 직접 붙이도록 되어 있습니다):
-
-```
-bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- npm test
-```
-
-**Bash 도구(Git Bash)로만 실행합니다.** PowerShell 도구에서 `bash`를 치면 Windows 자체에 딸린 WSL bash가 먼저 잡혀 실패합니다(§11의 `WSL … execvpe(/bin/bash) failed` 참고).
-
-`.env`(세 단계 아래 폴더까지)와 셸 환경에서 운영일 수 있는 값(DB 주소, API 키, 결제 키, 서버 주소 등)을 **이름과 값의 모양으로** 찾아(값은 출력하지 않음) 가짜 값(`127.0.0.1:9` 등, 접속하면 바로 실패하는 주소)으로 바꿔 실행합니다. 테스트 키(`test_…`, `sk_test_…`)·로컬 주소·숫자·짧은 설정값(버킷 이름, 템플릿 코드 등)·파일 경로는 그대로 둡니다. `refactor-safe-run --check`로 무엇이 바뀌는지 이름만 볼 수 있습니다.
-
-- 가장 안전한 것은 **개발용 DB와 테스트 키를 따로 두는 것**입니다. 개발용 DB가 원격(예: 개발용 Supabase 프로젝트)이라 가짜 값으로 바뀌면 곤란할 때는, 개발용인지 확인한 뒤 사장님이 그 이름을 허용 목록에 적습니다: `! printf 'DATABASE_URL=db.<개발용 프로젝트>.supabase.co\n' >> "<프로젝트 폴더>/docs/refactor/.allow-env"` — `이름=호스트`로 적으면 그 값이 나중에 다른(운영) 주소로 바뀌었을 때 자동으로 다시 가립니다. `--check`가 허용한 이름의 지금 호스트를 보여 주니, 개발용 프로젝트 주소가 맞는지 확인한 뒤 적으세요(RLS가 약하면 공개 키로도 쓰기가 되니 운영 주소는 절대 적지 않기). 한 줄에 하나, git에 올라가지 않음. 운영 DB가 하나뿐이면 DB를 쓰는 테스트는 돌리지 않고, DB 없이 확인할 수 있는 계산·문구 기준선만 만듭니다.
-- 코드가 `.env`를 직접 열어 읽거나(`dotenv_values`, `readFileSync('.env')`) 덮어쓰기 옵션(`override: true`)을 쓰면 가짜 값이 무시될 수 있습니다. `--check`가 그런 파일을 찾아 알려 줍니다.
-- 가려지지 않는 것: 코드·설정 파일에 직접 적힌 키·주소, `~/.aws`·gcloud 같은 자격 증명 파일, Cloudflare(wrangler)가 직접 읽는 `.dev.vars`·`.env`, docker compose의 `env_file`, Supabase 함수의 `supabase/functions/.env`, 그리고 코드가 하는 실제 네트워크 요청(수집 대상 사이트 등). `--check`가 세 단계 아래 폴더까지 이런 파일의 흔적을 찾아 알려 주지만, 코드 속에 직접 적힌 값은 찾지 못합니다.
-- 안전 실행기로 만든 빌드 결과(`.next`, `dist`)에는 가짜 값이 들어 있습니다. **배포에 쓰지 말고** 배포 전에는 평소 방법으로 다시 빌드하세요.
-
-### 한계 — 꼭 알아 두세요
-
-- 안전장치는 **흔한 위험 명령을 모양으로 알아보고** 막는 보조 장치입니다. 스크립트를 거친 수정, 일부러 꼬아 쓴 명령 등 모든 우회를 막지는 못합니다. 사고(실수)를 줄이는 장치이지, 악의적인 공격을 막는 장치가 아닙니다.
-- 안전장치 스크립트가 고장 나거나 실행되지 못하면 **막지 않고 통과**시킵니다(모든 작업이 멈추는 것을 막기 위해). 그래서 준비 단계에서 작동 시험을 합니다.
-- 승인의 근거는 `APPROVALS.log` 한 곳입니다. 이 파일을 흔한 방법으로 고치는 명령은 막고, `/refactor:approve` 밖에서 바뀌면 봉인이 깨져 사장님이 확인하기 전까지 어떤 단계도 실행하지 않습니다(기록과 봉인을 함께 다시 쓰는 스크립트까지는 못 막음). 플러그인 스크립트를 통째로 복사해 훅과 같은 입력을 흉내 내는 것까지는 막지 못한다(보조 안전망). 그래도 커밋 전에 `git diff`로 계획서·승인 기록의 변화를 한 번 보는 습관이 가장 확실합니다.
-- AI가 진행 상황 파일(STATE.md)의 단계를 바꿔도 안전장치가 풀리지 않게 했습니다: 기준선 작성은 승인 기록으로, 끝(DONE)은 `/refactor:approve 마무리` 기록으로만 인정하고, `/refactor:go` 중에는 "승인된 실행 대기 단계가 있는 단계 실행"과 "승인된 기준선 작성" 때만 코드 수정을 허락합니다. 이상하면 `/refactor:status`로 확인하세요.
-- 이전 버전에서 시작한 프로젝트는 한 번 `/refactor:approve 확인`(승인 기록 봉인)과, 이미 끝난 프로젝트는 `/refactor:approve 마무리`가 필요합니다.
-- 안전 실행기 강제는 `/refactor:go`로 시작한 대화(그 뒤 질문에 답하거나 단계 보고를 받은 뒤 이어지는 대화 포함)에만 적용됩니다. 평소 개발 대화에서는 막지 않습니다.
-
-### 일부러 풀어야 할 때 (사람만 가능)
+### 6-3. 일부러 풀어야 할 때 (사람만 가능)
 
 동작을 일부러 바꾸는 단계에서 기준선 테스트를 새 동작으로 고쳐야 하면, Claude가 멈추고 아래처럼 부탁합니다. 입력창에 그대로 붙여 넣으세요.
 
@@ -166,104 +181,136 @@ bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- npm test
 ! touch "<프로젝트 폴더>/docs/refactor/.allow-baseline-edit"
 ```
 
-마이그레이션 파일은 `.allow-migration-edit`. **작업을 커밋한 다음에는 꼭 지우세요**(`! rm "<같은 경로>"`). 허용 파일은 git에 올라가지 않게 되어 있습니다.
+마이그레이션 파일은 `.allow-migration-edit`입니다. **작업을 커밋한 다음에는 꼭 지우세요**(`! rm "<같은 경로>"`). 허용 파일은 git에 올라가지 않습니다.
+
+### 6-4. 한계
+
+- 안전장치는 **흔한 위험 명령을 모양으로 알아보고 막는 보조 장치**입니다. 스크립트를 거친 수정, 일부러 꼬아 쓴 명령 등 모든 우회를 막지는 못합니다. 사고(실수)를 줄이는 장치이지, 악의적인 공격을 막는 장치가 아닙니다. **보조 안전망이지 벽이 아닙니다.**
+- 안전장치 스크립트가 고장 나거나 실행되지 못하면(Windows에서 Git Bash를 못 찾을 때 등) **막지 않고 통과**시킵니다. 모든 작업이 멈추는 것을 막기 위해서이고, 그래서 준비 단계에서 작동 시험을 합니다.
+- 플러그인 스크립트를 통째로 복사해 훅과 같은 입력을 흉내 내는 것, 승인 기록과 봉인을 함께 다시 쓰는 스크립트까지는 막지 못합니다. 커밋 전에 `git diff`로 계획서·승인 기록의 변화를 한 번 보는 습관이 가장 확실합니다.
+- 코드·설정 파일에 직접 적힌 키는 안전 실행기도 가리지 못합니다([§7](#7-안전-실행기)).
+- 안전 실행기 강제는 `/refactor:go`로 시작한 대화(그 뒤 질문에 답하거나 단계 보고를 받은 뒤 이어지는 대화 포함)에만 적용됩니다. 평소 개발 대화에서는 막지 않습니다.
 
 ---
 
-## 7. 만들어지는 파일 (`docs/refactor/`)
+## 7. 안전 실행기
+
+`/refactor:go` 중 Claude는 테스트·빌드를 이렇게 돌립니다(대표 실행 명령은 안전장치가 강제하고, 그 밖의 실행 명령에도 Claude가 붙이도록 되어 있습니다).
+
+```
+bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- npm test
+```
+
+- **Bash 도구(Git Bash)로만 실행합니다.** PowerShell 도구에서 `bash`를 치면 Windows에 딸린 WSL bash가 먼저 잡혀 실패합니다.
+- `.env`(세 단계 아래 폴더까지)와 셸 환경에서 운영일 수 있는 값(DB 주소, API 키, 결제 키, 서버 주소 등)을 **이름과 값의 모양으로** 찾아 가짜 값(`127.0.0.1:9` 등, 접속하면 바로 실패하는 주소)으로 바꿔 실행합니다. 테스트 키(`test_…`, `sk_test_…`)·로컬 주소·숫자·짧은 설정값·파일 경로는 그대로 둡니다.
+- 같은 이름이 여러 곳(`.env` 여러 파일·셸)에 있으면 **하나라도 운영 모양이면 가짜 값**으로 바꿉니다(`.env`=로컬 + `.env.local`=운영이면 가짜 값).
+- `refactor-safe-run --check`는 무엇이 바뀌는지 **이름만** 보여 줍니다. 값은 어떤 경우에도 출력하지 않습니다.
+
+**개발용 DB를 그대로 쓰고 싶을 때 — `.allow-env`**
+
+가장 안전한 것은 개발용 DB와 테스트 키를 따로 두는 것입니다. 개발용 DB가 원격(예: 개발용 Supabase 프로젝트)이라 가짜 값으로 바뀌면 곤란할 때는, 개발용인지 확인한 뒤 **사람이** 그 이름을 허용 목록에 적습니다.
+
+```
+! printf 'DATABASE_URL=db.<개발용 프로젝트>.supabase.co\n' >> "<프로젝트 폴더>/docs/refactor/.allow-env"
+```
+
+`이름=호스트`로 적으면 그 값이 나중에 다른(운영) 주소로 바뀌었을 때 자동으로 다시 가립니다. `--check`가 허용한 이름의 지금 호스트를 보여 주니 확인한 뒤 적으세요(운영 주소는 절대 적지 않기). 한 줄에 하나, git에 올라가지 않습니다. 운영 DB가 하나뿐이면 DB를 쓰는 테스트는 돌리지 않고, DB 없이 확인할 수 있는 계산·문구 기준선만 만듭니다.
+
+**가려지지 않는 것**
+
+- 코드·설정 파일에 직접 적힌 키·주소, `~/.aws`·gcloud 같은 자격 증명 파일
+- 코드가 `.env`를 직접 열어 읽거나(`dotenv_values`, `readFileSync('.env')`) 덮어쓰기 옵션(`override: true`)을 쓰는 경우
+- Cloudflare(wrangler)가 직접 읽는 `.dev.vars`·`.env`, docker compose의 `env_file`, Supabase 함수의 `supabase/functions/.env`
+- 코드가 하는 실제 네트워크 요청(수집 대상 사이트 등)
+
+`--check`가 세 단계 아래 폴더까지 이런 흔적을 찾아 알려 주지만, 코드 속에 직접 적힌 값은 찾지 못합니다. 안전 실행기로 만든 빌드 결과(`.next`, `dist`)에는 가짜 값이 들어 있으니 **배포에 쓰지 말고** 배포 전에는 평소 방법으로 다시 빌드하세요.
+
+---
+
+## 8. 만들어지는 파일
+
+프로젝트의 `docs/refactor/` 아래:
 
 | 파일 | 내용 |
 |---|---|
 | `STATE.md` | 진행 상황(현황표가 읽음) |
-| `PROFILE.md` | 서비스 정보와 답변 기록 |
+| `PROFILE.md` | 서비스 정보와 준비 질문 답변 |
 | `PROJECT_MAP.md` | 코드 지도 |
 | `AUDIT_REPORT.md`, `audit/*.md`, `AUDIT_VERIFY.md` | 건강검진·정밀검사·반박 검증 |
 | `BASELINE.md` | 기준선 계획과 결과 |
 | `REFACTOR_PLAN.md` | 공사 계획서(단계 카드와 승인 칸 — 승인 칸은 기록을 보기 좋게 옮겨 적은 것) |
 | `EXECUTION_LOG.md` | 실행 기록 |
-| `APPROVALS.log` | **승인의 유일한 근거.** 언제·무엇을·어떤 카드 내용(지문)으로 승인했는지. `/refactor:approve`만 쓰도록 되어 있습니다 |
-| `approved/<ID>.md` | 승인할 때의 카드 내용(나중에 카드가 바뀌면 무엇이 바뀌었는지 보여 줄 때 씀) |
-| `.turn.<세션ID>`, `.turn-dirty.<세션ID>`, `.allow-*`(`.allow-env` 포함) | 플러그인·사람용 표시 파일 — 세션별로 나뉘어 있어 같은 프로젝트를 여러 대화창에서 동시에 열어도 서로 안 섞입니다(git에 올라가지 않음) |
+| `APPROVALS.log` | **승인의 유일한 근거.** 언제·무엇을·어떤 카드 내용(지문)으로 승인했는지. `/refactor:approve`만 씀 |
+| `approved/<ID>.md` | 승인할 때의 카드 내용(카드가 바뀌면 무엇이 바뀌었는지 보여 줄 때 씀) |
+| `.turn.<세션ID>`, `.turn-dirty.<세션ID>`, `.allow-*`(`.allow-env` 포함) | 플러그인·사람용 표시 파일. 세션별로 나뉘어 같은 프로젝트를 여러 대화창에서 열어도 섞이지 않음(git에 안 올라감) |
 
-`docs/refactor/`는 **git에 커밋해 두세요.** 다른 PC에서 이어서 하려면 필요합니다. 승인 기록의 봉인은 줄바꿈(CRLF)과 무관하게 계산되므로, 다른 PC가 CRLF로 체크아웃해도 봉인은 깨지지 않습니다 — 이를 위해 `docs/refactor/.gitattributes`가 없으면 자동으로 만들어집니다.
+`docs/refactor/`는 **git에 커밋해 두세요** — 다른 PC에서 이어서 하려면 필요합니다. 승인 기록의 봉인은 줄바꿈(CRLF)과 무관하게 계산되고, `docs/refactor/.gitattributes`가 없으면 자동으로 만들어집니다.
 
-## 8. 지금 쓰는 루틴과 함께
+플러그인 데이터 폴더 `${CLAUDE_PLUGIN_DATA}`(마켓플레이스로 설치했다면 보통 `~/.claude/plugins/data/refactor-vibe-consulting/`) 아래:
 
-`/resume → /blueprint → /guard → /work → /review → /wrap` 루틴을 쓰고 있다면, 각 명령 파일에 한 줄씩 더하면 자연스럽게 이어집니다.
+- `problems.log` — 문제 기록. 안전장치가 막은 규칙 설명의 앞부분(명령·경로·값은 적지 않음)과, 플러그인 스크립트가 비정상으로 끝난 기록(문법 오류·시간 초과·스크립트 없음 — 이름과 종료 코드만)이 한 줄씩 쌓입니다. 200KB를 넘으면 최근 절반만 남깁니다. `/refactor:report`가 마지막 30줄을 묶음에 넣습니다.
+- `report-<날짜-시각>.md` — `/refactor:report`가 만든 신고 묶음.
 
-- `/resume`에: `docs/refactor/STATE.md가 있으면 /refactor:status 결과를 함께 보여 준다.`
-- `/wrap`에: `리팩토링 진행 중(docs/refactor/STATE.md)이면 커밋 전에 /refactor:status로 멈춘 단계와 사람이 할 일을 요약한다.`
+---
 
-## 9. 비용·시간
-
-- 건강검진·정밀검사는 보조 AI(감사관)를 여러 명 동시에 씁니다. 프로젝트가 크면 토큰을 꽤 씁니다.
-- 감사관은 비용을 아끼려고 Sonnet 모델을 씁니다(`agents/auditor.md`의 `model:` 줄에서 바꿀 수 있음).
-- 처음 한 번의 진단(준비~기준선 계획)이 가장 큽니다. 그 뒤로는 승인한 단계만큼만 씁니다.
-
-## 10. 업데이트·끄기
+## 9. 업데이트·끄기·지우기
 
 ```bash
 claude plugin marketplace update vibe-consulting
-claude plugin update refactor@vibe-consulting        # 그다음 Claude Code 다시 열기
-claude plugin disable refactor@vibe-consulting       # 잠시 끄기 — 범위는 local→project→user 순으로 자동으로 찾음, 안 되면 --scope local
-claude plugin uninstall refactor@vibe-consulting --scope local   # 지우기 — 프로젝트 폴더에서 실행. --scope 를 안 주면 기본값이 user 라서, 이 플러그인처럼 local 로 설치했으면 안 지워집니다
+claude plugin update refactor@vibe-consulting        # 그다음 Claude Code 다시 열기(또는 /reload-plugins)
+claude plugin disable refactor@vibe-consulting       # 잠시 끄기 — 범위를 안 주면 local → project → user 순으로 찾음
+claude plugin uninstall refactor@vibe-consulting     # 지우기 — 기본 범위가 user. local로 설치했으면 뒤에 --scope local
 ```
 
-플러그인을 고쳐 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올리세요.
+- 이 마켓플레이스는 공식 마켓플레이스가 아니라서 자동 업데이트가 기본으로 꺼져 있습니다(공식 문서). 새 버전은 위 두 줄로 받으세요.
+- 마지막 범위에서 지우면 플러그인 데이터 폴더(`problems.log`·신고 묶음)도 함께 지워집니다. 남기려면 `--keep-data`를 붙입니다.
+- 0.2.0에서 시작한 프로젝트는 한 번 `/refactor:approve 확인`(승인 기록 봉인)이 필요하고, 이미 끝난 프로젝트는 `/refactor:approve 마무리`가 필요합니다.
+- 리팩토링 진행 중에는 Claude가 플러그인을 끄는 명령이 막혀 있습니다. 끄기·지우기는 사람이 터미널에서 합니다.
 
-### 0.2.1 변경점
-
-- 승인을 입력 훅이 처리(§6), 환경변수 이름 확인·`.env.example` 복사·`git config --list`·`.envrc` 읽기 허용(§6), 너무 긴 명령·넓은 검색 범위 차단(§6), 승인 기록·허용 파일을 복사·이동·개명·우회 도구로 건드리는 것을 새로 막음(§6)
-- `.turn`·`.turn-dirty` 표시 파일을 세션별(`.turn.<세션ID>`)로 분리(§7)
-- Windows에서 테스트 하네스가 그대로 돌아감(§12), 안전 실행기가 여러 출처를 함께 보고 값은 출력하지 않음, `run.sh`의 역슬래시 경로 처리 보강
-
-## 11. 문제가 생기면
+## 10. 문제가 생기면
 
 | 증상 | 할 일 |
 |---|---|
 | 안전장치가 아무것도 안 막음 | Windows면 Git for Windows 설치 확인 → Claude Code 다시 열기 → `/hooks`에서 refactor 훅 확인 |
-| `WSL … execvpe(/bin/bash) failed` | 안전 실행기를 PowerShell 도구로 실행했습니다. Bash 도구(Git Bash)로 `bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- <명령>`을 다시 실행하세요(§6) |
-| `[refactor 안전장치]`로 멈춤 | 정상입니다. → 줄의 안내를 따르거나, 정말 필요하면 사장님이 `!`로 직접 실행 |
-| "이번 턴에 보호된 파일이 바뀌었습니다" | `git diff <파일>`로 무엇이 바뀌었는지 보고 결정하세요. 사장님이 일부러 바꾼 것이면 그대로 두면 됩니다 |
-| 승인이 안 먹힘 | `/refactor:approve`(인자 없이)로 현황과 사용법 확인. 계획서의 체크 표시를 손으로 고치는 것은 승인으로 치지 않습니다. 승인은 사장님이 입력창에 치면 **입력 훅**이 처리합니다(Claude가 스크립트를 부르는 것은 안전장치가 막고, 스크립트도 훅 밖에서는 아무것도 바꾸지 않음). 안전장치 훅이 꺼져 있으면(Windows에서 Git Bash를 못 찾을 때 등) 승인도 안 되니 `/hooks`에서 refactor 훅이 보이는지 확인하세요 |
-| "승인 뒤 카드 내용이 바뀜" | 승인한 뒤 그 단계 카드가 고쳐졌습니다. `/refactor:status`가 보여 주는 바뀐 줄(− 승인 때 / + 지금)을 읽어 보고 괜찮으면 `/refactor:approve <ID>`로 다시 승인 |
-| "이번 턴에 승인 기록이 바뀌었습니다" / "승인 기록이 /refactor:approve 밖에서 바뀌었습니다" | `git diff docs/refactor/APPROVALS.log`로 보고, 모르는 줄이면 지운 뒤 `/refactor:approve 확인` |
-| "DONE이지만 마무리 확인이 없어 안전장치가 켜져 있습니다" | 정말 끝났으면 `/refactor:approve 마무리` |
+| 승인이 안 먹힘 / `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록이 안 보임 | 입력 훅이 꺼졌거나 시간 안에 끝나지 못한 것입니다. `/refactor:approve`(인자 없이)로 현황을 다시 보고, `/hooks`에서 refactor 훅이 보이는지 확인하세요 |
+| `WSL … execvpe(/bin/bash) failed` | 안전 실행기를 PowerShell 도구로 실행했습니다. Bash 도구(Git Bash)로 다시 실행하세요([§7](#7-안전-실행기)) |
+| `[refactor 안전장치]`로 멈춤 | 정상입니다. → 줄의 안내를 따르거나, 정말 필요하면 사람이 `!`로 직접 실행 |
+| "명령이 너무 깁니다(16KB 초과)" | 명령을 파일로 저장하고, 무엇을 하는지 확인한 뒤 실행 |
+| "이번 턴에 보호된 파일(…)이 바뀌었습니다" | `git diff <파일>`로 무엇이 바뀌었는지 보고 결정. 사람이 일부러 바꾼 것이면 그대로 둠 |
+| "승인 뒤 카드 내용이 바뀜" | `/refactor:status`가 보여 주는 바뀐 줄(− 승인 때 / + 지금)을 읽어 보고 괜찮으면 `/refactor:approve <ID>`로 다시 승인 |
+| "이번 턴에 승인 기록(…)이 바뀌었습니다" / "승인 기록(APPROVALS.log)이 /refactor:approve 밖에서 바뀌었습니다" | `git diff docs/refactor/APPROVALS.log`로 보고, 모르는 줄이면 지운 뒤 `/refactor:approve 확인` |
+| "STATE는 DONE이지만 사용자의 마무리 확인(…)이 없어 …" | 정말 끝났으면 `/refactor:approve 마무리` |
 | "체크 표시만 있고 승인 기록이 없음" | 누군가 계획서를 손으로 체크한 흔적입니다. 실행하려면 `/refactor:approve <ID>` |
-| 테스트가 `127.0.0.1:9` 연결 실패로 끝남 | 정상입니다 — 안전 실행기가 운영 DB 대신 가짜 주소를 넣었습니다. DB가 필요한 테스트는 개발용 DB를 만든 뒤, 그 이름을 `docs/refactor/.allow-env`에 적고 돌립니다 |
+| 테스트가 `127.0.0.1:9` 연결 실패로 끝남 | 정상입니다 — 안전 실행기가 운영 DB 대신 가짜 주소를 넣었습니다. 개발용 DB를 만든 뒤 `.allow-env`에 적고 돌립니다([§7](#7-안전-실행기)) |
 | 진행이 꼬임 | `/refactor:status`로 확인 → `/refactor:go 다시 <단계>` |
+
+그래도 안 풀리면 `/refactor:report`로 신고해 주세요.
 
 ---
 
-## 12. 폴더 구조와 검증 (고치는 사람용)
+## 11. 피드백·기여·라이선스
 
-```
-claude-code-refactor/
-├─ .claude-plugin/marketplace.json      마켓플레이스(플러그인 목록)
-├─ .gitattributes                        스크립트 줄바꿈을 LF로 고정
-├─ tests/test_guard.py                   안전장치 시험(522개)
-├─ tests/test_scripts.py                 승인·현황·안전 실행기 시험(58개)
-└─ plugins/refactor/
-   ├─ .claude-plugin/plugin.json
-   ├─ skills/go/        지휘자: SKILL.md, phases/0~7, checklists/(건강검진·정밀 12종), templates/
-   ├─ skills/approve/   승인(사용자만) — scripts/refactor-approve.sh 실행
-   ├─ skills/status/    현황 — scripts/refactor-status.sh
-   ├─ skills/board/     여러 프로젝트 현황표 — scripts/refactor-board.sh
-   ├─ agents/           auditor(감사관) · verifier(반박 검증) · reviewer(실행 후 검사)
-   ├─ hooks/            hooks.json, run.sh(실행기), guard.sh, post-check.sh, turn.sh, session-start.sh
-   └─ scripts/          refactor-approve.sh · refactor-status.sh · refactor-board.sh
-                        refactor-lib.sh(승인 기록·카드 읽기 공용) · refactor-safe-run.sh(안전 실행기)
-```
+- **`/refactor:report [문제 설명]`** — 플러그인 버전·설치 위치·OS·Claude Code·bash·git·python 버전, 리팩토링 단계, `problems.log` 마지막 30줄, 여러분의 설명을 모아 **진단 묶음**을 만들고 화면에 그대로 보여 줍니다. 비밀값 모양(KEY=값·토큰·주소 속 비밀번호)과 홈 폴더 경로는 가려져 있고, **이 단계에서는 아무 데도 보내지 않습니다.** "보낼까요?"에 **예**라고 답할 때만 여러분의 `gh` 로그인으로 이 저장소에 **공개 이슈**를 만듭니다. `gh`가 없거나 로그인돼 있지 않으면 제목이 채워진 이슈 작성 링크와 묶음 파일 경로를 알려 줍니다(묶음 내용을 본문에 붙여 넣으면 됩니다).
+- **이슈 양식**: [버그 신고](https://github.com/developer-duno/claude-code-refactor/issues/new?template=bug.yml) · [기능 제안](https://github.com/developer-duno/claude-code-refactor/issues/new?template=feature.yml)
+- **취약점(안전장치 우회 방법)**: 공개 이슈에 적지 말고 [`SECURITY.md`](SECURITY.md)의 비공개 취약점 신고로 보내 주세요.
+- **기여**: [`CONTRIBUTING.md`](CONTRIBUTING.md) — 막는 규칙을 고칠 때는 차단 케이스와 통과 대조군 시험을 함께 추가합니다.
+- **라이선스**: MIT — [`LICENSE`](LICENSE)
 
-Git Bash·macOS·Linux(`&&`로 잇기):
+---
+
+## 12. 개발자용
+
+### 시험 돌리기
+
+Git Bash·macOS·Linux:
 
 ```bash
-python tests/test_guard.py && python tests/test_scripts.py   # 안전장치·스크립트 시험 (python3 는 Windows 스토어 스텁일 수 있음)
+python tests/test_guard.py && python tests/test_scripts.py   # 안전장치·스크립트 시험
 GUARD_BASH=/bin/bash python tests/test_guard.py              # macOS 기본 bash 3.2로 시험
 claude plugin validate --strict plugins/refactor && claude plugin validate --strict .
 ```
 
-PowerShell(`&&` 대신 `;`, `VAR=값 명령` 대신 `$env:VAR`):
+Windows PowerShell(`&&` 대신 `;`, `VAR=값 명령` 대신 `$env:VAR`):
 
 ```powershell
 python tests/test_guard.py; python tests/test_scripts.py
@@ -271,25 +318,42 @@ $env:GUARD_BASH = "C:/Program Files/Git/bin/bash.exe"; python tests/test_guard.p
 claude plugin validate --strict plugins/refactor; claude plugin validate --strict .
 ```
 
-Windows는 Git Bash를 자동으로 찾습니다. 못 찾으면 `GUARD_BASH` 환경변수에 Git Bash 절대경로를 지정하세요.
+- Windows에서는 시험이 Git Bash를 자동으로 찾습니다(PATH의 WSL bash 대신). 못 찾으면 `GUARD_BASH`에 Git Bash 절대경로를 지정하세요. `python3`은 Windows 스토어 안내 프로그램일 수 있으니 `python`을 쓰세요.
+- 0.2.1 기준 결과: 안전장치 시험 839/839, 스크립트 시험 123/123 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
+- 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올립니다.
 
-## 13. 다음 계획
+### 폴더 구조
 
-- **사이트 공개 전**: 실제 프로젝트 2~3개에서 끝까지 써 보기 → 문구 다듬기.
-- **vibe.2u.pe.kr 연결**: 사이트의 리팩토링 카드(N1~N8)와 이 플러그인의 단계를 짝지어 안내.
-- **(선택) 관제 에이전트**: 여러 프로젝트의 재점검(`다시 CHECKUP`)을 정해진 날 자동으로 돌려 현황표를 갱신 — 필요해지면 예약 작업이나 GitHub Actions로 확장.
+```
+claude-code-refactor/
+├─ .claude-plugin/marketplace.json   마켓플레이스(플러그인 목록, 이름 vibe-consulting)
+├─ .github/                          이슈 양식(bug·feature·config), PR 양식
+├─ .gitattributes                    스크립트 줄바꿈을 LF로 고정
+├─ LICENSE · SECURITY.md · CONTRIBUTING.md · README.md
+├─ tests/test_guard.py               안전장치 시험
+├─ tests/test_scripts.py             승인·현황·안전 실행기·신고 시험
+└─ plugins/refactor/
+   ├─ .claude-plugin/plugin.json
+   ├─ skills/go/        지휘자: SKILL.md, phases/0~7, checklists/(건강검진·정밀 12종), templates/
+   ├─ skills/approve/   승인(사람만) — 실제 처리는 입력 훅
+   ├─ skills/status/    현황 — scripts/refactor-status.sh
+   ├─ skills/board/     여러 프로젝트 현황표 — scripts/refactor-board.sh
+   ├─ skills/report/    문제 신고(사람만) — scripts/refactor-report.sh
+   ├─ agents/           auditor(감사관) · verifier(반박 검증) · reviewer(실행 후 검사)
+   ├─ hooks/            hooks.json, run.sh(실행기), guard.sh, post-check.sh, turn.sh, session-start.sh
+   └─ scripts/          refactor-approve.sh · refactor-status.sh · refactor-board.sh · refactor-report.sh
+                        refactor-lib.sh(승인 기록·카드 읽기 공용) · refactor-safe-run.sh(안전 실행기)
+```
 
-## 14. 문제 신고와 피드백
+---
 
-- **이슈로 신고하기**: [버그 신고 양식](../../issues/new?template=bug.yml) 또는 [기능 제안 양식](../../issues/new?template=feature.yml)으로 남겨 주세요.
-- **`/refactor:report` 명령**: 플러그인 버전·OS·Claude Code 버전·최근 문제 기록(비밀값 가림)을 모아 **먼저 화면에 보여 주고**, 사용자가 "예"라고 할 때만 그 사용자의 `gh` 로그인으로 이슈를 만듭니다. `gh`가 없거나 로그인돼 있지 않으면 제목이 채워진 이슈 작성 링크와 묶음 파일 경로를 줍니다(묶음 내용을 본문에 붙여 넣으면 됩니다). 아무것도 자동으로 보내지 않습니다.
-- **취약점**: 안전장치를 우회하는 명령을 찾았다면 이슈 대신 [`SECURITY.md`](SECURITY.md)의 비공개 취약점 신고로 보내 주세요.
-- **업데이트 받기**:
-  ```bash
-  claude plugin marketplace update vibe-consulting
-  claude plugin update refactor@vibe-consulting
-  ```
+## 13. 0.2.1 변경점
 
-## 15. 라이선스
-
-MIT — 전문은 [`LICENSE`](LICENSE) 파일을 확인하세요.
+- **승인을 입력 훅이 처리** — 스킬의 `!` 명령이 입력 훅보다 먼저 돌아 승인이 사라지던 문제를 고쳤습니다. `refactor-approve.sh`는 입력 훅이 붙이는 `--from-hook` 없이는 아무것도 바꾸지 않고, Claude가 훅 진입점(`run.sh turn|guard|post-check|session-start`)을 직접 부르는 것은 안전장치가 막습니다.
+- **문제 신고 `/refactor:report`(동의형)와 문제 기록 `problems.log`** 추가([§11](#11-피드백기여라이선스)).
+- **안전장치 보강** — 목적지 기준 판정·경로 정규화, 너무 긴 입력·너무 넓은 검색 범위 차단, 승인 기록·허용 파일을 복사·이동·개명·압축 해제·우회 도구로 건드리는 것 차단. 과잉 차단 완화: 안전한 환경변수 이름 조회, `.env`가 없을 때의 `.env.example` 복사, `git config --list`, `.envrc` 읽기.
+- **표시 파일 세션별 분리** — `.turn.<세션ID>`, `.turn-dirty.<세션ID>`.
+- **안전 실행기** — 여러 출처를 함께 보고 하나라도 운영 모양이면 가짜 값, `--check`는 값을 출력하지 않음(`.allow-env`는 호스트만). `run.sh`의 역슬래시 경로 처리 보강.
+- **승인 봉인** — 줄바꿈(CRLF)과 무관하게 계산, `docs/refactor/.gitattributes` 자동 생성.
+- **Windows** — 시험 하네스가 Git Bash를 자동으로 찾아 그대로 돌아감.
+- **공개 저장소 준비** — MIT `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, 이슈·PR 양식.
