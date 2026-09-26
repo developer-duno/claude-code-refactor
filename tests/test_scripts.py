@@ -569,10 +569,11 @@ def main():
     check("run.sh: 훅 파일 없음 기록은 실제 종료 코드(exit 1)", pl1.rstrip().endswith(" | run.sh | guard exit 1 (파일 없음)"), pl1)
 
     # 19-2) bash 3.2 호환(README 약속): bash 4 이상 전용 문법이 훅·스크립트에 없는지(버전 확인으로 감싼 줄은 제외)
-    pats = [r"\bread\s[^;|\n]*-N\b", r"\bprintf\b[^|;\n]*%\(", r"EPOCHSECONDS|EPOCHREALTIME", r"&>>", r"\bglobstar\b|\blastpipe\b",
-            r"\b(declare|local)\s+-[a-zA-Z]*n\b", r"\bwait\s+-n\b", r"\[\[\s+-v\s", r"\$\{[a-zA-Z_][a-zA-Z0-9_]*[\^,]", r"\[-1\]",
-            r"\{[0-9]+\.\.[0-9]+\.\.", r"(^|[\s;&|{(])(mapfile|readarray|coproc)\s", r"\bdeclare\s+-[a-zA-Z]*A", r"\$\{[a-zA-Z_]+@[QEPAa]\}",
-            r"(^|\s);;?&(\s|$)", r"\s\|&\s", r"\bBASHPID\b|\bSRANDOM\b"]
+    pats = [r"\bread\s[^;|\n]*-[a-zA-Z]*N\b", r"\bprintf\b[^|;\n]*%\(", r"EPOCHSECONDS|EPOCHREALTIME", r"&>>", r"\bglobstar\b|\blastpipe\b",
+            r"\b(declare|local|typeset)\s+-[a-zA-Z]*n\b", r"\bwait\s+-n\b", r"\[\[?\s+-v\s", r"\$\{[a-zA-Z_][a-zA-Z0-9_]*[\^,]", r"\[-1\]",
+            r"\{[0-9]+\.\.[0-9]+\.\.", r"(^|[\s;&|{(])(mapfile|readarray|coproc)\s", r"\b(declare|local|typeset)\s+-[a-zA-Z]*A",
+            r"\bdeclare\s+-[a-zA-Z]*g", r"\bread\s[^;|\n]*-t\s*[0-9]*\.[0-9]", r"\$\{[a-zA-Z_]+@[QEPAa]\}",
+            r"(^|\s);;?&(\s|$)", r"\|&\s", r"\bBASHPID\b|\bSRANDOM\b"]
     hits = []
     for f in sorted((ROOT / "plugins/refactor").glob("*/*.sh")):
         for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
@@ -710,6 +711,9 @@ def main():
         "sb": "sb_" + "secret_" + fk + "sb",
         "whsec": "wh" + "sec_" + fk + "wh",
         "rk": "rk_" + "live_" + fk + "rk",
+        # D5c L-c: 앞에 _·글자가 붙은 것, 접두어 더
+        "sb2": "MY_" + "sb_" + "secret_" + fk + "s2", "wh2": "prefix" + "wh" + "sec_" + fk + "w2", "skt": "sk_" + "test_" + fk + "st",
+        "ghs": "gh" + "s_" + fk + "gs", "glpat": "glp" + "at-" + fk + "gl", "npm": "np" + "m_" + fk + "np", "sg": "S" + "G." + fk + ".sg",
     }
     data.mkdir()
     lf(data / "problems.log", "2026-09-26 10:00 | run.sh | x exit 2 " + fakes["kv"] + "\n")

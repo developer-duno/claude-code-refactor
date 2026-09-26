@@ -1053,6 +1053,45 @@ UP_D5B_JQ = [  # jq: 내장 env·$ENV 만 본다(--arg env 의 env·$env 는 사
 ]
 
 
+# ── 0.2.1 D5c(검사관 재검 f2a2476 지적) ─────────────────────────────────────
+_AP = "/x/plugins/refactor/scripts/refactor-approve.sh"
+UP_D5C = [  # C1 따옴표 섞어 쪼개기 · M-a 이름 조립 · M-b 명령 치환 claude · C2 인터프리터 안 승인 · R3 git 끝 경계 · L-f · C3 · L-a
+    (B, bash("claude -p '/refactor:app'\"rove P1-1\"")), (B, bash("claude -p \"/refactor:\"'approve P1-1'")),
+    (B, bash("bash -c \"git re\"'set --hard'")), (B, bash(r"claude -p /refactor:app\rove\ P1-1")), (B, bash(r"bash /x/hooks/run.sh t\urn <<< x")),
+    (OK, bash("claude -p \"요약해줘\"")), (OK, bash("echo 'git re'\"set --hard\"")), (OK, bash("git commit -m \"fix: 'reset' --hard 설명\"")),
+    (B, bash('bash /x/hooks/run.sh refactor-app${x}rove "$PWD" --from${x}-hook')),
+    (B, bash(r"""bash /x/hooks/run.sh refactor-app$'\x72'ove "$PWD" --from$'\x2d'hook""")), (B, bash(r"""bash /x/hooks/run.sh refactor-app$'\162'ove "$PWD" P1-1""")),
+    (B, bash('bash /x/scripts/refactor-appro?e.sh "$PWD" --from{-hook,}')), (B, bash('bash /x/scripts/refactor-appro?e.sh "$PWD" P1-1')),
+    (B, bash("bash /x/hooks/tur?.sh <<< x")), (B, bash("bash /x/hooks/run.sh tu?n <<< x")), (B, bash("git re${x}set --hard")),
+    (B, bash("cat .e${x}nv")), (B, bash("git {reset,} --hard")), (B, bash("cat .e{n,}v")), (B, bash("git re$@set --hard")),
+    (B, bash(r"""git reset $'--\x68ard'""")), (B, bash(r"""cat $'.\x65nv'""")), (B, bash("x=re; git ${x}set --hard")), (B, bash("printenv${x}")),
+    (OK, bash("ls src/*.ts")), (OK, bash('echo "${HOME}/x"')), (OK, bash("rm -rf $BUILD_DIR/cache")), (OK, bash(r"""echo $'\x41'""")),
+    (OK, bash("mkdir -p src/{a,b}")), (OK, bash("awk '{print $1,$2}' f")), (OK, bash("bash scripts/*.sh")),
+    (B, bash('"$(which claude)" -p "/refactor:approve P1-1"')), (B, bash('`which claude` -p "/refactor:approve P1-1"')),
+    (B, bash('node "$(which claude)" -p "/refactor:approve P1-1"')), (B, bash('winpty claude -p "/refactor:approve P1-1"')),
+    (B, bash('claude -p "/refactor:go 다시 PLAN"')),
+    (OK, bash('grep -rn "refactor:approve" README.md')), (OK, bash('grep -rn "/refactor:approve" ~/.claude/plugins')),
+    (B, bash("python3 -c \"import subprocess as s; s.run(['bash','" + _AP + "','.','--from'+'-hook'])\"")),
+    (B, bash("node -e \"require('child_process').execFileSync('bash', ['" + _AP + "', '.', '--from' + '-hook'])\"")),
+    (B, bash("python3 -c \"import os; os.system('bash " + _AP + " . --from' + '-hook')\"")),
+    (B, bash("python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['bash', '" + _AP + "', '.'])\nEOF")),
+    (OK, bash("cat " + _AP)), (OK, bash("grep -n from-hook " + _AP)), (OK, bash("python3 -c \"import subprocess; subprocess.run(['npm','test'])\"")),
+    (B, bash("bash -c 'git reset --hard'")), (B, bash('eval "git reset --hard"')), (B, bash("bash -c 'git push -f'")), (B, bash("(git push -f)")),
+    (B, bash("sh -c 'git clean -fd'")), (OK, bash("(git status)")), (OK, bash("bash -c 'git log --oneline'")),
+    (OK, bash("find . -name '*.md' | xargs grep -n TODO")), (B, bash(". docs/refactor/x.sh")),
+    (OK, bash("""awk '{print "environment: " $1}' data.txt""")), (OK, bash("""awk -F= '/environment/ {print $2}' config.ini""")),
+    (OK, bash("""jq -n '{env: "prod"}'""")), (OK, bash("""jq 'has("env")' f.json""")),
+    (B, bash("""awk 'BEGIN{print ENVIRON["OPENAI_API_KEY"]}'""")), (B, bash("jq -n env")), (B, bash("jq -n '$ENV'")),
+    (B, bash("cd docs; cd nonexistent; rm -rf refactor")), (B, bash("cd docs; (cd ../src); rm -rf refactor")),
+    (B, bash("cd src; cd -; rm -rf docs/refactor")), (B, bash("(cd src); rm -rf docs/refactor")), (B, bash("cd docs; cd /nope; mv refactor /tmp/r")),
+    (OK, bash("cd /tmp && rm -rf docs")), (OK, bash("cd src && rm -rf dist")),
+]
+UP_D5C_GO = [(B, bash("eval \"n\"'pm test'")), (B, bash("n${x}pm test")), (B, bash(r"""n$'\x70'm test""")), (B, bash("{npm,} test")),
+             (B, bash("x=np; ${x}m test")), (OK, bash("eval \"echo \"'hi'")), (OK, bash("n${x}pm run lint"))]
+UP_D5C_ON = [(B, bash("cd docs/refactor; (cd ..); rm REFACTOR_PLAN.md")), (B, bash("cd docs; cd nope; rm refactor/STATE.md")),
+             (OK, bash("cd docs/refactor && cat STATE.md"))]
+
+
 def check_upgrade_021(res):
     """0.2.1 보강 항목의 회귀 케이스(목록 + 실제 폴더가 필요한 경우)."""
     for title, kw, cases in [
@@ -1074,6 +1113,8 @@ def check_upgrade_021(res):
         ("0.2.1 V M5w corepack·eval", dict(phase="EXECUTE", allow=(".turn",)), UP_M5W), ("0.2.1 V L3 승인 스크립트 읽기", dict(), UP_L3),
         ("0.2.1 D5b 여러 줄 SQL", dict(), UP_D5B_SQL), ("0.2.1 D5b 역슬래시", dict(), UP_D5B_BS),
         ("0.2.1 D5b 역슬래시 go 턴", dict(phase="EXECUTE", allow=(".turn",)), UP_D5B_BS_GO), ("0.2.1 D5b jq", dict(), UP_D5B_JQ),
+        ("0.2.1 D5c 재검 지적", dict(), UP_D5C), ("0.2.1 D5c go 턴", dict(phase="EXECUTE", allow=(".turn",)), UP_D5C_GO),
+        ("0.2.1 D5c 진행 중", dict(phase="EXECUTE"), UP_D5C_ON),
     ]:
         proj = make_project(**kw)
         try:
@@ -1121,13 +1162,29 @@ def check_upgrade_021(res):
     ins = "INSERT INTO t (a, b) VALUES (1, 'x');\n" * 1100
     timed("V M3b SQL 40KB 통과", proj, OK, "mcp__x__execute_sql", {"project_id": "p", "query": ins}, 10)
     timed("V M3b SQL 40KB 끝 DROP 차단", proj, B, "mcp__x__execute_sql", {"project_id": "p", "query": ins + "DROP TABLE t;"}, 10)
-    ins2 = "INSERT INTO t (a, b) VALUES (1, 'x'); -- 메모\n" * 5500   # 약 250KB: 주석·문장 나누기를 awk 로 한 번에
+    ins2 = "INSERT INTO t (a, b) VALUES (1, 'x'); -- 메모\n" * 5000   # 입력(JSON 바이트) 약 245KB: 256KB 이하라 주석·문장 나누기를 awk 로 정밀 판정(넘으면 C4 위험 낱말 판정으로 감)
     timed("V M3b SQL 250KB 통과", proj, OK, "mcp__x__execute_sql", {"project_id": "p", "query": ins2 + "UPDATE t SET a = 2 WHERE id = 1;"}, 10)
     timed("V M3b SQL 250KB 가운데 DELETE 차단", proj, B, "mcp__x__execute_sql", {"project_id": "p", "query": ins2[:120000] + "DELETE FROM orders;\n" + ins2[:120000]}, 10)
     timed("V M3b SQL 250KB 주석 DROP/**/TABLE 차단", proj, B, "mcp__x__execute_sql", {"project_id": "p", "query": ins2 + "DROP/**/TABLE orders;"}, 10)
     shutil.rmtree(proj, ignore_errors=True)
     proj = make_project(phase="EXECUTE")
     check(res, "0.2.1 V M3 진행 중 DB 도구", proj, [(B, ("mcp__x__execute_sql", {"project_id": "p", "query": "SELECT 1"}))])
+    shutil.rmtree(proj, ignore_errors=True)
+
+    # D5c C4: 256KB 넘는 SQL 은 위험 낱말만 본다(1MB 에서도 빨리) / R1·R2: 하위 에이전트 지시문
+    proj = make_project()
+    ins3 = "INSERT INTO t (a, b) VALUES (1, 'x');\n" * 28000   # 약 1MB
+    timed("D5c C4 SQL 1MB 무해 통과", proj, OK, "mcp__x__execute_sql", {"project_id": "p", "query": ins3}, 20)
+    # 문장 경계에서 잘라 DROP 이 앞 글자와 붙지 않게(줄 중간에서 자르면 "…VDROP TABLE" 이 돼 실행될 수도 없는 문장). 상한은 훅 제한 30초 아래
+    timed("D5c C4 SQL 968KB 끝 DROP 차단", proj, B, "mcp__x__execute_sql", {"project_id": "p", "query": "INSERT INTO t (a, b) VALUES (1, 'x');\n" * 25500 + "DROP TABLE users;"}, 20)
+    shutil.rmtree(proj, ignore_errors=True)
+    proj = make_project(phase="CHECKUP", allow=(".turn",))
+    blk = ("## 셸 검사 결과\n```\n$ git check-ignore -v .env .env.local .env.production\n.gitignore:3:.env*\t.env\n.gitignore:3:.env*\t.env.local\n"
+           "$ git remote -v | sed -E 's#//[^/@]*@#//****@#'\norigin\thttps://****@github.com/kim/flower.git (fetch)\n```\n")
+    timed("D5c R1 코드 블록($ 줄 + 출력) 통과", proj, OK, "Agent", {"description": "검사", "prompt": blk}, 10)
+    timed("D5c R1 코드 블록 안 $ cat .env 차단", proj, B, "Agent", {"description": "검사", "prompt": "```\n$ cat .env\nSECRET=x\n```\n"}, 10)
+    timed("D5c R2 지시문 5,400줄 차단", proj, B, "Agent", {"description": "검사", "prompt": "$ ls\n" * 5400}, 10)
+    timed("D5c R2 지시문 1,450줄($ 줄) 통과", proj, OK, "Agent", {"description": "검사", "prompt": "$ git status --short\n" * 1450}, 25)
     shutil.rmtree(proj, ignore_errors=True)
 
     # V L6: 문제 기록 줄에는 규칙 설명과 시각만(파일 이름·경로·명령 조각 없음)
@@ -1138,13 +1195,13 @@ def check_upgrade_021(res):
     check(res, "0.2.1 V L6 기록용 차단", proj, [
         (B, ("Read", {"file_path": ".env.hongildong-prod"})), (B, ("Read", {"file_path": "certs/client_secret_KIMCHULSOO-3301.json"})),
         (B, bash("cat .env.hongildong-prod")), (B, ("Write", {"file_path": "docs/refactor/.allow-baseline-edit", "content": ""})),
-        (B, ("Read", {"file_path": "C:\\Users\\hong\\proj\\.env.local"}))])
+        (B, ("Read", {"file_path": "C:\\Users\\hong\\proj\\.env.local"})), (B, ("Read", {"file_path": ".env.(hongildong)"}))])
     plog = pathlib.Path(TEST_DATA, "problems.log")
     lines = plog.read_text(encoding="utf-8").splitlines() if plog.exists() else []
     bad = [l for l in lines if any(x in l for x in ("hongildong", "KIMCHULSOO", ".env.", ".allow-", "hong", "\\")) or "/" in l.split(" | ", 2)[-1]]
     res["total"] += 1
-    if len(lines) != 5 or bad:
-        res["fails"].append(("V L6 기록 줄", "5줄·경로 없음", len(lines), "problems.log", str(bad)[:170], "\n".join(lines)[:300]))
+    if len(lines) != 6 or bad:
+        res["fails"].append(("V L6 기록 줄", "6줄·경로 없음", len(lines), "problems.log", str(bad)[:170], "\n".join(lines)[:300]))
     shutil.rmtree(proj, ignore_errors=True)
     shutil.rmtree(TEST_DATA, ignore_errors=True)
     TEST_DATA = keep

@@ -48,7 +48,8 @@ N='[A-Za-z0-9_.-]'
 SED_REDACT="
 s#(${N}*(${SECRET_WORDS})${N}*[\"']?[[:space:]]*[=:][[:space:]]*)(\"[^\"]*\"|'[^']*'|[^[:space:]\"',;]+)#\\1****#g
 s#://[^/@[:space:]]+@#://****@#g
-s#(^|[^A-Za-z0-9_])(sk_live|sk-|ghp_|github_pat_|xox[abp]-|AKIA|eyJ|sb_secret_|whsec_|rk_live_)[A-Za-z0-9_./+=-]{6,}#\\1****#g
+s#(^|[^A-Za-z0-9_])(sk-|xox[abp]-|AKIA|eyJ)[A-Za-z0-9_./+=-]{6,}#\\1****#g
+s#(sk_live|sk_test_|rk_live_|rk_test_|ghp_|ghs_|gho_|ghu_|github_pat_|glpat-|npm_|SG[.]|sb_secret_|whsec_)[A-Za-z0-9_./+=-]{6,}#****#g
 s#AIza[0-9A-Za-z_-]{20,}#****#g
 s#([Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+)[A-Za-z0-9._~+/=-]{8,}#\\1****#g
 s#((/[A-Za-z])|[A-Za-z]:)?[\\\\/]Users[\\\\/][^\\\\/[:space:]\"']+#<홈>#g

@@ -33,7 +33,7 @@ BS='\'; Q='"'; SL='/'; PH=$'\001'; NL=$'\n'; TAB=$'\t'
 P_BS2='\\'; P_BSQ='\"'; P_BSSL='\/'; P_BSN='\n'; P_BSR='\r'; P_BST='\t'
 
 block() {
-  { F=${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/refactor}; F=${F//"$BS"/$SL}; [ -d "$F" ] || mkdir -p "$F"; F=$F/problems.log; LC_ALL=C.UTF-8; m=${1%%"$NL"*}; w=${m%% *}; case "$w" in *[./"$BS"~]*) m="<파일>${m#"$w"}" ;; esac; m=${m//\/refactor:/refactor:}; r='[(][^()]*[./\~][^()]*[)]'; while [[ $m =~ $r ]]; do m=${m/"${BASH_REMATCH[0]}"/(<파일>)}; done; t=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && TZ=KST-9 printf -v t '%(%Y-%m-%d %H:%M)T' -1; [ -n "$t" ] || t=$(TZ=KST-9 date '+%Y-%m-%d %H:%M'); printf '%s | guard | 차단: %s\n' "$t" "${m:0:60}" >> "$F"; (( RANDOM % 64 )) || { s=$(wc -c < "$F"); [ "${s//[!0-9]/}" -gt 204800 ] && tail -c 102400 "$F" | tail -n +2 > "$F.tmp" && mv -f "$F.tmp" "$F"; }; } 2>/dev/null   # 문제 기록(problems.log)에 규칙 설명 첫 줄 앞 60자와 시각만 남긴다 — 괄호 속·맨 앞의 파일 이름·경로는 <파일>로 바꾸고 명령·값은 적지 않는다(공개 신고에 붙을 수 있음). 실패는 무시, 가끔 200KB 넘으면 최근 절반만. %(…)T 는 bash 4.2+ 에서만(3.2 는 date) — 프로그램을 거의 띄우지 않아 차단이 늦어지지 않는다
+  { F=${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/refactor}; F=${F//"$BS"/$SL}; [ -d "$F" ] || mkdir -p "$F"; F=$F/problems.log; LC_ALL=C.UTF-8; m=${1%%"$NL"*}; w=${m%% *}; case "$w" in *[./"$BS"~]*) m="<파일>${m#"$w"}" ;; esac; case "$m" in *'('*')'*) m="${m%%(*}(<파일>)${m##*)}" ;; esac; t=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && TZ=KST-9 printf -v t '%(%Y-%m-%d %H:%M)T' -1; [ -n "$t" ] || t=$(TZ=KST-9 date '+%Y-%m-%d %H:%M'); printf '%s | guard | 차단: %s\n' "$t" "${m:0:60}" >> "$F"; (( RANDOM % 64 )) || { s=$(wc -c < "$F"); [ "${s//[!0-9]/}" -gt 204800 ] && tail -c 102400 "$F" | tail -n +2 > "$F.tmp" && mv -f "$F.tmp" "$F"; }; } 2>/dev/null   # 문제 기록(problems.log)에 규칙 설명 첫 줄 앞 60자와 시각만 남긴다 — 첫 ( 부터 마지막 ) 까지와 맨 앞의 파일 이름은 <파일>로 바꾸고 명령·값은 적지 않는다(공개 신고에 붙을 수 있음). 실패는 무시, 가끔 200KB 넘으면 최근 절반만. %(…)T 는 bash 4.2+ 에서만(3.2 는 date) — 프로그램을 거의 띄우지 않아 차단이 늦어지지 않는다
   printf '[refactor 안전장치] %s\n' "$1" >&2
   if [ -n "${2:-}" ]; then printf '  → %s\n' "$2" >&2; fi
   if [ -n "${BLOCK_NOTE:-}" ]; then printf '  %s\n' "$BLOCK_NOTE" >&2; fi
@@ -615,12 +615,20 @@ check_mcp() {
     jget "$k"; [ -n "$JV" ] && check_shell "$JV"
   done
   case "$input" in *'"code"'*) jget code; [ -n "$JV" ] && check_shell "python3 -c $JV" ;; esac
-  case "$input" in *'"query"'*) jget query; q=$JV ;; esac
+  # 아주 큰 SQL(입력 256KB 초과): 값 꺼내기·문장 나누기가 1MB 에서 훅 제한 시간을 넘기므로 정밀 판정은 하지 않는다.
+  # 위험 낱말(sql_destructive 가 보는 drop·alter·truncate·flush·delete·update·remove)이 낱말로 있는지만 awk 로 한 번 보고, 있으면 막는다
+  if [ "${#input}" -gt 262144 ] && has "$tool" 'sql|execute|migration|query_database|run_query'; then
+    if printf '%s' "$input" | awk 'BEGIN { RS = "\001" } { s = tolower($0); f = (s ~ /(^|[^a-z0-9_]|[\\][nrt])(drop|alter|truncate|flushall|flushdb|delete|update|remove)([^a-z0-9_]|$)/) } END { exit !f }' 2>/dev/null; then
+      block "SQL 이 너무 커서(256KB 초과) 정밀 판정을 못 합니다 — 나눠서 보내세요." "INSERT 처럼 무해한 부분과 지우기·바꾸기 문장을 나눠 256KB 이하로 보내세요. 운영 DB 작업은 사람이 백업을 확인한 뒤 직접 합니다."
+    fi
+  else
+    case "$input" in *'"query"'*) jget query; q=$JV ;; esac
+  fi
   # 16KB 넘는 query 는 셸 명령 길이 상한(파일로 저장해 실행)에 걸리므로 셸 판정은 건너뛰고 아래 SQL 파괴 판정만 한다(큰 INSERT 등)
   if [ -n "$q" ] && [ "${#q}" -le 16384 ] && has "$tool" 'sql|exec|run|shell|bash|terminal|command|script|eval|query_database'; then
     check_shell "$q"
   fi
-  if has "$tool" 'sql|execute|migration|query_database|run_query'; then
+  if [ "${#input}" -le 262144 ] && has "$tool" 'sql|execute|migration|query_database|run_query'; then
     local sqltext=""
     # SQL 은 자르지 않고 푼다(unesc_line 은 2만 자에서 자른다 — 큰 SQL 끝의 DROP 을 놓치지 않게)
     if [ -n "$q" ]; then unesc_nl "$q"; sqltext=$UV; fi
@@ -914,6 +922,148 @@ unbs() {
   s=${s//"$BS$BS"/$PH}; s=${s//"$BS"/}; s=${s//$PH/$BS}
   BSV="$out$s"
 }
+# 판정용 변형 → VV: bash 가 풀었을 때와 같은 뜻의 모양. 원형 뒤에 덧붙여 모든 규칙이 같이 본다
+#  1) $'…'(ANSI-C) 를 푼다(\xHH·\NNN·\uHHHH·\n …) — $'…' 안에서는 치환·명령 실행이 없으므로 eval 로 글자만 푼다
+#  2) 단어 가운데의 정의되지 않은 변수·$@·$* 는 빈 글자(refactor-app${x}rove · git re${x}set) — 단어 머리의 $DIR 등은 그대로
+#  3) 한 단계 중괄호 {a,b} 는 펼친다(--from{-hook,} → --from-hook --from)
+#  4) 역슬래시를 푼다(unbs), 단순 따옴표 인자는 벗긴다
+mk_variant() {
+  VV=$1
+  case "$VV" in *[\$\\{]*) ;; *) return 0 ;; esac
+  local s=$1 out m c v n pre post body rest alts k=0
+  local re_a="[\$]'(([^'\\\\]|\\\\.)*)'" re_v="[\$]([{]([A-Za-z_][A-Za-z0-9_]*|[@*])[}]|([A-Za-z_][A-Za-z0-9_]*)|([@*]))"
+  local re_b='([^[:space:]{}$]*)[{]([^{}[:space:]]*,[^{}[:space:]]*)[}]([^[:space:]{}]*)' re_w='[[:alnum:]._/-]'
+  case "$s" in *"\$'"*)
+    out=""
+    while [[ $s =~ $re_a ]]; do
+      m=${BASH_REMATCH[0]}; c=${BASH_REMATCH[1]}
+      out="$out${s%%"$m"*}"; s=${s#*"$m"}
+      v=""; eval "v=\$'$c'" 2>/dev/null || v=$c   # $'…' 는 글자 풀기뿐(치환·실행 없음). c 에는 이스케이프 안 된 ' 가 없다(정규식)
+      case "$v" in *"'"*) v="\"${v//\"/}\"" ;; *) v="'$v'" ;; esac
+      out="$out$v"
+    done
+    s="$out$s" ;;
+  esac
+  case "$s" in *'$'*)
+    out=""
+    while [[ $s =~ $re_v ]]; do
+      m=${BASH_REMATCH[0]}; n=${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}
+      out="$out${s%%"$m"*}"; s=${s#*"$m"}
+      # 단어 가운데·끝(앞이 글자)에 있고 정의되지 않은 변수만 빈 글자로 본다(단어 머리의 $DIR 등은 그대로)
+      if [[ ${out: -1} =~ $re_w ]]; then
+        case "$n" in '@'|'*') continue ;; esac
+        [ -n "${!n+x}" ] || continue
+      fi
+      out="$out$m"
+    done
+    s="$out$s" ;;
+  esac
+  case "$s" in *'{'*','*'}'*)
+    out=""
+    while [[ $s =~ $re_b ]] && [ "$k" -lt 20 ]; do
+      k=$((k + 1)); m=${BASH_REMATCH[0]}; pre=${BASH_REMATCH[1]}; body=${BASH_REMATCH[2]}; post=${BASH_REMATCH[3]}
+      out="$out${s%%"$m"*}"; s=${s#*"$m"}
+      if [ "${out: -1}" = '$' ]; then out="$out$m"; continue; fi   # $ 바로 뒤 중괄호(변수 표기)는 중괄호 펼치기가 아니다
+      alts=""; rest="$body,"
+      while [ -n "$rest" ]; do alts="$alts $pre${rest%%,*}$post"; rest=${rest#*,}; done
+      out="$out${alts# }"
+    done
+    s="$out$s" ;;
+  esac
+  unbs "$s"; unquote_simple "$BSV"; VV=$UQ
+}
+# 와일드카드로 쓴 보호 이름을 실행하는가(bash …/refactor-appro?e.sh · bash …/hooks/tur?.sh · run.sh tu?n) — bash 글로브로 대 본다.
+# 글로브 앞에 글자가 하나도 없는 토큰(*.sh)은 보지 않는다
+glob_protected_exec() {
+  case "$1" in *[\*\?\[]*) ;; *) return 1 ;; esac
+  local s seg a b i nm names="refactor-approve.sh refactor-approve turn.sh guard.sh post-check.sh session-start.sh turn guard post-check session-start run.sh"
+  cut_segs "$1"; s=$CUTS
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    case "$seg" in *[\*\?\[]*) ;; *) continue ;; esac
+    seg_words "$seg"
+    case "$SCMD" in bash|sh|zsh|dash|ksh|source|.|exec|run.sh|*[\*\?\[]*) ;; *) continue ;; esac
+    for ((i = SI; i < ${#SW[@]}; i++)); do
+      a=${SW[$i]}; case "$a" in *[\*\?\[]*) ;; *) continue ;; esac
+      b=${a##*/}; case "${b%%[\*\?\[]*}" in "") continue ;; esac
+      for nm in $names; do [[ $nm == $b ]] && return 0; done
+    done
+  done
+  return 1
+}
+# 인터프리터 코드(python -c · node -e · perl -e · ruby -e · php -r · 인터프리터로 흘리는 히어독) 안에 승인 스크립트·훅 진입점 이름이 있는가
+# — subprocess·child_process·os.system 으로 부르는 길(문자열을 이어 붙여 --from-hook 을 만들어도). cat·grep·head 로 읽는 것은 아니다
+interp_approve() {
+  has "$1" "refactor-approve|[/\\\\](turn|guard|post-check|session-start)[.]sh|run[.]sh[^;&|]{0,24}(turn|guard|post-check|session-start)" || return 1
+  has "$1" "${S}(python3?|py|pypy3|node|ruby|perl|php|deno|bun)([[:space:]][^;&|]*)?[[:space:]](-[a-z]*[ecpr]|--eval|--print)[[:space:]]|${S}(python3?|py|pypy3|node|ruby|perl|php|deno|bun)([[:space:]]+-)?[[:space:]]*<<"
+}
+MSG_HOOK_EXEC="플러그인 훅(turn·guard·post-check·session-start)은 Claude Code 가 사용자 입력·도구 호출 때 실행합니다(사람 전용). 승인은 사용자가 /refactor:approve 를 입력할 때 입력 훅이 처리합니다."
+MSG_APPROVE_EXEC="승인 스크립트는 사용자가 /refactor:approve 명령으로만 실행합니다."
+MSG_NESTED="승인은 사용자가 입력창에서 직접 합니다 — 새 Claude 세션을 띄워 승인하는 것도 우회입니다."
+# 고가치 규칙(사람 전용: 승인·훅 진입점·중첩 claude). $1 판정 문자열(검색어·문구는 뺀 것), $2 중첩 claude 판정용
+hv_human() {
+  nested_claude_approve "$2" && block "$MSG_NESTED" "$MSG_APPROVE"
+  # 명령 치환·경로·winpty 로 부르는 claude(“$(which claude)” -p …): claude 낱말과 승인 명령이 한 명령에 같이 있으면 막는다
+  if has "$1" "(^|[^[:alnum:]._/-])claude([.]exe|[.]cmd)?([^[:alnum:]_-]|$)" && has "$1" 'refactor:(approve|go)|from-hook'; then block "$MSG_NESTED" "$MSG_APPROVE"; fi
+  if has "$1" 'refactor-approve' && approve_exec "$1"; then block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"; fi
+  glob_protected_exec "$1" && block "$MSG_HOOK_EXEC" "$MSG_APPROVE"
+  if has "$1" "run\\.sh[\"']?[[:space:]]+[\"']?(turn|guard|post-check|session-start)([\"'[:space:];&|)]|$)" \
+    || has "$1" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|exec)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
+    || has "$1" "(^|[;&|({\`])[[:space:]]*(sudo[[:space:]]+)?\\.[[:space:]]+[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
+    || has "$1" "(^|[;&|(])[[:space:]]*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
+    || has "$1" '--from-hook'; then
+    block "$MSG_HOOK_EXEC" "$MSG_APPROVE"
+  fi
+  return 0
+}
+# 고가치 규칙(되돌릴 수 없는 git 명령). 끝 경계에 따옴표·괄호도 넣는다(bash -c 'git reset --hard' · (git push -f))
+hv_git() {
+  local t=$1
+  has "$t" "git[[:space:]]+reset[^;&|]*[[:space:]]--h(a(r(d)?)?)?([[:space:]=;&|)\"']|$)" && block "git reset --hard 는 저장 안 된 작업을 지웁니다." "되돌릴 곳이 있으면 그 줄만 직접 원래대로 고치세요. 전체 되돌리기는 사람이 결정합니다."
+  if has "$t" "git[[:space:]]+clean[^;&|]*[[:space:]](-[a-z]*f|--f(o(r(c(e)?)?)?)?([[:space:]\"')]|$))" && ! has "$t" 'git[[:space:]]+clean[^;&|]*[[:space:]](-[a-z]*n[a-z]*|--d(r(y(-(r(u(n)?)?)?)?)?)?)([[:space:]]|$)'; then
+    block "git clean -f 는 git에 없는 파일을 영구 삭제합니다." "지울 목록만 보려면 git clean -n (사람이 확인 후 직접 실행)."
+  fi
+  if has "$t" "git[[:space:]]+(checkout|restore)[^;&|]*[[:space:]][\"']?(\\.|\\./|\\./\\*|:/|:/\\*|:\\(top\\)|\\*|\\*\\*)[\"']?([[:space:]]|$|[;&|)])"; then
+    if ! has "$t" 'git[[:space:]]+restore[^;&|]*--staged' || has "$t" 'git[[:space:]]+restore[^;&|]*(--worktree|[[:space:]]-w([[:space:]]|$))'; then
+      block "git checkout . / git restore . 는 모든 파일의 변경을 한꺼번에 지웁니다." "되돌릴 때는 이번에 바꾼 파일 이름을 하나씩 지정하세요(git restore <파일>)."
+    fi
+  fi
+  has "$t" "git[[:space:]]+(checkout|switch)[^;&|]*[[:space:]](-f|--force|--discard-changes)([[:space:]\"')]|$)" && block "강제 checkout/switch 는 저장 안 된 변경을 버립니다." "먼저 git status를 사람에게 보여 주세요."
+  has "$t" 'git[[:space:]]+stash[[:space:]]+(drop|clear)' && block "git stash drop/clear 는 보관된 작업을 영구 삭제합니다." "사람이 직접 결정합니다."
+  if has "$t" "git[[:space:]]+push[^;&|]*([[:space:]](--force[^[:space:]\"')]*|--mirror|--delete|-d)([[:space:]\"')]|$)|[[:space:]]-[a-z]*f[a-z]*([[:space:]\"')]|$)|[[:space:]]\\+[^[:space:]]+|[[:space:]]:[^[:space:]]+)"; then
+    block "강제 push·원격 브랜치 삭제는 원격 저장소의 기록을 덮어씁니다." "push는 사람이 직접 합니다."
+  fi
+  shopt -u nocasematch
+  if has "$t" "git[[:space:]]+branch[^;&|]*[[:space:]](-[a-zA-Z]*D[a-zA-Z]*|--delete[[:space:]]+--force|--force[[:space:]]+--delete)([[:space:]\"')]|$)"; then
+    shopt -s nocasematch
+    block "git branch -D 는 합치지 않은 브랜치를 영구 삭제합니다." "사람이 직접 결정합니다."
+  fi
+  shopt -s nocasematch
+  has "$t" 'git[[:space:]]+(filter-branch|filter-repo|update-ref[[:space:]]+-d)|git[[:space:]]+reflog[[:space:]]+(expire|delete)|git[[:space:]]+gc[^;&|]*--prune=now' && block "git 기록을 다시 쓰거나 지우는 명령입니다." "사람이 직접 결정합니다."
+  return 0
+}
+# /refactor:go 중 안전 실행기 강제. $1 판정 문자열, $2 = 1 이면 안전 실행기 뒤 따옴표 명령을 감싼 뒤 따옴표 글자를 모두 뺀다(lz 용)
+go_runner() {
+  local rq=$1 rseg runsh=${REFACTOR_ROOT:-<플러그인 폴더>}
+  local re_mark="run\\.sh[\"']?[[:space:]]+refactor-safe-run[[:space:]]+(--|--check)([[:space:]]|$)"
+  local re_plug="run\\.sh[\"']?[[:space:]]+refactor-(status|board|report)([[:space:]]|$)"
+  runsh=${runsh//"$BS"/$SL}; runsh="${runsh%/}/hooks/run.sh"
+  # 안전 실행기 뒤에 따옴표로 넘긴 명령(sh -c "npm test && npm run build")은 통째로 감싼 것이니 쪼개지 않는다
+  blank_quoted "(refactor-safe-run[[:space:]]+--[[:space:]][^;&|]*)(\"[^\"]*\"|'[^']*')" 2 "$rq"; rq=$BQ
+  if [ "${2:-0}" = 1 ]; then rq=${rq//\'/}; rq=${rq//\"/}; fi
+  rq=${rq//&&/$NL}; rq=${rq//||/$NL}; rq=${rq//;/$NL}; rq=${rq//|/$NL}; rq=${rq//(/$NL}; rq=${rq//\`/$NL}
+  local re_cmt='[[:space:]]#.*$'
+  while [ -n "$rq" ]; do
+    rseg=${rq%%"$NL"*}; if [ "$rseg" = "$rq" ]; then rq=""; else rq=${rq#*"$NL"}; fi
+    [[ $rseg =~ $re_cmt ]] && rseg=${rseg%%"${BASH_REMATCH[0]}"}   # 주석(# …)은 명령이 아니다
+    has "$rseg" "$re_mark" && continue
+    has "$rseg" "$re_plug" && continue   # 플러그인 자체 현황 스크립트(경로에 띄어쓰기가 있어도)
+    if runs_project_code "$rseg"; then
+      block "리팩토링(/refactor:go) 중에는 테스트·빌드·앱 실행을 안전 실행기로만 합니다 — 운영 DB·운영 키 대신 가짜 값(127.0.0.1:9 등)을 넣어, 실수로 운영 데이터를 바꾸거나 알림을 보내지 않게 합니다." "명령 앞에 붙이세요(&&·; 로 이은 명령마다 각각): bash \"$runsh\" refactor-safe-run -- <명령>   예) bash \"$runsh\" refactor-safe-run -- npm test   · 무엇이 가짜 값으로 바뀌는지(이름만): bash \"$runsh\" refactor-safe-run --check"
+    fi
+  done
+  return 0
+}
 # 패키지 실행기의 셸 모드(npx -c '…' · npx --call … · npm exec -c · pnpm exec -c · yarn exec -c)는 안의 명령만 남긴다 → SC
 strip_call_opt() {
   SC=$1
@@ -929,7 +1079,7 @@ strip_call_opt() {
 cut_segs() { local s=$1; s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; CUTS=${s//\$(/$NL}; }
 # 새 Claude 세션(claude -p … · npx claude · node …/claude-code/…)에 승인 명령·--from-hook 을 넘기는가 — 새 세션의 입력 훅이 사람 입력으로 보고 승인한다
 nested_claude_approve() {
-  has "$1" 'claude' && has "$1" 'refactor:approve|from-hook' || return 1
+  has "$1" 'claude' && has "$1" 'refactor:(approve|go)|from-hook' || return 1
   local s seg i a
   cut_segs "$1"; s=$CUTS
   while [ -n "$s" ]; do
@@ -968,13 +1118,45 @@ approve_exec() {
 cd_seg() {
   case "$1" in *cd*|*pushd*|*popd*|*location*|*chdir*|*sl\ *) ;; *) return 1 ;; esac
   seg_words "$1"
-  case "$SCMD" in cd|pushd|chdir|set-location|sl|push-location) ;; popd|pop-location) cwd=$CWD_BASE; return 0 ;; *) return 1 ;; esac
-  local i a t=""
-  for ((i = SI + 1; i < ${#SW[@]}; i++)); do a=${SW[$i]}; case "$a" in -*) continue ;; esac; t=$a; break; done
+  case "$SCMD" in cd|pushd|chdir|set-location|sl|push-location|popd|pop-location) ;; *) return 1 ;; esac
+  [ "${CD_FIXED:-0}" = 1 ] && return 0   # 기준 폴더를 하나로 고정해 다시 보는 중
+  case "$SCMD" in popd|pop-location) cwd=$CWD_BASE; return 0 ;; esac
+  local i a t="" old=$cwd
+  for ((i = SI + 1; i < ${#SW[@]}; i++)); do a=${SW[$i]}; case "$a" in -) t=-; break ;; -*) continue ;; esac; t=$a; break; done
   [ -z "$t" ] && t="~"
-  [ "$t" = "-" ] && return 0
-  resolve_tok "$t" && cwd=$RP
+  if [ "$t" = "-" ]; then cwd=${CD_PREV:-$cwd}; CD_PREV=$old; return 0; fi   # cd - = 바로 앞 폴더
+  resolve_tok "$t" && { CD_PREV=$old; cwd=$RP; }
   return 0
+}
+# 명령 속 cd 가 거쳐 가는 폴더들 → CDC(줄마다 하나): cd 로 들어간 폴더 모두 + 실패해도 뒤가 이어지는 cd(; · || · 줄바꿈 뒤,
+# 서브셸 (cd …) 안)의 바로 앞 폴더. 실패하는 cd·서브셸·cd - 로 기준 폴더를 속여도 이 폴더들 하나하나를 기준으로 다시 보면
+# 보호 경로를 놓치지 않는다(cd /tmp && rm -rf docs 처럼 && 로 이은 cd 는 실패하면 뒤가 돌지 않으니 앞 폴더는 보지 않는다)
+cd_cands() {
+  CDC=""
+  case "$1" in *cd*|*pushd*|*popd*|*location*|*chdir*|*sl\ *) ;; *) return 0 ;; esac
+  local s=$1 seg c0=$cwd pre CWD_BASE=$cwd CD_PREV=$cwd CD_FIXED=0 AND=$'\003'
+  s=${s//&&/$AND$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    pre=$cwd
+    cd_seg "${seg%$AND}" || continue
+    case "$seg" in *"$AND") ;; *) case "$NL$CDC" in *"$NL$pre$NL"*) ;; *) CDC="$CDC$pre$NL" ;; esac ;; esac
+    case "$seg" in *'('*) case "$NL$CDC" in *"$NL$pre$NL"*) ;; *) CDC="$CDC$pre$NL" ;; esac ;; esac
+    case "$NL$CDC" in *"$NL$cwd$NL"*) ;; *) CDC="$CDC$cwd$NL" ;; esac
+  done
+  cwd=$c0
+}
+# $1 함수 $2 명령: cd 를 따라 순서대로 한 번 보고, 명령에 cd 가 있으면 거쳐 간 폴더마다 기준을 고정해 다시 본다
+cd_all() {
+  local c cands c0=$cwd
+  cd_cands "$2"; cands=$CDC
+  "$1" "$2"
+  if [ -n "$cands" ]; then
+    CD_FIXED=1
+    while IFS= read -r c; do [ -n "$c" ] || continue; cwd=$c; "$1" "$2"; done <<< "$cands"
+    CD_FIXED=0
+  fi
+  cwd=$c0
 }
 
 # 같은 명령 안에서 대입한 단순 변수(NAME=값, PowerShell $name = 값)를 값으로 펼친다 — 두 번 돌려 한 단계 안쪽 변수까지 → EV
@@ -994,6 +1176,7 @@ expand_vars() {
         case "${BASH_REMATCH[3]}" in \"*) val=${BASH_REMATCH[4]} ;; "$q"*) val=${BASH_REMATCH[5]} ;; *) val=${BASH_REMATCH[6]} ;; esac
         rest=${rest#*"$m"}
         [ -z "$val" ] && continue
+        EV=${EV//"\${$name}"/$val}   # ${x}set 처럼 중괄호 표기는 바로 뒤에 글자가 붙어도 그 변수다
         re_ref="[$]([{]${name}[}]|${name})([^A-Za-z0-9_]|$)"
         k=0
         while [[ $EV =~ $re_ref ]] && [ "$k" -lt 20 ]; do
@@ -1294,8 +1477,9 @@ del_seg() { # $1 조각 $2 파이프 앞 조각
   fi
   return 0
 }
-del_scan() { # $1 명령(lq) — && || ; 로 나눈 명령마다 파이프 조각을 차례로 본다(cd·pushd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준)
-  local s=$1 cl pl seg prev CWD_BASE=$cwd
+del_scan() { cd_all del_scan1 "$1"; }
+del_scan1() { # $1 명령(lq) — && || ; 로 나눈 명령마다 파이프 조각을 차례로 본다(cd·pushd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준)
+  local s=$1 cl pl seg prev CWD_BASE=$cwd CD_PREV=$cwd
   s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//\`/$NL}
   while [ -n "$s" ]; do
     cl=${s%%"$NL"*}; if [ "$cl" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
@@ -1405,8 +1589,9 @@ env_refs_safe() {
 MSG_RDOC="리팩토링 기록(docs/refactor)은 지우지 않습니다."
 MSG_RDOC2="다시 하려면 /refactor:go 다시 <단계> 를 쓰세요(이전 파일은 *-prev.md로 남음)."
 # 셸 명령의 쓰기 대상(목적지)으로 판정: 사람 전용 파일, 기록 폴더 이동·개명, 플러그인 폴더, 읽기 전용 단계의 프로젝트 파일
-shell_targets() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨) — cd·pushd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준
-  local s=$1 seg tl line kind t b src CWD_BASE=$cwd
+shell_targets() { cd_all shell_targets1 "$1"; }
+shell_targets1() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨) — cd·pushd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준
+  local s=$1 seg tl line kind t b src CWD_BASE=$cwd CD_PREV=$cwd
   s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
@@ -1488,14 +1673,16 @@ herestr_sens() {
 }
 # awk 가 ENVIRON(환경변수)을 찍는가 — 안전 이름(ENVIRON["HOME"])만 보면 통과
 awk_env_print() {
-  has "$1" "${S}(g|m|n)?awk[[:space:]]" && has "$1" 'environ' && has "$1" 'print' || return 1
-  local rest=$1 re="environ([[][[:space:]]*[\"']?([A-Za-z_][A-Za-z0-9_]*))?"
+  # awk 의 내장 배열은 대문자 낱말 ENVIRON 뿐이다(대소문자 구분) — "environment" 같은 글자·/ENVIRONMENT/ 패턴은 아니다
+  has "$1" "${S}(g|m|n)?awk[[:space:]]" && has "$1" 'print' && hascs "$1" '(^|[^[:alnum:]_])ENVIRON([^[:alnum:]_]|$)' || return 1
+  local rest=$1 re="(^|[^[:alnum:]_])ENVIRON([[][[:space:]]*[\"']?([A-Za-z_][A-Za-z0-9_]*)|[^[:alnum:]_]|$)" nm hit=1
+  shopt -u nocasematch
   while [[ $rest =~ $re ]]; do
-    rest=${rest#*"${BASH_REMATCH[0]}"}
-    [ -z "${BASH_REMATCH[2]}" ] && return 0
-    safe_env_name "${BASH_REMATCH[2]}" || return 0
+    rest=${rest#*"${BASH_REMATCH[0]}"}; nm=${BASH_REMATCH[3]}
+    if [ -z "$nm" ] || ! safe_env_name "$nm"; then hit=0; break; fi
   done
-  return 1
+  shopt -s nocasematch
+  return $hit
 }
 # jq 가 환경변수(env · $ENV)를 통째로 또는 비밀값 이름으로 찍는가(jq -n env · jq -n '$ENV' · env.API_KEY)
 # jq 는 대소문자를 가린다: 내장은 env 와 $ENV 뿐이고 $env 는 사용자 변수다. --arg env x 처럼 변수 이름으로 쓴 env 는 빼고 본다.
@@ -1504,7 +1691,7 @@ jq_env() {
   has "$1" "${S}jq[[:space:]]" || return 1
   local seg nm rest=$1 re_seg="${S}jq[[:space:]][^;&|]*" s2 hit=1
   local re_arg='--(arg|argjson|slurpfile|rawfile)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+'
-  local re='(^|[^.$/[:alnum:]_-])(env|[$]ENV)([.]([A-Za-z_][A-Za-z0-9_]*))?([^[:alnum:]_]|$)'
+  local re='(^|[^.$/[:alnum:]_"-])(env|[$]ENV)([.]([A-Za-z_][A-Za-z0-9_]*))?([^[:alnum:]_:"]|$)'   # "env" 문자열·{env: …} 객체 키는 아니다
   while [[ $rest =~ $re_seg ]]; do
     seg=${BASH_REMATCH[0]}; rest=${rest#*"$seg"}; s2=${seg#*jq}
     while [[ $s2 =~ $re_arg ]]; do s2=${s2/"${BASH_REMATCH[0]}"/ }; done
@@ -1729,7 +1916,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
     local re_wbs='([[:alnum:]_.:~-])\\'
     while [[ $lx =~ $re_wbs ]]; do m0=${BASH_REMATCH[0]}; lx=${lx/"$m0"/"${BASH_REMATCH[1]}/"}; done
   else
-    local re_wtok="(^|[[:space:]\"'=])([A-Za-z]:\\\\|\\.\\.?\\\\|~\\\\)[^[:space:]\"']*"
+    local re_wtok="(^'?|[[:space:]\"=]|[^\$]')([A-Za-z]:\\\\|\\.\\.?\\\\|~\\\\)[^[:space:]\"']*"   # $'.\x65…'(ANSI-C) 는 경로가 아니다
     while [[ $lx =~ $re_wtok ]]; do m0=${BASH_REMATCH[0]}; conv=${m0//"$BS"/$SL}; lx=${lx/"$m0"/"$conv"}; done
   fi
   local re_envfile="--(env-file|exclude|exclude-dir)(=|[[:space:]]+)(\"[^\"]*\"|'[^']*'|[^[:space:]]+)" re_ex='\.(env|envrc|dev\.vars)[[:alnum:]_.-]*\.(example|sample|template|dist)'
@@ -1745,28 +1932,28 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # lq·lx 를 만든 뒤에는 나머지 판정용 lr 도 단순 따옴표 인자를 벗긴다('node' -e … · cat '.env' 도 같은 명령으로)
   unquote_simple "$lx"; lx=$UQ
   unquote_simple "$lr"; lr=$UQ
-  # 역슬래시로 쪼갠 단어(git re\set --hard · cat .e\nv · n\pm test)는 bash 가 푼 모양을 뒤에 덧붙여 같이 본다.
-  # 원형은 그대로 둔다(윈도우 경로 C:\… 판정). popd 는 앞에서 cd 로 바뀐 기준 폴더를 처음으로 되돌린다(cd_seg)
-  unbs "$lq"; [ "$BSV" != "$lq" ] && lq="$lq ; popd ; $BSV"
-  unbs "$lx"; [ "$BSV" != "$lx" ] && lx="$lx ; popd ; $BSV"
+  # 판정용 변형(mk_variant: $'…' 풀기·단어 가운데 빈 변수·{a,b} 펼치기·역슬래시 풀기)을 원형 뒤에 덧붙여 같이 본다
+  # (git re\set · git re${x}set · cat .e$'\x6e'v · --from{-hook,}). 원형은 그대로(윈도우 경로 C:\… 판정). popd = cd 기준 폴더 되돌리기
+  local lqv lz
+  mk_variant "$lq"; lqv=$VV; [ "$VV" != "$lq" ] && lq="$lq ; popd ; $VV"
+  mk_variant "$lx"; [ "$VV" != "$lx" ] && lx="$lx ; popd ; $VV"
+  # lz: 따옴표 글자를 모두 뺀 사본(claude -p '/refactor:app'"rove" · bash -c "git re"'set --hard' · eval "n"'pm test') —
+  #     공백 든 문자열까지 붙여 버리므로 과잉차단을 피해 고가치 규칙(승인·훅 진입점·중첩 claude·git 파괴·go 안전 실행기)에만 쓴다
+  lz=${lqv//\'/}; lz=${lz//\"/}; [ "$lz" = "$lqv" ] && lz=""
 
   # 1) 사람 전용 ------------------------------------------------------------
-  # 새 Claude 세션(claude -p "/refactor:approve …")으로 승인하는 길 — 새 세션의 입력 훅은 그것을 사람 입력으로 본다
-  nested_claude_approve "$lr" && block "승인은 사용자가 입력창에서 직접 합니다 — 새 Claude 세션을 띄워 승인하는 것도 우회입니다." "$MSG_APPROVE"
+  # 승인·훅 진입점·중첩 claude(새 Claude 세션은 그 입력을 사람 입력으로 본다) — 원형과 따옴표를 모두 뺀 사본(lz) 둘 다.
   # 승인 스크립트는 실행하는 모양만 막는다(cat·grep·head 로 읽는 것은 통과)
-  if has "$lq" 'refactor-approve' && approve_exec "$lq"; then block "승인 스크립트는 사용자가 /refactor:approve 명령으로만 실행합니다." "$MSG_APPROVE"; fi
-  # 플러그인 훅 진입점(turn·guard·post-check·session-start)을 직접 실행하는 길 — 입력 훅을 흉내 내 승인을 처리하는 우회(읽기는 통과)
-  if has "$lq" "run\\.sh[\"']?[[:space:]]+[\"']?(turn|guard|post-check|session-start)([\"'[:space:];&|)]|$)" \
-    || has "$lq" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|exec|\\.)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
-    || has "$lq" "(^|[;&|(])[[:space:]]*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
-    || has "$lq" '--from-hook'; then
-    block "플러그인 훅(turn·guard·post-check·session-start)은 Claude Code 가 사용자 입력·도구 호출 때 실행합니다(사람 전용). 승인은 사용자가 /refactor:approve 를 입력할 때 입력 훅이 처리합니다." "$MSG_APPROVE"
-  fi
+  hv_human "$lq" "$lr"
+  [ -n "$lz" ] && hv_human "$lz" "$lz"
+  interp_approve "$lr" && block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"
   if writes_to '(docs/refactor/)?\.allow-[a-z-]+|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/' || interp_writes '\.allow-|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/'; then
     block "허용 파일(.allow-*)·승인 기록(APPROVALS.log)·.turn 은 사람과 플러그인만 만들고 지웁니다." "$MSG_HUMAN"
   fi
   # docs/refactor 안의 파일이나 .md 문서를 프로그램으로 실행하지 않는다(기록 폴더에 스크립트를 두고 돌리는 길)
-  if has "$lq" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|\\.|python3?|py|node|ruby|perl|php|deno|bun|tsx|ts-node|pwsh|powershell)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*(docs/refactor/[^[:space:];&|]*|[.]md)([\"'[:space:];&|)]|$)" \
+  # (. 는 명령 자리일 때만 source 다 — find . -name '*.md' 의 . 은 폴더)
+  if has "$lq" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|python3?|py|node|ruby|perl|php|deno|bun|tsx|ts-node|pwsh|powershell)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*(docs/refactor/[^[:space:];&|]*|[.]md)([\"'[:space:];&|)]|$)" \
+    || has "$lq" "(^|[;&|({\`])[[:space:]]*(sudo[[:space:]]+)?\\.[[:space:]]+[\"']?[^[:space:]\"';&|]*(docs/refactor/[^[:space:];&|]*|[.]md)([\"'[:space:];&|)]|$)" \
     || has "$lq" "(^|[;&|(])[[:space:]]*[\"']?(\\./)?docs/refactor/[^[:space:];&|]+"; then
     block "docs/refactor 안의 파일이나 .md 문서는 실행하지 않습니다(기록 폴더는 사람과 플러그인만 다룹니다)." "실행할 코드는 프로젝트의 scripts/ 등에 두고, 무엇을 하는지 사용자에게 먼저 보여 주세요."
   fi
@@ -1883,27 +2070,8 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   fi
 
   # 3) 되돌릴 수 없는 git 명령 ---------------------------------------------
-  has "$lq" 'git[[:space:]]+reset[^;&|]*[[:space:]]--h(a(r(d)?)?)?([[:space:]=;&|)]|$)' && block "git reset --hard 는 저장 안 된 작업을 지웁니다." "되돌릴 곳이 있으면 그 줄만 직접 원래대로 고치세요. 전체 되돌리기는 사람이 결정합니다."
-  if has "$lq" 'git[[:space:]]+clean[^;&|]*[[:space:]](-[a-z]*f|--f(o(r(c(e)?)?)?)?([[:space:]]|$))' && ! has "$lq" 'git[[:space:]]+clean[^;&|]*[[:space:]](-[a-z]*n[a-z]*|--d(r(y(-(r(u(n)?)?)?)?)?)?)([[:space:]]|$)'; then
-    block "git clean -f 는 git에 없는 파일을 영구 삭제합니다." "지울 목록만 보려면 git clean -n (사람이 확인 후 직접 실행)."
-  fi
-  if has "$lq" "git[[:space:]]+(checkout|restore)[^;&|]*[[:space:]][\"']?(\\.|\\./|\\./\\*|:/|:/\\*|:\\(top\\)|\\*|\\*\\*)[\"']?([[:space:]]|$|[;&|)])"; then
-    if ! has "$lq" 'git[[:space:]]+restore[^;&|]*--staged' || has "$lq" 'git[[:space:]]+restore[^;&|]*(--worktree|[[:space:]]-w([[:space:]]|$))'; then
-      block "git checkout . / git restore . 는 모든 파일의 변경을 한꺼번에 지웁니다." "되돌릴 때는 이번에 바꾼 파일 이름을 하나씩 지정하세요(git restore <파일>)."
-    fi
-  fi
-  has "$lq" 'git[[:space:]]+(checkout|switch)[^;&|]*[[:space:]](-f|--force|--discard-changes)([[:space:]]|$)' && block "강제 checkout/switch 는 저장 안 된 변경을 버립니다." "먼저 git status를 사람에게 보여 주세요."
-  has "$lq" 'git[[:space:]]+stash[[:space:]]+(drop|clear)' && block "git stash drop/clear 는 보관된 작업을 영구 삭제합니다." "사람이 직접 결정합니다."
-  if has "$lq" 'git[[:space:]]+push[^;&|]*([[:space:]](--force[^[:space:]]*|--mirror|--delete|-d)([[:space:]]|$)|[[:space:]]-[a-z]*f[a-z]*([[:space:]]|$)|[[:space:]]\+[^[:space:]]+|[[:space:]]:[^[:space:]]+)'; then
-    block "강제 push·원격 브랜치 삭제는 원격 저장소의 기록을 덮어씁니다." "push는 사람이 직접 합니다."
-  fi
-  shopt -u nocasematch
-  if has "$lq" 'git[[:space:]]+branch[^;&|]*[[:space:]](-[a-zA-Z]*D[a-zA-Z]*|--delete[[:space:]]+--force|--force[[:space:]]+--delete)([[:space:]]|$)'; then
-    shopt -s nocasematch
-    block "git branch -D 는 합치지 않은 브랜치를 영구 삭제합니다." "사람이 직접 결정합니다."
-  fi
-  shopt -s nocasematch
-  has "$lq" 'git[[:space:]]+(filter-branch|filter-repo|update-ref[[:space:]]+-d)|git[[:space:]]+reflog[[:space:]]+(expire|delete)|git[[:space:]]+gc[^;&|]*--prune=now' && block "git 기록을 다시 쓰거나 지우는 명령입니다." "사람이 직접 결정합니다."
+  hv_git "$lq"
+  [ -n "$lz" ] && hv_git "$lz"
 
   # 4) 대량 삭제 ------------------------------------------------------------
   local re_rm="${S}(sudo[[:space:]]+)?rm[[:space:]][^;&|]*"
@@ -2005,25 +2173,10 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   fi
   has "$lq" "${S}(rm|unlink|remove-item)[[:space:]][^;&|]*docs/refactor/" && block "$MSG_RDOC" "$MSG_RDOC2"
 
-  # /refactor:go 실행 중에는 프로젝트 코드를 돌리는 명령(테스트·빌드·개발 서버·스크립트)을 안전 실행기로만
+  # /refactor:go 실행 중에는 프로젝트 코드를 돌리는 명령(테스트·빌드·개발 서버·스크립트)을 안전 실행기로만(따옴표를 모두 뺀 사본도)
   if [ "$go_turn" = 1 ]; then
-    local rq=$lq rseg runsh=${REFACTOR_ROOT:-<플러그인 폴더>}
-    local re_mark="run\\.sh[\"']?[[:space:]]+refactor-safe-run[[:space:]]+(--|--check)([[:space:]]|$)"
-    local re_plug="run\\.sh[\"']?[[:space:]]+refactor-(status|board|report)([[:space:]]|$)"
-    runsh=${runsh//"$BS"/$SL}; runsh="${runsh%/}/hooks/run.sh"
-    # 안전 실행기 뒤에 따옴표로 넘긴 명령(sh -c "npm test && npm run build")은 통째로 감싼 것이니 쪼개지 않는다
-    blank_quoted "(refactor-safe-run[[:space:]]+--[[:space:]][^;&|]*)(\"[^\"]*\"|'[^']*')" 2 "$rq"; rq=$BQ
-    rq=${rq//&&/$NL}; rq=${rq//||/$NL}; rq=${rq//;/$NL}; rq=${rq//|/$NL}; rq=${rq//(/$NL}; rq=${rq//\`/$NL}
-    local re_cmt='[[:space:]]#.*$'
-    while [ -n "$rq" ]; do
-      rseg=${rq%%"$NL"*}; if [ "$rseg" = "$rq" ]; then rq=""; else rq=${rq#*"$NL"}; fi
-      [[ $rseg =~ $re_cmt ]] && rseg=${rseg%%"${BASH_REMATCH[0]}"}   # 주석(# …)은 명령이 아니다
-      has "$rseg" "$re_mark" && continue
-      has "$rseg" "$re_plug" && continue   # 플러그인 자체 현황 스크립트(경로에 띄어쓰기가 있어도)
-      if runs_project_code "$rseg"; then
-        block "리팩토링(/refactor:go) 중에는 테스트·빌드·앱 실행을 안전 실행기로만 합니다 — 운영 DB·운영 키 대신 가짜 값(127.0.0.1:9 등)을 넣어, 실수로 운영 데이터를 바꾸거나 알림을 보내지 않게 합니다." "명령 앞에 붙이세요(&&·; 로 이은 명령마다 각각): bash \"$runsh\" refactor-safe-run -- <명령>   예) bash \"$runsh\" refactor-safe-run -- npm test   · 무엇이 가짜 값으로 바뀌는지(이름만): bash \"$runsh\" refactor-safe-run --check"
-      fi
-    done
+    go_runner "$lq" 0
+    [ -n "$lz" ] && go_runner "$lqv" 1
   fi
 
   if [ "$fence" = 1 ]; then
@@ -2042,39 +2195,54 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
 # 코드 조각(```…```, `…`, 줄 맨 앞 $ ·!)만 셸 명령 판정에 태운다. 문장 속 언급(.env 는 읽지 마)과
 # 금지 목록 줄(…금지·하지 마·never·do not 이 있는 줄)은 통과. 문장 속 "cat .env" 처럼 읽기 동사+비밀값 파일이 붙은 형태는 막는다.
 check_agent() {
-  local p k frag line rest re_fence='```[a-zA-Z0-9_-]*(([^`]|`[^`]|``[^`])*)```' re_tick='`([^`]+)`' lines
+  local p k frag line rest re_fence='```[a-zA-Z0-9_-]*(([^`]|`[^`]|``[^`])*)```' re_tick='`([^`]+)`' conv nl batch=""
   local re_ban='금지|하지[[:space:]]*마|하지[[:space:]]*말|말[[:space:]]*것|쓰지[[:space:]]*마|쓰지[[:space:]]*않|부르지[[:space:]]*마|부르지[[:space:]]*않|실행하지|건드리지|never|do not|don'"'"'t|must not|forbidden|prohibited|avoid'
   AGENT_MODE=1
   BLOCK_NOTE="(하위 에이전트에게 시키는 것도 같은 우회입니다. 금지 사항을 적는 거라면 명령 형태 없이 '비밀값 파일은 열지 말 것'처럼 쓰세요.)"
+  # 판정할 명령 조각은 모아서(12KB 까지 한 번에) 셸 판정에 넣는다 — 줄마다 따로 부르면 수천 줄에서 훅 제한 시간을 넘긴다.
+  # 따옴표 개수가 맞지 않는 조각은 옆 조각과 섞여 판정을 흐리지 않게 따로 본다
+  agent_cmd() {
+    local f=$1 q=${1//[!\'\"\`]/}
+    local sq=${q//[!\']/} dq=${q//[!\"]/} bq=${q//[!\`]/}
+    if [ $((${#sq} % 2)) -ne 0 ] || [ $((${#dq} % 2)) -ne 0 ] || [ $((${#bq} % 2)) -ne 0 ]; then check_shell "$f"; return; fi
+    if [ $((${#batch} + ${#f})) -gt 12000 ] && [ -n "$batch" ]; then check_shell "$batch"; batch=""; fi
+    batch="$batch$P_BSN$f"
+  }
   for k in prompt description; do
     jget "$k"; p=$JV
     [ -z "$p" ] && continue
-    # 문장 속 읽기 동사 + 비밀값 파일(cat .env, head .env.local, Get-Content .env)
-    lines=$p
-    while [ -n "$lines" ]; do
-      line=${lines%%"$P_BSN"*}; if [ "$line" = "$lines" ]; then lines=""; else lines=${lines#*"$P_BSN"}; fi
+    # 줄 수 상한: 줄마다 명령 판정을 하므로 아주 긴 지시문은 판정하지 않고 막는다(파일로 넘기면 된다)
+    nl=${p//"$P_BSN"/$'\001'}; nl=${nl//[!$'\001']/}
+    [ "${#nl}" -gt 2000 ] && block "도구 입력이 너무 깁니다(2,000줄 초과) — 파일로 저장해 경로를 넘기세요." "지시문을 파일(예: /tmp/지시.md)로 저장하고, 하위 에이전트에게는 그 파일 경로를 읽으라고 짧게 쓰세요."
+    # 줄 나누기는 한 번에(here-string) — ${x#*…} 를 줄마다 되풀이하면 줄 수의 제곱만큼 느려진다
+    conv=${p//"$P_BSN"/$NL}
+    while IFS= read -r line; do
       has "$line" "$re_ban" && continue
+      # 문장 속 읽기 동사 + 비밀값 파일(cat .env, head .env.local, Get-Content .env)
       if has "$line" "(^|[^[:alnum:]_-])(cat|head|tail|less|more|bat|type|get-content|gc|source|base64|xxd|strings|printenv)[[:space:]]+[\"'\`]?[^[:space:]\"'\`]*(\\.env([._-][[:alnum:]_.-]*)?|\\.dev\\.vars|\\.pem|\\.key|id_rsa|id_ed25519|credentials\\.json|\\.netrc|\\.npmrc|\\.git-credentials)([^[:alnum:]_.-]|$)"; then
         block "비밀값 파일을 읽으라는 지시를 하위 에이전트에게 보내지 않습니다."
       fi
       # 줄 맨 앞 $ · ! 명령
-      case "$line" in '$ '*|'! '*|'!'[a-z]*) check_shell "${line#?}" ;; esac
+      case "$line" in '$ '*|'! '*|'!'[a-z]*) agent_cmd "${line#?}" ;; esac
       # 한 줄 코드(`…`)
       rest=$line
       while [[ $rest =~ $re_tick ]]; do
         frag=${BASH_REMATCH[1]}; rest=${rest#*"${BASH_REMATCH[0]}"}
-        case "$frag" in *[[:space:]]*|printenv|env|set|export) check_shell "$frag" ;; esac
+        case "$frag" in *[[:space:]]*|printenv|env|set|export) agent_cmd "$frag" ;; esac
       done
-    done
-    # 여러 줄 코드 블록(```…```): 금지 목록이 아니면 판정
+    done <<< "$conv"
+    # 여러 줄 코드 블록(```…```): 금지 목록이 아니면 판정.
+    # 블록 안에 "$ " 로 시작하는 줄이 하나라도 있으면 그 줄들만 명령이고(위 줄 판정에서 이미 봤다) 나머지 줄은 출력이다 — 건너뛴다
     rest=$p
     while [[ $rest =~ $re_fence ]]; do
       frag=${BASH_REMATCH[1]}; rest=${rest#*"${BASH_REMATCH[0]}"}
       case "$frag" in "$P_BSN"*) frag=${frag#"$P_BSN"} ;; esac
+      case "$frag" in '$ '*|*"$P_BSN"'$ '*) continue ;; esac
       has "$frag" "$re_ban" && continue
       check_shell "$frag"
     done
   done
+  [ -n "$batch" ] && check_shell "$batch"
   AGENT_MODE=0; BLOCK_NOTE=""
   return 0
 }
