@@ -55,16 +55,16 @@ jget() {
 unesc_line() {
   case "$1" in *'<<'*) ;; *) [ "${#1}" -gt 6000 ] || { unesc_short "$1"; return 0; } ;; esac
   UV=$(printf '%s' "$1" | awk 'BEGIN { RS = "\001" } {
-    s = $0; gsub(/\\\\\\r\\n|\\\\\\n/, "", s); gsub(/\\\\/, "/", s); gsub(/\\"/, "\"", s); gsub(/\\\//, "/", s); gsub(/\\r/, "", s); gsub(/\\t/, " ", s)
+    s = $0; gsub(/\\\\\\r\\n|\\\\\\n/, "", s); gsub(/\\\\/, "\002", s); gsub(/\\"/, "\"", s); gsub(/\\\//, "/", s); gsub(/\\r/, "", s); gsub(/\\t/, " ", s)
     n = split(s, L, /\\n/); nh = 0; delim = ""
     for (i = 1; i <= n; i++) {
       line = L[i]
       if (delim != "") { t = line; sub(/^[ \t]+/, "", t); if (t == delim) { HE[nh] = i; delim = "" }; continue }
-      if (!match(line, /<<-?[ \t]*["\047\/]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) continue
+      if (!match(line, /<<-?[ \t]*["\047\/\002]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) continue
       pre = substr(line, 1, RSTART - 1); post = substr(line, RSTART + RLENGTH); tok = substr(line, RSTART, RLENGTH)
       if (pre ~ /[<0-9]$/ || pre ~ /\$\(\([^)]*$/) continue   # <<< 문자열, $(( 1<<X )) 계산은 히어독이 아님
       nh++; HS[nh] = i; HE[nh] = n + 1
-      d = tok; sub(/^<<-?[ \t]*/, "", d); HQ[nh] = (d ~ /^["\047\/]/); gsub(/["\047\/]/, "", d); delim = d
+      d = tok; sub(/^<<-?[ \t]*/, "", d); HQ[nh] = (d ~ /^["\047\/\002]/); gsub(/["\047\/\002]/, "", d); delim = d
       HC[nh] = (pre ~ /(^|[;&|(]|\$\()[ \t]*(cat|tee)([ \t]|$)[^;&|(]*$/ && post !~ /\|/)
       tg = ""
       if (match(pre, />[ \t]*["\047]?[^ \t"\047;&|<>]+/)) { tg = substr(pre, RSTART, RLENGTH); sub(/^>[ \t]*["\047]?/, "", tg) }
@@ -77,7 +77,7 @@ unesc_line() {
       if (!HC[h]) continue
       run = 0
       if (HT[h] != "") {
-        t = HT[h]; sub(/^.*\//, "", t)   # 파일 이름으로 찾는다(./x.sh, /tmp/x.sh 모두)
+        t = HT[h]; sub(/^.*[\/\002]/, "", t)   # 파일 이름으로 찾는다(./x.sh, /tmp/x.sh 모두)
         if (index(HP[h], t) && HP[h] ~ /(bash|sh|zsh|dash|python3?|node|ruby|perl|php|deno|bun|source|\.)[ \t]/) run = 1
         for (i = HE[h] + 1; i <= n && !run; i++) if (index(L[i], t) && L[i] ~ /(bash|sh|zsh|dash|python3?|node|ruby|perl|php|deno|bun|source|chmod|\.\/|\.)[ \t]*/) run = 1
       }
@@ -98,6 +98,16 @@ unesc_line() {
       out = out (out == "" ? "" : " ; ") L[i]
     }
     printf "%s", substr(out, 1, 20000) }')
+  UV=${UV//$'\002'/$BS}   # 이스케이프된 역슬래시(\\)는 awk 안에서 \002 로 두었다가 되돌린다(unesc_short 와 같게 — 역슬래시로 쪼갠 단어 판정)
+}
+# JSON 이스케이프를 풀되 줄바꿈은 진짜 줄바꿈으로 둔다(SQL 판정용 — 줄바꿈은 문장 구분이 아니다). 줄 이어쓰기는 지운다 → UV
+unesc_nl() {
+  local v=$1
+  v=${v//"$P_BS2"/$PH}
+  v=${v//"$PH$P_BSR$P_BSN"/}; v=${v//"$PH$P_BSN"/}
+  v=${v//"$P_BSQ"/$Q}; v=${v//"$P_BSSL"/$SL}
+  v=${v//"$P_BSR"/}; v=${v//"$P_BSN"/$NL}; v=${v//"$P_BST"/ }
+  UV=${v//$PH/$BS}
 }
 unesc_short() {
   local v=$1
@@ -509,23 +519,54 @@ check_grep_tool() {
   return 0
 }
 
-# SQL·DB 명령이 데이터를 통째로 지우거나 구조를 삭제하는가. $2: shell(따옴표 안 SQL) / sql(순수 SQL)
+# SQL 을 문장으로 나누는 awk(LC_ALL=C 에서 한 글자씩): -- 줄 주석·/* */ 주석은 지우고, 작은따옴표 안(값)은 '_' 로 비우고,
+# 큰따옴표 안(이름)은 그대로, 따옴표 밖의 ; 에서만 문장을 나눈다. 줄바꿈은 문장 구분이 아니라 칸이다(UPDATE x⏎SET …⏎WHERE …).
+# 위험 낱말이 든 문장만 한 줄에 하나씩(16KB 까지) 내보낸다. 값 속 글자('a;b', 'where')가 판정을 흔들지 않게.
+AWK_SQL='function fl(e) { if (e > r0) b = b substr(s, r0, e - r0) }
+function em(   t) { t = b; gsub(/[\n\r\t]/, " ", t); if (tolower(t) ~ /drop|alter|truncate|flush|delete|update|remove/) print substr(t, 1, 16384); b = "" }
+BEGIN { RS = "\001" }
+{ s = $0; n = length(s); st = 0; b = ""; r0 = 1
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (st == 0) {
+      if (c == "\047") { fl(i); b = b "\047_\047"; st = 1 }
+      else if (c == "\"") st = 2
+      else if (c == "-" && substr(s, i + 1, 1) == "-") { fl(i); b = b " "; st = 3; i++ }
+      else if (c == "/" && substr(s, i + 1, 1) == "*") { fl(i); b = b " "; st = 4; i++ }
+      else if (c == ";") { fl(i); em(); r0 = i + 1 }
+    } else if (st == 1) { if (c == "\\") i++; else if (c == "\047") { st = 0; r0 = i + 1 } }
+    else if (st == 2) { if (c == "\"") st = 0 }
+    else if (st == 3) { if (c == "\n") { st = 0; r0 = i } }
+    else if (st == 4) { if (c == "*" && substr(s, i + 1, 1) == "/") { st = 0; i++; r0 = i + 1 } }
+  }
+  if (st == 0 || st == 2) fl(n + 1)
+  em() }'
+# SQL·DB 명령이 데이터를 통째로 지우거나 구조를 삭제하는가
+#  $2 = sql  : 순수 SQL(MCP 도구의 query·sql 칸, 줄바꿈 그대로) — AWK_SQL 로 문장을 나눠 문장마다 아래 판정
+#  $2 = shell: 셸 명령(줄바꿈 그대로) — 따옴표 안 문자열은 SQL 로(psql -c "UPDATE …⏎WHERE …"), 따옴표 밖(히어독·redis-cli FLUSHALL)은
+#              예전처럼 줄바꿈을 명령 구분으로 본다
 sql_destructive() {
-  # 큰 SQL(MCP 도구의 큰 INSERT·마이그레이션 16KB 초과): 정규식 검사·잘라내기를 통째 문자열에 되풀이하면 길이만큼 느려져(256KB 에서 수십 초)
-  # 주석은 awk 로 한 번에 지우고, 문장(;)으로 나눠 위험 낱말이 든 문장만 아래 판정에 넣는다
-  if [ "$2" = "sql" ] && [ "${#1}" -gt 16384 ]; then
-    # awk: 주석 지우기(gsub 는 바꿀 곳이 수천 개면 느려 split 으로 나눠 잇는다) → ; 로 나누기 → 위험 낱말이 든 문장만 한 줄에 하나씩(각 16KB 까지)
-    local risky pt
-    risky=$(printf '%s' "$1" | awk 'BEGIN { RS = "\001" } {
-        n = split($0, P, /\/\*([^*]|\*+[^*\/])*\*+\//); s = P[1]; for (i = 2; i <= n; i++) s = s " " P[i]
-        n = split(s, P, /--[^;]*/); s = P[1]; for (i = 2; i <= n; i++) s = s " " P[i]
-        gsub(/\n/, " ", s); n = split(s, S, ";")
-        for (i = 1; i <= n; i++) if (tolower(S[i]) ~ /drop|alter|truncate|flush|delete|update|remove/) print substr(S[i], 1, 16384) }' 2>/dev/null)
+  local pt out rest m c re_q="\"(([^\"\\\\]|\\\\.)*)\"|'([^']*)'"
+  if [ "$2" = "sql" ]; then
+    case "$1" in *drop*|*alter*|*truncate*|*flush*|*delete*|*update*|*remove*) ;; *) return 1 ;; esac
+    out=$(printf '%s' "$1" | awk "$AWK_SQL" 2>/dev/null)
     while IFS= read -r pt; do
-      [ -n "$pt" ] && sql_destructive "$pt" sql && return 0
-    done <<< "$risky"
+      [ -n "$pt" ] && sql_stmt_destructive "$pt" sql && return 0
+    done <<< "$out"
     return 1
   fi
+  rest=$1; out=""
+  while [[ $rest =~ $re_q ]]; do
+    m=${BASH_REMATCH[0]}; c=${BASH_REMATCH[1]}${BASH_REMATCH[3]}
+    out="$out${rest%%"$m"*} "; rest=${rest#*"$m"}
+    if [ "${m:0:1}" = '"' ]; then c=${c//\\\"/\"}; c=${c//\\\\/\\}; fi
+    sql_destructive "$c" sql && return 0
+  done
+  out="$out$rest"
+  sql_stmt_destructive "${out//$NL/ ; }" shell
+}
+# 문장(또는 따옴표를 뺀 셸 명령) 하나를 판정한다. $2: shell / sql
+sql_stmt_destructive() {
   local t=$1 seg rest stop re_lc re_bc='/\*([^*]|\*+[^*/])*\*+/'
   if [ "$2" = "sql" ]; then stop='[^;]*'; else stop='[^;"]*'; fi
   # 주석(/* … */, -- …)은 지우고 본다 — DELETE FROM x -- where … 가 조건처럼 보이거나 DROP/**/TABLE 로 규칙을 피하지 않게
@@ -582,8 +623,8 @@ check_mcp() {
   if has "$tool" 'sql|execute|migration|query_database|run_query'; then
     local sqltext=""
     # SQL 은 자르지 않고 푼다(unesc_line 은 2만 자에서 자른다 — 큰 SQL 끝의 DROP 을 놓치지 않게)
-    if [ -n "$q" ]; then unesc_short "$q"; sqltext=$UV; fi
-    if [ -z "$sqltext" ]; then case "$input" in *'"sql"'*) jget sql; if [ -n "$JV" ]; then unesc_short "$JV"; sqltext=$UV; fi ;; esac; fi
+    if [ -n "$q" ]; then unesc_nl "$q"; sqltext=$UV; fi
+    if [ -z "$sqltext" ]; then case "$input" in *'"sql"'*) jget sql; if [ -n "$JV" ]; then unesc_nl "$JV"; sqltext=$UV; fi ;; esac; fi
     if [ -n "$sqltext" ] && sql_destructive "$sqltext" sql; then
       block "DB 데이터를 통째로 지우거나 구조를 삭제하는 SQL은 막혀 있습니다." "운영 DB 작업은 사람이 백업을 확인한 뒤 직접 합니다."
     fi
@@ -857,6 +898,21 @@ unquote_simple() {
     else out="$out$m"; fi
   done
   UQ="$out$s"
+}
+# bash 처럼 역슬래시를 푼 모양 → BSV: 따옴표 밖 \X → X(\\ → \), 큰따옴표 안은 \$ \` \" \\ 만, 작은따옴표 안은 그대로
+# (git re\set → git reset, cat .e\nv → cat .env). 경로 판정은 원형으로 하므로 이 모양은 판정 문자열 뒤에 덧붙여서만 쓴다
+unbs() {
+  BSV=$1
+  case "$BSV" in *"$BS"*) ;; *) return 0 ;; esac
+  local s=$1 out="" m o re="\"(([^\"\\\\]|\\\\.)*)\"|'[^']*'"
+  while [[ $s =~ $re ]]; do
+    m=${BASH_REMATCH[0]}; o=${s%%"$m"*}; s=${s#*"$m"}
+    o=${o//"$BS$BS"/$PH}; o=${o//"$BS"/}; o=${o//$PH/$BS}
+    if [ "${m:0:1}" = '"' ]; then m=${m//"$BS$BS"/$PH}; m=${m//"$BS\$"/\$}; m=${m//"$BS\`"/\`}; m=${m//"$BS$Q"/$Q}; m=${m//$PH/$BS}; fi
+    out="$out$o$m"
+  done
+  s=${s//"$BS$BS"/$PH}; s=${s//"$BS"/}; s=${s//$PH/$BS}
+  BSV="$out$s"
 }
 # 패키지 실행기의 셸 모드(npx -c '…' · npx --call … · npm exec -c · pnpm exec -c · yarn exec -c)는 안의 명령만 남긴다 → SC
 strip_call_opt() {
@@ -1441,21 +1497,28 @@ awk_env_print() {
   done
   return 1
 }
-# jq 가 환경변수(env · $ENV)를 통째로 또는 비밀값 이름으로 찍는가(jq -n env · jq -n '$ENV' · env.API_KEY) — .env 같은 필드·파일 이름은 아니다
+# jq 가 환경변수(env · $ENV)를 통째로 또는 비밀값 이름으로 찍는가(jq -n env · jq -n '$ENV' · env.API_KEY)
+# jq 는 대소문자를 가린다: 내장은 env 와 $ENV 뿐이고 $env 는 사용자 변수다. --arg env x 처럼 변수 이름으로 쓴 env 는 빼고 본다.
+# .env 같은 필드·파일 이름(config/env.json)도 아니다
 jq_env() {
   has "$1" "${S}jq[[:space:]]" || return 1
-  local seg nm rest=$1 re_seg="${S}jq[[:space:]][^;&|]*" re='(^|[^./[:alnum:]_-])([$]?env)([.]([A-Za-z_][A-Za-z0-9_]*))?([^[:alnum:]_]|$)' s2
+  local seg nm rest=$1 re_seg="${S}jq[[:space:]][^;&|]*" s2 hit=1
+  local re_arg='--(arg|argjson|slurpfile|rawfile)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+'
+  local re='(^|[^.$/[:alnum:]_-])(env|[$]ENV)([.]([A-Za-z_][A-Za-z0-9_]*))?([^[:alnum:]_]|$)'
   while [[ $rest =~ $re_seg ]]; do
     seg=${BASH_REMATCH[0]}; rest=${rest#*"$seg"}; s2=${seg#*jq}
+    while [[ $s2 =~ $re_arg ]]; do s2=${s2/"${BASH_REMATCH[0]}"/ }; done
+    shopt -u nocasematch
     while [[ $s2 =~ $re ]]; do
-      s2=${s2#*"${BASH_REMATCH[0]}"}
-      nm=${BASH_REMATCH[4]}
-      [ -z "$nm" ] && return 0
-      hascs "$nm" '[A-Z]' || continue   # env.json 같은 파일 이름은 아니다(환경변수 이름은 대문자)
-      safe_env_name "$nm" || return 0
+      s2=${s2#*"${BASH_REMATCH[0]}"}; nm=${BASH_REMATCH[4]}
+      [ -z "$nm" ] && { hit=0; break 2; }
+      [[ $nm =~ [A-Z] ]] || continue   # env.json 같은 파일 이름은 아니다(환경변수 이름은 대문자)
+      safe_env_name "$nm" || { hit=0; break 2; }
     done
+    shopt -s nocasematch
   done
-  return 1
+  shopt -s nocasematch
+  return $hit
 }
 # echo·printf·Write-Host 가 비밀값 이름의 변수를 찍는가
 echo_sens() {
@@ -1682,6 +1745,10 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # lq·lx 를 만든 뒤에는 나머지 판정용 lr 도 단순 따옴표 인자를 벗긴다('node' -e … · cat '.env' 도 같은 명령으로)
   unquote_simple "$lx"; lx=$UQ
   unquote_simple "$lr"; lr=$UQ
+  # 역슬래시로 쪼갠 단어(git re\set --hard · cat .e\nv · n\pm test)는 bash 가 푼 모양을 뒤에 덧붙여 같이 본다.
+  # 원형은 그대로 둔다(윈도우 경로 C:\… 판정). popd 는 앞에서 cd 로 바뀐 기준 폴더를 처음으로 되돌린다(cd_seg)
+  unbs "$lq"; [ "$BSV" != "$lq" ] && lq="$lq ; popd ; $BSV"
+  unbs "$lx"; [ "$BSV" != "$lx" ] && lx="$lx ; popd ; $BSV"
 
   # 1) 사람 전용 ------------------------------------------------------------
   # 새 Claude 세션(claude -p "/refactor:approve …")으로 승인하는 길 — 새 세션의 입력 훅은 그것을 사람 입력으로 본다
@@ -1863,7 +1930,8 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
 
   # 5) DB 삭제·초기화 ------------------------------------------------------
   local dbcli="${S}(psql|pg_restore|mysql|mariadb|sqlite3|sqlcmd|mongo|mongosh|redis-cli|supabase|prisma|drizzle-kit|sequelize|knex|typeorm|rails|rake|artisan|manage\\.py|alembic|turso|wrangler|neonctl|pscale|duckdb|clickhouse|clickhouse-client|cockroach|bq|firebase)${E}"
-  if has "$lq" "$dbcli" && sql_destructive "$lr" shell; then
+  # SQL 은 줄바꿈을 살린 원문으로 본다(줄바꿈이 " ; " 로 바뀐 lr 로는 여러 줄 UPDATE…WHERE 가 두 문장으로 쪼개진다)
+  if has "$lq" "$dbcli" && { unesc_nl "$rawcmd"; fw_norm "$UV"; rm_empty_quotes "$FW"; expand_vars "$EQ"; sql_destructive "$EV" shell; }; then
     block "DB 데이터를 통째로 지우거나 구조를 삭제하는 명령은 막혀 있습니다." "운영 DB 작업은 사람이 백업을 확인한 뒤 직접 합니다."
   fi
   if has "$lq" 'supabase[[:space:]]+db[[:space:]]+reset|prisma[[:space:]]+migrate[[:space:]]+reset|prisma[[:space:]]+db[[:space:]]+push[^;&|]*(--force-reset|--accept-data-loss)|drizzle-kit[[:space:]]+drop|rails[[:space:]]+db:(drop|reset|purge|schema:load)|rake[[:space:]]+db:(drop|reset|purge)|artisan[[:space:]]+(migrate:fresh|migrate:reset|db:wipe)|manage\.py[[:space:]]+(flush|reset_db|sqlflush)|sequelize[^;&|]*db:drop|typeorm[^;&|]*schema:drop|knex[^;&|]*migrate:rollback[^;&|]*--all|firebase[[:space:]]+firestore:delete|turso[[:space:]]+db[[:space:]]+(destroy|delete)|terraform[[:space:]]+destroy|vercel[[:space:]]+(rm|remove)([[:space:]]|$)' \

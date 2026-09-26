@@ -1027,6 +1027,31 @@ UP_L3 = [  # 승인 스크립트: 읽기는 통과, 실행하는 모양만 막�
     (B, bash("cat plugins/refactor/scripts/refactor-approve.sh | bash")),
 ]
 
+# ── 0.2.1 D5b 후속(V 검사관 보고 남은 문제 4·5·6번) ──────────────────────────
+_sql = lambda q: ("mcp__x__execute_sql", {"project_id": "p", "query": q})
+UP_D5B_SQL = [  # 여러 줄 SQL: 주석을 먼저 지우고 따옴표 밖 ; 에서만 문장을 나눈다(줄바꿈은 칸)
+    (OK, _sql("UPDATE users\nSET a=1\nWHERE id=1;")), (OK, _sql("DELETE FROM x\nWHERE id=1")), (OK, _sql("UPDATE x SET note='a;b' WHERE id=1")),
+    (OK, _sql("SELECT 1;\n-- DROP TABLE x\nSELECT 2")),
+    (B, _sql("UPDATE x SET a=1;")), (B, _sql("UPDATE x SET a=1 -- WHERE id=1")), (B, _sql("DELETE FROM x /* WHERE id=1 */;")),
+    (B, _sql("DROP\nTABLE x")), (B, _sql("UPDATE x\nSET a=1")), (B, _sql("UPDATE x SET note='where'")), (B, _sql("DELETE FROM x -- note\n;")),
+    (OK, bash('psql -c "UPDATE users\nSET a=1\nWHERE id=1"')), (OK, bash('psql -c "DELETE FROM x\nWHERE id=1"')),
+    (OK, bash("psql -c \"UPDATE x SET note='a;b' WHERE id=1\"")),
+    (B, bash('psql -c "UPDATE x\nSET a=1"')), (B, bash('psql -c "UPDATE x SET a=1 -- WHERE id=1"')), (B, bash("psql <<EOF\nDROP TABLE x;\nEOF")),
+    (B, bash('Q="DROP TABLE x"; psql -c "$Q"')), (B, bash("mysql -e 'DELETE FROM x'")),
+]
+UP_D5B_BS = [  # 역슬래시로 쪼갠 단어: bash 가 푼 모양도 같이 본다(원형은 경로 판정용으로 그대로)
+    (B, bash("git re\\set --hard")), (B, bash("git reset --ha\\rd")), (B, bash('bash /x/hooks/run.sh refactor-app\\rove "$PWD" --from\\-hook <<< P1-1')),
+    (B, bash("cat .e\\nv")), (B, bash("r\\m -rf ~")),
+    (OK, bash('echo "a\\nb"')), (OK, bash("printf 'a\\tb\\n'")), (OK, bash("grep -E 'a\\.b' src/x.ts")), (OK, bash("sed -e 's/\\//_/g' f")),
+    (OK, bash('cat "C:\\Users\\me\\notes.txt"')), (OK, bash("find . -name \\*.ts")), (OK, bash("ls C:\\\\Users")),
+    (OK, bash("cat > /tmp/n.md <<\\EOF\ngit reset --hard\nEOF")),
+]
+UP_D5B_BS_GO = [(B, bash("n\\pm test")), (OK, bash("n\\pm run lint"))]   # EXECUTE + go 턴
+UP_D5B_JQ = [  # jq: 내장 env·$ENV 만 본다(--arg env 의 env·$env 는 사용자 변수)
+    (OK, bash("jq --arg env prod '.a' f.json")), (OK, bash("jq -n --arg env x '{e:$env}'")), (OK, bash("jq -n 'env.HOME'")),
+    (B, bash("jq -n env")), (B, bash("jq -n '$ENV'")), (B, bash("jq -n 'env.OPENAI_API_KEY'")), (B, bash("jq --arg env x -n env")),
+]
+
 
 def check_upgrade_021(res):
     """0.2.1 보강 항목의 회귀 케이스(목록 + 실제 폴더가 필요한 경우)."""
@@ -1047,6 +1072,8 @@ def check_upgrade_021(res):
         ("0.2.1 V M1 cd 추적(진행 중)", dict(phase="EXECUTE"), UP_M1_ON), ("0.2.1 V M1b 명령 치환 삭제", dict(), UP_M1B),
         ("0.2.1 V M2 npx -c", dict(phase="CHECKUP", allow=(".turn",)), UP_M2), ("0.2.1 V M4v 값 출력 변형", dict(), UP_M4V),
         ("0.2.1 V M5w corepack·eval", dict(phase="EXECUTE", allow=(".turn",)), UP_M5W), ("0.2.1 V L3 승인 스크립트 읽기", dict(), UP_L3),
+        ("0.2.1 D5b 여러 줄 SQL", dict(), UP_D5B_SQL), ("0.2.1 D5b 역슬래시", dict(), UP_D5B_BS),
+        ("0.2.1 D5b 역슬래시 go 턴", dict(phase="EXECUTE", allow=(".turn",)), UP_D5B_BS_GO), ("0.2.1 D5b jq", dict(), UP_D5B_JQ),
     ]:
         proj = make_project(**kw)
         try:
