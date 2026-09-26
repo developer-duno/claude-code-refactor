@@ -2,20 +2,20 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Vibe Refactor — 승인 스크립트 (/refactor:approve 전용)
 #
-# 사용자가 /refactor:approve 를 입력했을 때만 스킬이 실행한다. Claude가 직접 부르는 것은 안전장치 훅이 막는다.
-# 사용자가 입력한 인자는 표준입력으로 받는다(셸 주입 방지).
-#   $1 = 프로젝트 폴더, --session <세션ID> (스킬이 ${CLAUDE_SESSION_ID} 를 넘긴다)
+# 사용자가 입력창에 /refactor:approve 를 치면 입력 훅(turn.sh)이 --from-hook 을 붙여 실행한다 — 승인은 여기서만 처리된다.
+# 스킬의 ! 명령(훅보다 먼저 돈다)도 이 스크립트를 부르지만 --from-hook 이 없으므로 아무것도 바꾸지 않고 현황만 보여 준다.
+# Claude가 직접 부르는 것은 안전장치 훅이 막는다. 사용자가 입력한 인자는 표준입력으로 받는다(셸 주입 방지).
+#   $1 = 프로젝트 폴더, $2 = --from-hook (입력 훅이 부를 때만)
 #   표준입력 = 인자 (예: "P0-1 P1-2" / "P1" / "baseline" / "보류 P1-2" / "확인" / "마무리" / 비움=현황)
-# 1회용 승인 표: 인자가 있는 실행(승인·취소·마무리·확인)은 입력 훅(turn.sh)이 사람이 친 /refactor:approve 를 보고 남긴
-#   docs/refactor/.turn.<세션ID> 첫 줄 "approve <세션ID> <epoch초>" 가 있고, 세션이 같고, 600초 안일 때만 처리한다.
-#   처리 직전에 표를 지운다(한 번 입력에 한 번만). 표가 없거나 만료면 안내하고 exit 3. 인자 없는 현황 보기는 표 없이 된다.
+# --from-hook 이 없으면 인자가 있어도 파일을 하나도 바꾸지 않고, 안내 한 줄 + 현황을 출력하고 exit 0.
+# 인자 없는 현황 보기도 파일을 바꾸지 않는다.
 # 승인 기록을 남길 때마다 기록의 지문을 approved/.log-sum 에 봉인한다. 기록이 이 스크립트 밖에서 바뀌면(봉인과 다르면)
 # 실행 대기가 비워지고, 사람이 git diff 로 확인한 뒤 "확인"을 입력해야 다시 봉인된다.
 # "마무리"는 실행 대기 단계가 없을 때 리팩토링을 끝낸다(STATE를 DONE으로 — 이 기록이 있어야 안전장치가 DONE을 인정).
 #
 # 승인의 근거는 docs/refactor/APPROVALS.log 에 남기는 한 줄(단계 ID + 카드 지문)이다.
 # 계획서의 체크 표시는 사람이 보기 좋게 옮겨 적을 뿐이며, 승인한 카드의 승인 줄만 표준 모양으로 다시 쓴다.
-# exit 0 — 실패하면 스킬 전체가 멈추므로, 문제는 메시지로 알린다. 단 1회용 승인 표가 없을 때만 exit 3(일부러 멈춤).
+# 항상 exit 0 — ! 명령이 0 이 아닌 코드로 끝나면 스킬 호출 전체가 취소되므로, 문제는 메시지로 알린다.
 # ─────────────────────────────────────────────────────────────────────────────
 
 LC_ALL=C
@@ -25,8 +25,8 @@ set -f
 proj=${1:-$PWD}
 proj=${proj//"\\"//}
 proj=${proj%/}
-sess=""
-[ "${2:-}" = "--session" ] && sess=${3:-}
+from_hook=0
+[ "${2:-}" = "--from-hook" ] && from_hook=1
 IFS= read -r -d '' raw || true
 raw=${raw//,/ }
 raw=${raw//$'\r'/ }
@@ -57,25 +57,18 @@ if [ ! -d "$dir" ]; then
   exit 0
 fi
 
-# ── 1회용 승인 표 확인(인자가 있는 실행만) ──────────────────────────────────
-case "$raw" in *[![:space:]]*)
-  ok=0
-  if [[ $sess =~ ^[A-Za-z0-9_-]{1,128}$ ]] && [ -f "$dir/.turn.$sess" ]; then
-    tk=""; ts=""; te=""
-    read -r tk ts te < "$dir/.turn.$sess"
-    te=${te%$'\r'}
-    if [ "$tk" = approve ] && [ "$ts" = "$sess" ] && [[ $te =~ ^[0-9]{1,12}$ ]]; then
-      age=$(( $(date +%s) - te ))
-      [ "$age" -ge 0 ] && [ "$age" -le 600 ] && ok=1
-    fi
-  fi
-  if [ "$ok" != 1 ]; then
-    say "⛔ 이 명령은 사용자가 입력창에서 /refactor:approve 로 입력할 때만 실행됩니다. 안전장치 훅이 켜져 있는지(/hooks) 확인하세요."
-    say "   (아무것도 바꾸지 않았습니다.)"
-    exit 3
-  fi
-  rm -f "$dir/.turn.$sess" ;;
-esac
+# ── 입력 훅 밖(스킬의 ! 명령 등)에서는 아무것도 바꾸지 않는다: 인자를 버리고 현황만 ────────────
+if [ "$from_hook" != 1 ]; then
+  case "$raw" in *[![:space:]]*)
+    say "ℹ️ 승인 처리는 사용자가 입력창에 /refactor:approve 를 칠 때 입력 훅이 합니다 — 결과는 같은 턴의 '[Vibe Refactor 승인 처리 결과]' 블록에 나옵니다"
+    say "   (아래는 처리 전일 수 있는 현황입니다. 이 실행은 아무것도 바꾸지 않았습니다.)"
+    say "" ;;
+  esac
+  raw=""
+fi
+# 파일을 바꿔도 되는 실행인가: 입력 훅이 부르고 인자가 있을 때만(인자 없는 현황 보기는 읽기만)
+rw=0
+case "$raw" in *[![:space:]]*) rw=1 ;; esac
 
 # ── 인자 해석 ────────────────────────────────────────────────────────────────
 # '보류'는 맨 앞에만 쓴다(P1-1 보류 P1-2 처럼 섞으면 무엇을 보류하려는지 모호하므로 거절).
@@ -330,7 +323,7 @@ EOF
       if [ -n "$acted" ]; then
         if [ -n "$first_ready" ]; then nxt="/refactor:go 로 승인된 단계 실행 (다음: $first_ready)"; else nxt="계획서 확인 후 /refactor:approve <단계ID>"; fi
         set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total" -v N="$nxt" -v U="$(rl_today)"
-      else
+      elif [ "$rw" = 1 ]; then
         set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total"
       fi
     fi

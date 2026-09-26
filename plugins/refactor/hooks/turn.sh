@@ -16,8 +16,10 @@
 #      (보고를 보고 "화면 확인하게 서버 켜 줘" 같은 후속 요청도 안전 실행기 규칙 안에서 하도록).
 #    - 2줄에 "ready <이번에 실행해도 되는 단계들>"을 적는다(안전장치가 단계 실행 중 코드 수정을 허락할지 판단).
 #    - "/refactor:go 다시 <단계>" 이면 승인 기록에 재설정 줄을 남긴다 → 그 앞의 승인은 모두 무효(다시 승인해야 실행).
-# 2) 사용자가 /refactor:approve <인자> 를 입력한 턴이면 .turn.<세션ID> 에 "approve <세션ID> <epoch초>"를 적는다.
-#    승인 스크립트는 이 표가 있고(같은 세션·10분 안) 사람이 입력한 턴일 때만 승인·취소·마무리·확인을 처리하고 표를 지운다(1회용).
+# 2) 사용자가 /refactor:approve [인자] 를 입력한 턴이면 이 훅이 승인 스크립트(refactor-approve.sh --from-hook)를 실행하고
+#    그 결과를 "[Vibe Refactor 승인 처리 결과 — 입력 훅]" 블록으로 이번 턴의 컨텍스트(stdout)에 넣는다.
+#    스킬의 ! 명령은 이 훅보다 먼저 돌기 때문에 승인·취소·마무리·확인·baseline 은 스킬이 아니라 여기서 처리한다
+#    (스킬 쪽 실행은 --from-hook 이 없어 현황만 보여 준다). 인자가 없으면 현황만(바꾸는 것 없음). 이 훅은 프롬프트를 막지 않는다(exit 0).
 # 3) 리팩토링 진행 중이면(또는 /refactor:go 턴이면) 턴이 시작될 때 "보호된 파일 중 이미 바뀌어 있던 것"과
 #    승인 기록(APPROVALS.log)의 지문을 .turn-dirty.<세션ID> 에 적어 둔다. 셸 명령 뒤 점검(post-check.sh)은
 #    이 목록에 없던 변경·이 목록에서 사라진 변경만 알리고, 턴 중에 승인 기록이 바뀌면 알린다.
@@ -32,10 +34,12 @@ proj=${proj//"\\"//}
 proj=${proj%/}
 rdir="$proj/docs/refactor"
 
-# 입력은 앞 4KB 만 읽는다(세션 ID·입력 첫머리만 필요). 리팩토링 폴더가 없고 /refactor:go 도 아니면 바로 끝낸다
-input=$(head -c 4096)
+# 입력은 앞 4KB 만 읽는다(세션 ID·입력 첫머리만 필요). 리팩토링 폴더가 없고 /refactor:go·/refactor:approve 도 아니면 바로 끝낸다
+# (외부 명령 대신 bash 내장 read 로 — 이 훅은 매 입력마다 돌고, 바쁜 PC 에서는 외부 명령 한 번이 0.3초 넘게 걸린다)
+input=""
+IFS= read -r -N 4096 input || :
 if [ ! -d "$rdir" ]; then
-  case "$input" in *'/refactor:go'*) ;; *) exit 0 ;; esac
+  case "$input" in *'/refactor:go'*|*'/refactor:approve'*) ;; *) exit 0 ;; esac
 fi
 re_s='"session_id"[[:space:]]*:[[:space:]]*"([^"]*)"'
 if ! [[ $input =~ $re_s ]]; then input="$input$(cat)"; fi
@@ -61,10 +65,35 @@ re_sys='^([[:space:]]|\\[nrt])*<(task-notification|system-reminder|agent-message
 
 T="$rdir/.turn.$sid"
 [ -d "$rdir" ] && {
-  find "$rdir" -maxdepth 1 -name '.turn*' -mmin +1440 -delete 2>/dev/null
+  # 하루 지난 표시 파일 정리는 하루에 한 번만(오늘 날짜를 .turn-sweep 에 적어 두고 날짜가 바뀌었을 때만 find)
+  printf -v today '%(%Y%m%d)T' -1
+  swept=""
+  [ -f "$rdir/.turn-sweep" ] && read -r swept < "$rdir/.turn-sweep"
+  if [ "$swept" != "$today" ]; then
+    find "$rdir" -maxdepth 1 -name '.turn*' -mmin +1440 -delete 2>/dev/null
+    printf '%s\n' "$today" > "$rdir/.turn-sweep" 2>/dev/null
+  fi
   # 0.2.0 이 남긴 세션 공용 .turn 이 이 세션 것이면 지운다(이제 .turn.<세션ID> 를 쓴다)
   if [ -f "$rdir/.turn" ]; then o_kind=""; o_sid=""; read -r o_kind o_sid < "$rdir/.turn"; [ "$o_sid" = "$sid" ] && rm -f "$rdir/.turn"; fi
 }
+
+# /refactor:approve [인자] — 승인 처리는 이 훅이 한다(스킬의 ! 명령이 훅보다 먼저 돌기 때문). 결과는 stdout(이번 턴 컨텍스트)으로.
+# 처리 뒤에는 아래로 이어져 .turn-dirty 스냅숏(처리 뒤 승인 기록 지문)과 go 표시 지우기(다른 슬래시 명령)를 그대로 한다.
+re_approve='^[[:space:]]*/refactor:approve(([[:space:]]|\\[nrt])+(.*))?$'
+if [[ $prompt =~ $re_approve ]]; then
+  a_args=${BASH_REMATCH[3]}
+  # JSON 문자열 속 이스케이프를 되돌린다(\n·\r·\t 는 칸 나눔, \" → ", \\ → \)
+  a_args=${a_args//\\n/ }; a_args=${a_args//\\r/ }; a_args=${a_args//\\t/ }
+  a_args=${a_args//\\\"/\"}; a_args=${a_args//\\\\/\\}
+  if [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$REFACTOR_ROOT/hooks/run.sh" ]; then
+    a_out=$(printf '%s' "$a_args" | bash "$REFACTOR_ROOT/hooks/run.sh" refactor-approve "$proj" --from-hook 2>&1)
+  else
+    a_out="⚠️ 승인 스크립트를 찾지 못해 아무것도 바꾸지 않았습니다(REFACTOR_ROOT 없음). 플러그인을 다시 설치해 주세요."
+  fi
+  printf '%s\n%s\n%s\n' "[Vibe Refactor 승인 처리 결과 — 입력 훅]" "$a_out" \
+    "(이 블록이 승인의 실제 결과입니다. 스킬이 먼저 보여 준 현황은 처리 전 상태일 수 있습니다.)"
+  [ -d "$rdir" ] || exit 0
+fi
 
 phase=""
 if [ -f "$rdir/STATE.md" ]; then
@@ -76,23 +105,47 @@ fi
 
 LIB_OK=0
 load_lib() {
-  local root=${REFACTOR_ROOT:-} lib
+  local root=${REFACTOR_ROOT:-} lib src=""
   [ "$LIB_OK" = 1 ] && return 0
   lib="$root/scripts/refactor-lib.sh"
   [ -n "$root" ] && [ -f "$lib" ] || return 1
-  eval "$(tr -d '\r' < "$lib")"
+  IFS= read -r -d '' src < "$lib"   # 파일 끝에서 1 을 돌려주는 것이 정상(외부 명령 없이 읽는다)
+  eval "${src//$'\r'/}"
+  # 아래 둘은 라이브러리의 rl_log_sum·rl_log_intact 와 같은 값을 내되, 한 턴에 한 번만 재고 외부 명령을 줄인 판이다
+  # (post-check.sh 는 라이브러리의 rl_log_sum 으로 다시 재어 이 값과 비교하므로 결과가 한 글자도 달라서는 안 된다)
+  rl_log_sum() { log_sum "$1"; printf '%s\n' "$SUMV"; }
+  rl_log_intact() {
+    local want="" raw
+    [ -f "$1/APPROVALS.log" ] || return 0
+    [ -f "$1/approved/.log-sum" ] || return 1
+    IFS= read -r -d '' want < "$1/approved/.log-sum"
+    want=${want//[$'\r\n']/}
+    log_sum "$1/APPROVALS.log"; [ "$SUMV" = "$want" ] && return 0
+    raw=$(cksum < "$1/APPROVALS.log"); [ "${raw%% *}.${raw#* }" = "$want" ]   # 0.2.0 방식(원본 바이트) 봉인값
+  }
   LIB_OK=1
+}
+SUMF=""; SUMV=""
+log_sum() { # $1 파일 → SUMV = 줄 끝 \r 을 뺀 내용의 "CRC.길이"(없으면 none). 같은 파일은 한 번만 잰다(기록을 쓰면 SUMF 를 비운다)
+  local c="" s
+  [ "$1" = "$SUMF" ] && return 0
+  SUMF=$1
+  if [ ! -f "$1" ]; then SUMV=none; return 0; fi
+  # \r 이 없으면 cksum 한 번. \r 이 있거나 NUL 이 섞여 끝까지 못 읽었으면(read 가 0) 라이브러리처럼 tr 을 거친다
+  if IFS= read -r -d '' c < "$1" || [[ $c == *$'\r'* ]]; then s=$(tr -d '\r' < "$1" | cksum); else s=$(cksum < "$1"); fi
+  SUMV="${s%% *}.${s#* }"
 }
 snapshot() { # 보호된 파일의 지금 변경 목록 + 승인 기록 지문을 .turn-dirty.<세션ID> 에 적는다
   local D="$rdir/.turn-dirty.$sid"
   load_lib || return 0
-  { rl_protected_dirty "$proj" "$rdir"; printf 'APPROVALS\t%s\n' "$(rl_log_sum "$rdir/APPROVALS.log")"; } > "$D.tmp.$$" 2>/dev/null \
-    && mv "$D.tmp.$$" "$D"
-  rm -f "$D.tmp.$$"
+  log_sum "$rdir/APPROVALS.log"
+  { rl_protected_dirty "$proj" "$rdir"; printf 'APPROVALS\t%s\n' "$SUMV"; } > "$D.tmp.$$" 2>/dev/null \
+    && mv "$D.tmp.$$" "$D" || rm -f "$D.tmp.$$"
 }
 ready_ids() { # 지금 실행해도 되는 단계(승인 기록·지문 일치·미완료·번호 하나, 승인 기록이 봉인 그대로) → READY
   READY=""
-  [ -f "$rdir/REFACTOR_PLAN.md" ] && load_lib || return 0
+  # 승인 기록이 없으면 승인된 단계도 없다(계획서를 읽지 않고 끝)
+  [ -f "$rdir/REFACTOR_PLAN.md" ] && [ -f "$rdir/APPROVALS.log" ] && load_lib || return 0
   rl_log_intact "$rdir" || return 0
   local kind_ n_ id t box done_ cnt k r h hv st
   while IFS="$RL_US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
@@ -106,6 +159,7 @@ reset_approvals() { # $1 단계 — "/refactor:go 다시" : 승인 기록에 재
   [ -f "$log" ] && load_lib || return 0
   rl_log_intact "$rdir" && intact=1
   printf '%s KST | 재설정 | %s | 사용자가 /refactor:go 다시 로 입력\n' "$(rl_now)" "$1" >> "$log"
+  SUMF=""   # 기록이 바뀌었으니 지문을 다시 잰다
   # 기록이 봉인 그대로였을 때만 다시 봉인한다(밖에서 바뀐 기록을 이 줄로 덮어 인정하지 않게)
   [ "$intact" = 1 ] && rl_log_seal "$rdir"
   # 계획서의 승인 체크 표시도 비운다(완료 전 단계만) — 다시 승인할 때까지 "승인 대기"로 보이게
@@ -122,10 +176,9 @@ RST
 
 re_go='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt]|$)'
 re_again='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+다시(([[:space:]]|\\[nrt])+([A-Za-z_]+))?'
-re_approve='^[[:space:]]*/refactor:approve([[:space:]]|\\[nrt])+([^[:space:]\\]|\\[^nrt])'
 re_slash='^[[:space:]]*/'
 if [[ $prompt =~ $re_go ]]; then
-  mkdir -p "$rdir" 2>/dev/null || exit 0
+  [ -d "$rdir" ] || mkdir -p "$rdir" 2>/dev/null || exit 0
   if [ -f "$rdir/.gitignore" ]; then
     has_turn=0
     while IFS= read -r line || [ -n "$line" ]; do [ "${line%$'\r'}" = ".turn*" ] && has_turn=1; done < "$rdir/.gitignore"
@@ -144,12 +197,6 @@ if [[ $prompt =~ $re_go ]]; then
   exit 0
 fi
 
-if [ -d "$rdir" ] && [[ $prompt =~ $re_approve ]]; then
-  printf 'approve %s %s\n' "$sid" "$(date +%s)" > "$T"
-  case "$phase" in "") ;; *) snapshot ;; esac
-  exit 0
-fi
-
 case "$phase" in
   "") ;;
   DONE) load_lib && ! rl_done_confirmed "$rdir" && snapshot ;;   # 사람이 마무리를 확인하기 전의 DONE은 아직 진행 중
@@ -161,7 +208,7 @@ t_kind=""; t_sid=""
 read -r t_kind t_sid < "$T"
 [ "$t_sid" = "$sid" ] || exit 0          # 다른 세션의 표시는 그대로 둔다
 
-# 다른 슬래시 명령, 또는 쓰이지 않고 남은 승인 표는 지운다
+# 다른 슬래시 명령(/refactor:approve 포함), 또는 go 가 아닌 옛 표시(이전 버전의 승인 표 등)는 지운다
 if [[ $prompt =~ $re_slash ]] || [ "$t_kind" != go ]; then
   rm -f "$T"
   exit 0

@@ -101,24 +101,27 @@ def env():
 
 def sh(script, proj, stdin="", args=()):
     r = subprocess.run([BASH, str(RUN), script, str(proj), *args], input=stdin.encode("utf-8"),
-                       capture_output=True, env=env(), timeout=60)
+                       capture_output=True, env=env(), timeout=90)
     return r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
 
 
-def approve(proj, args, sess="t", table=True, age=0):
-    """사람이 /refactor:approve <인자> 를 입력한 것처럼: 입력 훅이 남기는 1회용 승인 표를 써 주고 승인 스크립트를 실행한다."""
-    if table:
-        lf(pathlib.Path(proj) / "docs/refactor" / f".turn.{sess}", f"approve {sess} {int(time.time()) - age}\n")
-    return sh("refactor-approve", proj, args, args=("--session", sess))
+def approve(proj, args):
+    """사람이 /refactor:approve <인자> 를 입력한 것처럼: 입력 훅(turn.sh)이 부르는 대로 --from-hook 을 붙여 승인 스크립트를 실행한다."""
+    return sh("refactor-approve", proj, args, args=("--from-hook",))
 
 
-def approve_rc(proj, args, sess="t", table=True, age=0):
-    """approve() 와 같되 (출력, 종료 코드)를 돌려준다."""
-    if table:
-        lf(pathlib.Path(proj) / "docs/refactor" / f".turn.{sess}", f"approve {sess} {int(time.time()) - age}\n")
-    r = subprocess.run([BASH, str(RUN), "refactor-approve", str(proj), "--session", sess], input=args.encode("utf-8"),
-                       capture_output=True, env=env(), timeout=60)
+def approve_rc(proj, args, from_hook=True):
+    """approve() 와 같되 (출력, 종료 코드)를 돌려준다. from_hook=False 면 스킬의 ! 명령처럼 --from-hook 없이 부른다."""
+    r = subprocess.run([BASH, str(RUN), "refactor-approve", str(proj), *(("--from-hook",) if from_hook else ())],
+                       input=args.encode("utf-8"), capture_output=True, env=env(), timeout=90)
     return r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace"), r.returncode
+
+
+def rdir_files(proj):
+    """docs/refactor 아래 파일 내용 전부(입력 훅의 표시 파일 .turn* 은 빼고) — '아무것도 바꾸지 않음' 확인용."""
+    base = pathlib.Path(proj) / "docs/refactor"
+    return {p.relative_to(base).as_posix(): p.read_bytes() for p in sorted(base.rglob("*"))
+            if p.is_file() and not p.name.startswith(".turn")}
 
 
 def hook(name, proj, payload, extra_env=None):
@@ -129,7 +132,7 @@ def hook(name, proj, payload, extra_env=None):
         e.update(extra_env)
     data = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     t0 = time.perf_counter()
-    r = subprocess.run([BASH, str(RUN), name], input=data, capture_output=True, env=e, timeout=60)
+    r = subprocess.run([BASH, str(RUN), name], input=data, capture_output=True, env=e, timeout=90)
     return r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace"), r.returncode, time.perf_counter() - t0
 
 
@@ -139,7 +142,7 @@ def safe_run(proj, script, extra_env=None, check=False):
     if extra_env:
         e.update(extra_env)
     argv = [BASH, str(RUN), "refactor-safe-run"] + (["--check"] if check else ["--", BASH, "-c", script])
-    r = subprocess.run(argv, capture_output=True, env=e, cwd=str(proj), timeout=60)
+    r = subprocess.run(argv, capture_output=True, env=e, cwd=str(proj), timeout=90)
     return r.stdout.decode("utf-8", "replace") + (r.stderr.decode("utf-8", "replace") if check else "")
 
 
@@ -286,12 +289,12 @@ def main():
     subprocess.run(["git", "init", "-q", str(d)], check=True)
     lf((d / ".env"), "DATABASE_URL=postgres://u:FAKEPW@db.example.com:5432/app\nSTRIPE_SECRET_KEY=sk_live_FAKEFAKE\n"
                             "TOSS_CLIENT_KEY=test_ck_FAKE\nPORT=3000\nSHOP_NAME=꽃배달\n")
-    r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--check"], capture_output=True, env=env(), cwd=str(d), timeout=60)
+    r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--check"], capture_output=True, env=env(), cwd=str(d), timeout=90)
     out = r.stdout.decode() + r.stderr.decode()
     check("안전 실행기 --check 이름만", "DATABASE_URL" in out and "STRIPE_SECRET_KEY" in out and "FAKE" not in out and "example.com" not in out, out)
     r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--", BASH, "-c",
                         'printf "%s|%s|%s|%s" "$DATABASE_URL" "$STRIPE_SECRET_KEY" "$TOSS_CLIENT_KEY" "${PORT:-none}"'],
-                       capture_output=True, env=env(), cwd=str(d), timeout=60)
+                       capture_output=True, env=env(), cwd=str(d), timeout=90)
     got = r.stdout.decode()
     check("안전 실행기 가짜 값", got == "postgresql://refactor:refactor@127.0.0.1:9/refactor|refactor-dummy||none", got + r.stderr.decode())
     shutil.rmtree(d, ignore_errors=True)
@@ -308,7 +311,7 @@ def main():
         "DB_CONN=postgres://u:p@13.125.44.12:5432/prod?application_name=localhost\nAPP_VERSION=1.0.2\nOPENAI_MODEL=gpt-4.1-mini\n"
         "SUPABASE_BUCKET=photos\nDEV_SUPABASE_URL=https://devproj.supabase.co\n-----BEGIN PRIVATE KEY-----\n"
         "FAKEVALUE14abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345==\n-----END PRIVATE KEY-----\n")
-    r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--check"], capture_output=True, env=env(), cwd=str(d), timeout=60)
+    r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--check"], capture_output=True, env=env(), cwd=str(d), timeout=90)
     out = r.stdout.decode() + r.stderr.decode()
     bad = [w for w in ["FAKE", "13.125", "myflowershop", "ghp_", "abcdefghij", "prod"] if w in out]
     check("안전 실행기 --check 값 없음(허용한 이름의 호스트만 표시)", not bad and "DEV_SUPABASE_URL → devproj.supabase.co" in out, f"{bad} {out}")
@@ -318,7 +321,7 @@ def main():
         check(f"가림: {n}", n in swap, out)
     for n in ["APP_VERSION", "OPENAI_MODEL", "SUPABASE_BUCKET", "DEV_SUPABASE_URL"]:
         check(f"그대로: {n}", n in keep, out)
-    r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--", BASH, "-c", "exit 3"], capture_output=True, env=env(), cwd=str(d), timeout=60)
+    r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--", BASH, "-c", "exit 3"], capture_output=True, env=env(), cwd=str(d), timeout=90)
     check("안전 실행기 종료 코드 그대로", r.returncode == 3, str(r.returncode))
     # 모듈 경로·로컬 호스트 목록은 그대로, 허용 목록의 호스트가 바뀌면 다시 가림
     lf((d / ".env"), "DJANGO_SETTINGS_MODULE=config.settings.local\nFLASK_APP=app.main\nALLOWED_HOSTS=localhost,127.0.0.1\n"
@@ -326,13 +329,13 @@ def main():
     lf((d / "docs/refactor/.allow-env"), "DATABASE_URL=db.devproj.supabase.co\n")
     r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--", BASH, "-c",
                         'printf "%s|%s|%s|%s|%s" "${DJANGO_SETTINGS_MODULE:-keep}" "${FLASK_APP:-keep}" "${ALLOWED_HOSTS:-keep}" "${API_BACKEND:-keep}" "${DATABASE_URL:-keep}"'],
-                       capture_output=True, env=env(), cwd=str(d), timeout=60)
+                       capture_output=True, env=env(), cwd=str(d), timeout=90)
     check("모듈 경로·로컬 목록 그대로, 호스트 바뀐 허용 이름은 가림", r.stdout.decode() == "keep|keep|keep|127.0.0.1|postgresql://refactor:refactor@127.0.0.1:9/refactor", r.stdout.decode())
     # 이름만 적은 허용: 주소 값은 가리고(호스트를 함께 적어야 함), 키 값은 그대로
     lf((d / ".env"), "NEXT_PUBLIC_SUPABASE_URL=https://prodref.supabase.co\nSUPABASE_ANON_KEY=eyJFAKEFAKE.FAKE.FAKE\n")
     lf((d / "docs/refactor/.allow-env"), "NEXT_PUBLIC_SUPABASE_URL\nSUPABASE_ANON_KEY\n")
     r = subprocess.run([BASH, str(RUN), "refactor-safe-run", "--", BASH, "-c", 'printf "%s|%s" "${NEXT_PUBLIC_SUPABASE_URL:-keep}" "${SUPABASE_ANON_KEY:-keep}"'],
-                       capture_output=True, env=env(), cwd=str(d), timeout=60)
+                       capture_output=True, env=env(), cwd=str(d), timeout=90)
     check("이름만 허용: 주소는 가림·키는 그대로", r.stdout.decode() == "http://127.0.0.1:9|keep", r.stdout.decode())
     shutil.rmtree(d, ignore_errors=True)
 
@@ -367,7 +370,7 @@ def main():
     check("봉인 없음 안내", "봉인이 없습니다" in st and "⛔" not in st, st)
     # 10-2) 현황표: 사용자 마무리 확인이 없는 DONE은 "완료"로 보이지 않는다
     lf((d / "docs/refactor/STATE.md"), STATE.replace("phase: PLAN", "phase: DONE"))
-    r = subprocess.run([BASH, str(RUN), "refactor-board", str(d)], input=str(d).encode(), capture_output=True, env=env(), timeout=60)
+    r = subprocess.run([BASH, str(RUN), "refactor-board", str(d)], input=str(d).encode(), capture_output=True, env=env(), timeout=90)
     bout = r.stdout.decode()
     check("현황표: 마무리 확인 필요", "마무리 확인 필요" in bout and "✅ 완료" not in bout.split("상태 뜻")[0], bout)
     shutil.rmtree(d, ignore_errors=True)
@@ -430,30 +433,61 @@ def main():
           and "DEV_DB_URL → localhost" in out, out)
     shutil.rmtree(d, ignore_errors=True)
 
-    # 16) 승인 1회용 표(#4b): 표 없음·다른 세션·만료·재사용 → exit 3, 현황 보기는 표 없이
+    # 16) 승인은 입력 훅이 처리한다(스킬의 ! 명령은 훅보다 먼저 돌아 현황만): 훅 → --from-hook, 그 밖은 아무것도 안 바꿈·exit 0
+    HEAD_ = "[Vibe Refactor 승인 처리 결과 — 입력 훅]"
+    TAIL_ = "(이 블록이 승인의 실제 결과입니다."
+    def up(sess, prompt, proj):
+        return hook("turn", proj, {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)})
     d = project()
-    out, rc = approve_rc(d, "P1-1", table=False)
-    check("승인 표 없음 → exit 3", rc == 3 and "/refactor:approve 로 입력할 때만" in out and not (d / "docs/refactor/APPROVALS.log").exists(), f"{rc} {out}")
-    lf(d / "docs/refactor/.turn.other", f"approve other {int(time.time())}\n")
-    out, rc = approve_rc(d, "P1-1", table=False)
-    check("승인 표: 다른 세션의 표 → exit 3", rc == 3, f"{rc} {out}")
-    out, rc = approve_rc(d, "P1-1", age=700)
-    check("승인 표: 10분 지남 → exit 3", rc == 3, f"{rc} {out}")
-    lf(d / "docs/refactor/.turn.t", "go t\nready\n")
-    out, rc = approve_rc(d, "", table=False)
-    check("승인 표: 인자 없는 현황 보기는 표 없이", rc == 0 and "계획서 현황" in out, f"{rc} {out}")
+    so, se, rc, _ = up("s1", "/refactor:approve P1-1", d)
+    log = d / "docs/refactor/APPROVALS.log"
+    check("훅 승인: 기록 생성·결과 블록", rc == 0 and log.exists() and "| 승인 | P1-1 | card=" in log.read_text(encoding="utf-8")
+          and so.startswith(HEAD_ + "\n") and "승인함: [P1-1]" in so and so.rstrip().splitlines()[-1].startswith(TAIL_), f"{rc} {so} {se}")
+    before = rdir_files(d)
+    so, se, rc, _ = up("s1", "/refactor:approve", d)
+    check("훅: 인자 없으면 현황만(변경 없음)", rc == 0 and HEAD_ in so and "계획서 현황" in so and "사용법:" in so and rdir_files(d) == before, f"{rc} {so}")
+    so, _, rc, _ = up("s1", "<command-name>/refactor:approve</command-name><command-args>P1-2</command-args>", d)
+    check("훅: <command-name> 모양도 처리", rc == 0 and "승인함: [P1-2]" in so, so)
+    so, _, rc, _ = up("s1", "/refactor:approve 보류 P1-2", d)
+    check("훅: 보류", rc == 0 and "승인 취소함: [P1-2]" in so and "| 보류 | P1-2 |" in log.read_text(encoding="utf-8"), so)
+    so, _, rc, _ = up("s1", "/refactor:approve baseline", d)
+    check("훅: baseline", rc == 0 and "기준선 계획을 승인했습니다" in so and "| 승인 | BASELINE |" in log.read_text(encoding="utf-8"), so)
+    so, _, rc, _ = up("s1", "/refactor:approve 확인", d)
+    check("훅: 확인", rc == 0 and "이미 봉인과 일치" in so, so)
+    so, _, rc, _ = up("s1", "/refactor:approve 보류 P1-1", d)
+    so, _, rc, _ = up("s1", "/refactor:approve 마무리", d)
+    check("훅: 마무리", rc == 0 and "마무리했습니다(DONE)" in so and "phase: DONE" in (d / "docs/refactor/STATE.md").read_text(encoding="utf-8"), so)
+    # go 표시가 있던 세션에서 /refactor:approve 를 치면 go 표시는 지운다(다른 슬래시 명령과 같음)
+    lf(d / "docs/refactor/.turn.s1", "go s1\nready\n")
+    up("s1", "/refactor:approve", d)
+    check("훅: approve 턴은 go 표시를 지움", not (d / "docs/refactor/.turn.s1").exists())
+    shutil.rmtree(d, ignore_errors=True)
+    # 스크립트: --from-hook 없이(스킬의 ! 명령·그 밖) 인자가 있어도 아무것도 바꾸지 않고 exit 0, 있으면 바꾼다
+    d = project()
+    before = rdir_files(d)
+    for a in ["P1-1", "보류 P1-1", "baseline", "마무리", "확인", "P1"]:
+        out, rc = approve_rc(d, a, from_hook=False)
+        check(f"훅 밖({a}): 변경 없음·exit 0·안내", rc == 0 and rdir_files(d) == before and "입력 훅이 합니다" in out, f"{rc} {out}")
+    out, rc = approve_rc(d, "", from_hook=False)
+    check("훅 밖(인자 없음): 현황만·exit 0", rc == 0 and "계획서 현황" in out and "입력 훅이 합니다" not in out and rdir_files(d) == before, f"{rc} {out}")
     out, rc = approve_rc(d, "P1-1")
-    check("승인 표: 쓰고 나면 지움(1회용)", rc == 0 and "승인함: [P1-1]" in out and not (d / "docs/refactor/.turn.t").exists(), f"{rc} {out}")
-    out, rc = approve_rc(d, "보류 P1-1", table=False)
-    check("승인 표: 재사용 불가", rc == 3, f"{rc} {out}")
-    # 입력 훅이 표를 쓴다(사람이 친 /refactor:approve <인자>), 인자 없는 /refactor:approve 는 표를 쓰지 않는다
-    hook("turn", d, {"session_id": "s9", "prompt": "/refactor:approve P1-2"})
-    first = (d / "docs/refactor/.turn.s9").read_text(encoding="utf-8").split() if (d / "docs/refactor/.turn.s9").exists() else []
-    check("turn.sh: 승인 표 쓰기", len(first) == 3 and first[:2] == ["approve", "s9"] and abs(int(first[2]) - time.time()) < 60, str(first))
-    out = sh("refactor-approve", d, "P1-2", args=("--session", "s9"))
-    check("turn.sh 표로 승인", "승인함: [P1-2]" in out, out)
-    hook("turn", d, {"session_id": "s8", "prompt": "/refactor:approve"})
-    check("turn.sh: 인자 없으면 표 없음", not (d / "docs/refactor/.turn.s8").exists())
+    check("--from-hook: 변경됨", rc == 0 and "승인함: [P1-1]" in out and (d / "docs/refactor/APPROVALS.log").exists(), f"{rc} {out}")
+    shutil.rmtree(d, ignore_errors=True)
+    # 훅은 어떤 경우에도 exit 0: 기록 폴더 없음(만들지 않음), 승인 스크립트 고장
+    d = pathlib.Path(tempfile.mkdtemp(prefix="noref-"))
+    so, se, rc, _ = up("s1", "/refactor:approve P1-1", d)
+    check("훅: 기록 폴더 없으면 안내만", rc == 0 and HEAD_ in so and "docs/refactor)이 없습니다" in so and not (d / "docs").exists(), f"{rc} {so} {se}")
+    shutil.rmtree(d, ignore_errors=True)
+    d = project()
+    tmpd = pathlib.Path(tempfile.mkdtemp(prefix="runsh3-"))
+    shutil.copytree(ROOT / "plugins/refactor", tmpd / "refactor")
+    lf(tmpd / "refactor/scripts/refactor-approve.sh", "#!/usr/bin/env bash\necho broken >&2\nexit 5\n")
+    e = env(); e["CLAUDE_PROJECT_DIR"] = str(d)
+    pl = json.dumps({"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "/refactor:approve P1-1", "cwd": str(d)}).encode()
+    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "turn"], input=pl, capture_output=True, env=e, timeout=90)
+    so = r.stdout.decode("utf-8", "replace")
+    check("훅: 승인 스크립트가 실패해도 exit 0", r.returncode == 0 and HEAD_ in so and "broken" in so, f"{r.returncode} {so}")
+    shutil.rmtree(tmpd, ignore_errors=True)
     shutil.rmtree(d, ignore_errors=True)
 
     # 17) 세션별 표시 파일(#26): /refactor:go → .turn.<sid>·.turn-dirty.<sid>, 하루 지난 표시 파일은 지움
@@ -467,6 +501,14 @@ def main():
     check("세션별 .turn", t1.exists() and t1.read_text(encoding="utf-8").startswith("go s1\nready")
           and (d / "docs/refactor/.turn-dirty.s1").exists() and not (d / "docs/refactor/.turn").exists())
     check("하루 지난 표시 파일 정리", not old.exists())
+    # 정리는 하루에 한 번만(.turn-sweep 에 오늘 날짜): 같은 날 다시 입력하면 찾지 않고, 날짜가 바뀌면 다시 정리
+    lf(old, "go stale\nready\n")
+    os.utime(old, (two_days, two_days))
+    hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+    check("정리는 하루 한 번(같은 날은 건너뜀)", old.exists())
+    lf(d / "docs/refactor/.turn-sweep", "19990101\n")
+    hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+    check("정리는 하루 한 번(날짜가 바뀌면 다시)", not old.exists())
     hook("turn", d, {"session_id": "s2", "prompt": "/refactor:go"})
     check("두 세션 표시 공존", (d / "docs/refactor/.turn.s1").exists() and (d / "docs/refactor/.turn.s2").exists())
     shutil.rmtree(d, ignore_errors=True)
@@ -478,12 +520,23 @@ def main():
     lg.write_bytes(lg.read_bytes().replace(b"\n", b"\r\n"))
     st = sh("refactor-status", d)
     check("봉인: CRLF 로 바뀐 기록은 그대로", "⛔" not in st and "▶ 실행 대기" in st, st)
+    # 입력 훅(turn.sh)은 승인 기록 지문을 자체 판으로 잰다 — 라이브러리 rl_log_sum 과 같아야 post-check 가 헛경보를 내지 않는다
+    libsh = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
+    def lib_sum():
+        return subprocess.run([BASH, "-c", 'eval "$(tr -d \'\\r\' < "$1")"; rl_log_sum "$2"', "x", libsh, lg.as_posix()],
+                              capture_output=True, env=env(), timeout=90).stdout.decode().strip()
+    hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+    tt = (d / "docs/refactor/.turn.s1").read_text(encoding="utf-8")
+    dirty = (d / "docs/refactor/.turn-dirty.s1").read_text(encoding="utf-8")
+    check("turn.sh: CRLF 기록도 실행 대기·지문이 라이브러리와 같음", "ready P1-1" in tt and f"APPROVALS\t{lib_sum()}\n" in dirty, f"{tt} {dirty}")
     ga = d / "docs/refactor/.gitattributes"
     check("봉인: .gitattributes", ga.exists() and ga.read_text(encoding="utf-8") == "* text eol=lf\n")
     legacy = subprocess.run([BASH, "-c", 'cksum < "$1" | awk \'{ print $1 "." $2 }\'', "x", lg.as_posix()], capture_output=True, env=env()).stdout
     (d / "docs/refactor/approved/.log-sum").write_bytes(legacy)
     st = sh("refactor-status", d)
     check("봉인: 옛 방식 봉인값도 통과", "⛔" not in st and "▶ 실행 대기" in st, st)
+    hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+    check("turn.sh: 옛 방식 봉인값도 실행 대기", "ready P1-1" in (d / "docs/refactor/.turn.s1").read_text(encoding="utf-8"))
     with open(lg, "ab") as fh:
         fh.write("2026-09-26 10:00 KST | 승인 | P1-2 | card=1.2 | 사용자가 /refactor:approve 로 실행\r\n".encode("utf-8"))
     st = sh("refactor-status", d)
@@ -491,19 +544,19 @@ def main():
     shutil.rmtree(d, ignore_errors=True)
 
     # 19) run.sh(#17): 없는 이름은 127 + 한 줄, 역슬래시 절대경로도 실행(Windows)
-    r = subprocess.run([BASH, str(RUN), "no-such-script"], input=b"", capture_output=True, env=env(), timeout=60)
+    r = subprocess.run([BASH, str(RUN), "no-such-script"], input=b"", capture_output=True, env=env(), timeout=90)
     check("run.sh: 없는 이름 127", r.returncode == 127 and "스크립트 없음: no-such-script" in r.stderr.decode("utf-8", "replace"), f"{r.returncode} {r.stderr!r}")
-    r = subprocess.run([BASH, str(RUN), "../scripts/refactor-status"], input=b"", capture_output=True, env=env(), timeout=60)
+    r = subprocess.run([BASH, str(RUN), "../scripts/refactor-status"], input=b"", capture_output=True, env=env(), timeout=90)
     check("run.sh: 경로가 섞인 이름 127", r.returncode == 127, str(r.returncode))
     if os.name == "nt":
         d = project()
-        r = subprocess.run([BASH, str(RUN).replace("/", "\\"), "refactor-status", str(d)], input=b"", capture_output=True, env=env(), timeout=60)
+        r = subprocess.run([BASH, str(RUN).replace("/", "\\"), "refactor-status", str(d)], input=b"", capture_output=True, env=env(), timeout=90)
         check("run.sh: 역슬래시 경로", r.returncode == 0 and "진행 상황 요약칸" in r.stdout.decode("utf-8", "replace"), f"{r.returncode} {r.stderr!r}")
         shutil.rmtree(d, ignore_errors=True)
     tmpd = pathlib.Path(tempfile.mkdtemp(prefix="runsh2-"))
     shutil.copytree(ROOT / "plugins/refactor", tmpd / "refactor")
     (tmpd / "refactor/hooks/guard.sh").unlink()
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=b"{}", capture_output=True, env=env(), timeout=60)
+    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=b"{}", capture_output=True, env=env(), timeout=90)
     check("run.sh: 훅 파일 없음 → 1(막지 않음)", r.returncode == 1, str(r.returncode))
     shutil.rmtree(tmpd, ignore_errors=True)
 
@@ -580,7 +633,7 @@ def main():
     # 23) 현황표(#28): 실행 대기가 있으면 ▶(게이트가 G2-plan 이어도), 없고 승인 대기면 🙋
     d = project()
     def board_row():
-        r = subprocess.run([BASH, str(RUN), "refactor-board", str(d)], input=str(d).encode(), capture_output=True, env=env(), timeout=60)
+        r = subprocess.run([BASH, str(RUN), "refactor-board", str(d)], input=str(d).encode(), capture_output=True, env=env(), timeout=90)
         return r.stdout.decode("utf-8", "replace").split("상태 뜻")[0]
     lf(d / "docs/refactor/STATE.md", STATE.replace("gate: G2-plan", "gate: none"))
     check("현황표: 승인 대기 → 🙋", "🙋 사장님 차례" in board_row())

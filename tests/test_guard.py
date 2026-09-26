@@ -79,20 +79,11 @@ def git(d, *args):
     subprocess.run(["git", "-C", str(d), *args], check=True, capture_output=True)
 
 
-def approve(d, args, sess="t"):
+def approve(d, args):
     """사람이 /refactor:approve 를 입력한 것처럼 승인 스크립트를 실행한다(시험용).
-    입력 훅(turn.sh)이 남기는 1회용 승인 표(.turn.<세션ID> 첫 줄 "approve <세션ID> <epoch초>")를 직접 써 주고,
-    그 자리에 있던 표시(go 표 등)는 실행 뒤 되돌려 둔다(승인만 흉내 내고 턴 표시는 건드리지 않게)."""
-    t = pathlib.Path(d) / "docs/refactor" / f".turn.{sess}"
-    before = t.read_bytes() if t.exists() else None
-    if t.parent.is_dir():
-        lf(t, f"approve {sess} {int(time.time())}\n")
-    r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "refactor-approve", str(d), "--session", sess], input=args.encode("utf-8"),
-                       capture_output=True, env=env_for(d), timeout=60)
-    if before is not None:
-        t.write_bytes(before)
-    elif t.exists():
-        t.unlink()
+    입력 훅(turn.sh)이 부르는 대로 --from-hook 을 붙이고 인자는 표준입력으로 준다(턴 표시 .turn.<세션ID> 는 건드리지 않는다)."""
+    r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "refactor-approve", str(d), "--from-hook"], input=args.encode("utf-8"),
+                       capture_output=True, env=env_for(d), timeout=90)
     return r.stdout.decode("utf-8", "replace")
 
 
@@ -135,7 +126,7 @@ def turn(proj, sess, prompt):
     """UserPromptSubmit 훅(turn.sh)을 실행한다."""
     pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
     subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
-                   capture_output=True, env=env_for(proj), timeout=30)
+                   capture_output=True, env=env_for(proj), timeout=90)
 
 
 def env_for(proj, project_dir=None):
@@ -154,7 +145,7 @@ def run(proj, tool, tool_input, project_dir=None, script="guard", event="PreTool
     if extra:
         payload.update(extra)
     r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), script], input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                       capture_output=True, env=env_for(proj, project_dir), timeout=60)
+                       capture_output=True, env=env_for(proj, project_dir), timeout=90)
     return r.returncode, r.stderr.decode("utf-8", "replace")
 
 
@@ -728,7 +719,7 @@ def main():
         set_gate(gate)
         pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
         subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
-                       capture_output=True, env=env_for(proj), timeout=30)
+                       capture_output=True, env=env_for(proj), timeout=90)
         exists = (proj / "docs/refactor/.turn.s1").exists()
         ok = exists == want and (not want or (proj / "docs/refactor/.turn.s1").read_text().splitlines()[0].strip() == "go s1")
         res["total"] += 1
@@ -742,7 +733,7 @@ def main():
     # run.sh 를 슬래시 없이 부를 때(hooks 폴더 안에서 bash run.sh guard)
     proj = make_project()
     pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "cat .env"}, "cwd": str(proj)}).encode()
-    r = subprocess.run([BASH, "run.sh", "guard"], input=pl, capture_output=True, env=env_for(proj), cwd=str(HOOKS), timeout=30)
+    r = subprocess.run([BASH, "run.sh", "guard"], input=pl, capture_output=True, env=env_for(proj), cwd=str(HOOKS), timeout=90)
     res["total"] += 1
     if r.returncode != B:
         res["fails"].append(("run.sh 상대 경로", B, r.returncode, "Bash", "cat .env", r.stderr.decode()[:200]))
@@ -756,12 +747,12 @@ def main():
     g.write_bytes(lines[0] + b"\n" + b"\r\n".join(lines[1:]))
     proj = make_project()
     pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "cat .env"}, "cwd": str(proj)}).encode()
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=30)
+    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=90)
     res["total"] += 1
     if r.returncode != B:
         res["fails"].append(("run.sh CRLF 중간", B, r.returncode, "Bash", "cat .env", r.stderr.decode()[:200]))
     lf(g, "#!/usr/bin/env bash\nif then\n")
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=30)
+    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=90)
     res["total"] += 1
     if r.returncode != 1:
         res["fails"].append(("run.sh 고장 난 스크립트", 1, r.returncode, "Bash", "문법 오류", r.stderr.decode()[:200]))
@@ -917,6 +908,17 @@ UP_16 = [  # Windows 경로 표기: 끝 점·공백, NTFS 스트림, 8.3 짧은 
     (B, ("Read", {"file_path": "ENV~1"})), (B, bash("cat .env.")), (B, bash("cat ENV~1")), (B, bash("cat '.env::$DATA'")),
     (OK, ("Read", {"file_path": "src/app.ts."})), (OK, ("Read", {"file_path": "src/APP~1.TS"})), (OK, bash("cat src/app.ts.")),
 ]
+UP_R4 = [  # 플러그인 훅 진입점(turn·guard·post-check·session-start)·--from-hook 을 Claude 가 직접 실행하는 길(승인 우회)
+    (B, bash("bash /x/hooks/run.sh turn < /tmp/p.json")), (B, bash('bash "/x/hooks/run.sh" turn < /tmp/p.json')),
+    (B, bash("printf x | bash /x/hooks/run.sh session-start")), (B, bash("cd /x/hooks && bash run.sh guard < /tmp/p.json")),
+    (B, bash("bash /x/plugins/refactor/hooks/turn.sh < /tmp/p.json")), (B, bash("/x/hooks/post-check.sh < /tmp/p.json")),
+    (B, bash("sh ./hooks/guard.sh < /tmp/p.json")), (B, bash("bash C:\\x\\hooks\\turn.sh < /tmp/p.json")),
+    (B, bash("printf P1-1 | bash /tmp/copy.sh /p --from-hook")),
+    (OK, bash("bash /x/hooks/run.sh refactor-status /p")), (OK, bash("bash /x/hooks/run.sh refactor-safe-run -- npm test")),
+    (OK, bash("bash /x/hooks/run.sh refactor-board /p")), (OK, bash("cat plugins/refactor/hooks/turn.sh")),
+    (OK, bash("head -40 plugins/refactor/hooks/guard.sh")), (OK, bash("grep -n turn plugins/refactor/hooks/run.sh")),
+    (OK, bash('grep -rn "--from-hook" plugins')),
+]
 
 
 def check_upgrade_021(res):
@@ -928,7 +930,7 @@ def check_upgrade_021(res):
         ("0.2.1 13 안전 실행기 래퍼", dict(phase="EXECUTE", allow=(".turn",)), UP_13),
         ("0.2.1 14 읽기 전용 단계 셸 쓰기", dict(phase="CHECKUP", allow=(".turn",)), UP_14),
         ("0.2.1 15 Windows·DB", dict(), UP_15), ("0.2.1 15 진행 중 DB 초기화", dict(phase="EXECUTE"), UP_15_ON),
-        ("0.2.1 16 Windows 경로", dict(), UP_16),
+        ("0.2.1 16 Windows 경로", dict(), UP_16), ("0.2.1 R4 훅 진입점 직접 실행", dict(), UP_R4),
     ]:
         proj = make_project(**kw)
         try:

@@ -1449,6 +1449,13 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
 
   # 1) 사람 전용 ------------------------------------------------------------
   has "$lr" 'refactor-approve' && block "승인 스크립트는 사용자가 /refactor:approve 명령으로만 실행합니다." "$MSG_APPROVE"
+  # 플러그인 훅 진입점(turn·guard·post-check·session-start)을 직접 실행하는 길 — 입력 훅을 흉내 내 승인을 처리하는 우회(읽기는 통과)
+  if has "$lq" "run\\.sh[\"']?[[:space:]]+[\"']?(turn|guard|post-check|session-start)([\"'[:space:];&|)]|$)" \
+    || has "$lq" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|exec|\\.)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
+    || has "$lq" "(^|[;&|(])[[:space:]]*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
+    || has "$lq" '--from-hook'; then
+    block "플러그인 훅(turn·guard·post-check·session-start)은 Claude Code 가 사용자 입력·도구 호출 때 실행합니다(사람 전용). 승인은 사용자가 /refactor:approve 를 입력할 때 입력 훅이 처리합니다." "$MSG_APPROVE"
+  fi
   if writes_to '(docs/refactor/)?\.allow-[a-z-]+|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/' || interp_writes '\.allow-|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/'; then
     block "허용 파일(.allow-*)·승인 기록(APPROVALS.log)·.turn 은 사람과 플러그인만 만들고 지웁니다." "$MSG_HUMAN"
   fi

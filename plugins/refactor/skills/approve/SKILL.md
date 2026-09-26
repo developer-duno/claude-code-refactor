@@ -9,17 +9,19 @@ disallowed-tools: Write, Edit, NotebookEdit
 
 # 승인 처리 결과
 
-아래는 사용자가 직접 입력한 `/refactor:approve` 명령을 승인 스크립트가 처리한 결과다. 승인은 `APPROVALS.log`에 단계 ID와 카드 지문(그 순간의 카드 내용)으로 기록됐고, 계획서의 승인 칸·STATE도 **이미 바뀌었다.** 승인 뒤 카드 내용이 바뀌면 그 승인은 풀린다는 것을 한 줄로 알려 준다.
+**승인의 실제 결과는 같은 턴에 입력 훅이 넣은 `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록이다.** 사용자가 입력창에 `/refactor:approve` 를 치면 입력 훅이 승인 스크립트를 실행해 `APPROVALS.log`에 단계 ID와 카드 지문(그 순간의 카드 내용)을 기록하고 계획서의 승인 칸·STATE를 바꾼다. 그 블록을 기준으로 사용자에게 3~6줄로 전한다. 승인 뒤 카드 내용이 바뀌면 그 승인은 풀린다는 것을 한 줄로 알려 준다.
+
+아래 `!` 출력은 처리 전 현황일 수 있다(스킬의 명령은 입력 훅보다 먼저 돌고, 아무것도 바꾸지 않는다). **그 블록이 없으면 안전장치 훅이 꺼졌거나 시간 안에 끝나지 못한 것이다 — 승인됐다고도, 안 됐다고도 단정하지 말고, `/refactor:approve`(인자 없이)로 현황을 다시 확인하고 `/hooks` 에서 refactor 훅을 확인하라고 안내한다.**
 
 ```!
-bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-approve "${CLAUDE_PROJECT_DIR}" --session "${CLAUDE_SESSION_ID}" <<'VIBE_REFACTOR_ARGS'
+bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-approve "${CLAUDE_PROJECT_DIR}" <<'VIBE_REFACTOR_ARGS'
 $ARGUMENTS
 VIBE_REFACTOR_ARGS
 ```
 
 ## 너의 할 일 (짧게)
 
-1. 결과를 비개발자가 알아듣게 3~6줄로 전한다: 무엇이 승인·취소됐는지, 다음에 입력할 명령.
+1. 입력 훅 블록의 결과를 비개발자가 알아듣게 3~6줄로 전한다: 무엇이 승인·취소됐는지, 다음에 입력할 명령.
 2. **👤 사람이 직접 할 일**이 "없음"이 아닌 단계가 있으면 맨 위에 굵게 적는다. 그중 단계 실행 **전에** 끝나야 하는 것(예: 결제사 테스트 키 발급, DB 백업 확인, 비공개 저장소 만들기)은 "이것부터 해 주세요"라고 먼저 말한다.
 3. 다음 명령 안내:
    - 실행 대기(승인됨) 단계가 있으면 → `/refactor:go` (한 번에 한 단계씩 실행하고 멈춘다)
