@@ -10,7 +10,7 @@
       "name": "refactor",
       "source": "./plugins/refactor",
       "description": "운영 중인 서비스를 안전한 순서(건강검진 → 기준선 → 계획서 → 승인된 단계 실행)로 리팩토링하는 지휘자·감사관·안전장치 묶음",
-      "version": "0.2.1"
+      "version": "0.2.2"
     }
   ]
 }

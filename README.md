@@ -3,7 +3,7 @@
 운영 중인 서비스를 AI로 **안전하게** 리팩토링하는 Claude Code 플러그인입니다.
 누구나 쓸 수 있는 공개 플러그인(MIT)이고, 화면 문구와 문서는 모두 한국어입니다(**한국어 전용 플러그인**).
 
-![version](https://img.shields.io/badge/version-0.2.1-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+![version](https://img.shields.io/badge/version-0.2.2-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
 
 > **English summary**
 > - **What it is:** A Korean-only Claude Code plugin that refactors a live service in a fixed order — code map, 25-item health check, deep audit, rebuttal review, baseline tests, plan — and then changes code only for steps a human approved, one step at a time.
@@ -157,7 +157,7 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 
 | 언제 | 막는 것 |
 |---|---|
-| **항상** (플러그인이 켜진 모든 대화) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기·출력·복사·전송·수정하는 명령과 도구, 환경변수 전체 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색, git이 무시하지 않는 `.env`가 든 범위의 내용 검색 · 강제 push, `reset --hard`, `clean -f`, `checkout .`, `branch -D`, 기록 다시 쓰기, `rm -rf ~`·프로젝트 통째 삭제 같은 대량 삭제, DB 삭제·초기화 · 승인 스크립트와 플러그인 훅을 직접 부르기, 승인 기록(`APPROVALS.log`)·허용 파일(`.allow-*`)·`.turn*`을 만들기·복사·이동·개명·압축 해제로 바꾸기, 계획서 승인 칸 체크, 플러그인 폴더 수정 · MCP 도구나 하위 에이전트 지시로 위 금지를 우회하기 |
+| **항상** (플러그인이 켜진 모든 대화) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기·출력·복사·전송·수정하는 명령과 도구, 환경변수 전체 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색, git이 무시하지 않는 `.env`가 든 범위의 내용 검색 · 강제 push, `reset --hard`, `clean -f`, `checkout .`, `branch -D`, 원격 가지·저장소 삭제(`gh api -X DELETE`·`gh repo delete` 포함), 기록 다시 쓰기, `rm -rf ~`·프로젝트 통째 삭제 같은 대량 삭제, DB 삭제·초기화 · 승인 스크립트와 플러그인 훅을 직접 부르기, 승인 기록(`APPROVALS.log`)·허용 파일(`.allow-*`)·`.turn*`을 만들기·복사·이동·개명·압축 해제로 바꾸기, 계획서 승인 칸 체크, 플러그인 폴더 수정 · MCP 도구나 하위 에이전트 지시로 위 금지를 우회하기 |
 | **리팩토링 진행 중** (`docs/refactor/STATE.md`가 있고 마무리 전) | push·배포·원격 서버 명령, DB 구조 적용(마이그레이션), 원격 DB 접속, MCP로 운영 DB 조회·배포·메시지 발송, 플러그인 끄기, Claude 설정 수정, `git stash`, 파일을 지정하지 않은 `git log -p`, 프로젝트 전체 포맷터 · 커밋된 기준선 테스트와 마이그레이션 파일 수정(스냅숏 갱신 옵션 포함) |
 | **`/refactor:go` 실행 중** | 대표 실행 명령(npm·pnpm·yarn·bun·npx, python·node·deno, pytest, uv·poetry·pipenv run, make, turbo·nx, docker compose 등)은 안전 실행기로만 · 읽기 전용 단계, 그리고 승인된 실행 대기 단계가 없을 때는 `docs/refactor/` 밖 수정 금지 |
 | **너무 긴 입력** | 셸 명령 16KB(MCP 도구의 명령 칸 포함) · Grep 입력·Edit의 바꿀 부분·파일 경로 32KB · 하위 에이전트(Agent) 지시문 32KB(바이트 기준이라 한글만 쓰면 약 1만 글자) 또는 2,000줄을 넘거나, Grep 검색 범위가 너무 넓으면(폴더 200개 또는 5초 이상) 판정하지 않고 막습니다 — 파일로 저장해 실행하거나 범위를 좁히세요. **Write 본문과 MCP 도구(노션·DB·메일 등) 입력은 크기로 막지 않습니다** — 큰 파일 쓰기·긴 문서·큰 SQL은 정상 작업이기 때문입니다. 대신 그 안의 경로·명령 규칙은 크기와 상관없이 적용되고, SQL은 256KB까지 문장마다 판정하며 그보다 크면 위험한 낱말(DROP·DELETE 등)이 하나라도 있을 때 막습니다 |
@@ -169,6 +169,10 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 - 비밀이 아닌 환경변수 이름만 지정해 보는 명령: `printenv PATH`, `printenv HOME`, `env | grep PATH`, `echo $HOME` 등. **이름만 보는** `env | cut -d= -f1`, `printenv | cut -d= -f1`도 허용됩니다(값이 안 나오므로). 막히는 것은 `env`·`printenv`·`set`처럼 **값이 함께** 나오는 덤프입니다 — 어떤 이름이 있는지는 안전 실행기 `--check`로 보세요.
 - `.env`가 **아직 없을 때만** 하는 `cp .env.example .env`(이미 있으면 덮어쓰기라 막음). `.env.local`처럼 없는 파일로 복사하는 것도 허용.
 - `git config --list`, `.envrc`(direnv) 읽기.
+- 원격 주소를 **개수만** 세는 확인(`git config --get-regexp 'remote\..*\.url' | grep -c x-access-token`)과 원격이 아닌 항목만 보는 `git config --get-regexp '^(user|credential)\.'`. 원격 주소 원문이 필요하면 가려서 보세요: `git remote -v | sed -E 's#//[^/@]*@#//****@#'`.
+- 문서·메모를 heredoc(`cat >> 메모.md <<'EOF'`, `tee -a 메모.md <<'EOF'`)으로 쓸 때 본문에 `.env`·`credentials.json` 같은 **이름이 나오기만** 하는 것. 따옴표 없는 `<<EOF`는 본문이 셸에서 풀리므로 `$(…)`로 비밀 파일을 여는 줄은 계속 막고, 쓴 파일을 같은 명령에서 실행하면(`| bash`, `bash x.md` 등) 본문 전체를 봅니다. `python -`·`node -`처럼 **코드를 실행하는** heredoc은 본문 전체를 보므로, 코드 안 글에 이런 이름이 나오면 막힙니다 — 그럴 때는 편집 도구로 쓰세요.
+- `bash -c '…'` 안에서 `.md` 파일을 이어 붙이는 것(`cat a.md >> b.md`). `.md`를 **실행**하는 것(`bash x.md`, `source x.md`)만 막습니다.
+- `test -f .env`·`[ -f .env ]`처럼 있는지만 보는 확인.
 - `node_modules`·`.next`·`dist`·`build` 같은 폴더 지우기.
 
 > 훅은 도구를 쓸 때마다 실행되므로 조금 느려집니다. 이 PC 실측으로 호출마다 0.15~0.4초 정도이고, 컴퓨터가 매우 바쁠 때는 몇 초까지 늘 수 있습니다.
@@ -186,7 +190,8 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 ### 6-4. 한계
 
 - 안전장치는 **흔한 위험 명령을 모양으로 알아보고 막는 보조 장치**입니다. 스크립트를 거친 수정, 일부러 꼬아 쓴 명령 등 모든 우회를 막지는 못합니다. 사고(실수)를 줄이는 장치이지, 악의적인 공격을 막는 장치가 아닙니다. **보조 안전망이지 벽이 아닙니다.**
-- 이름을 쪼개거나 조립하는 우회는 **알려진 모양만** 막습니다. 따옴표·역슬래시·빈 변수·`$'…'`·글로브로 쪼갠 이름, 새 Claude 세션에 넘긴 승인 명령, 한 줄 인터프리터 코드 안의 승인 스크립트는 막습니다. 하지만 `printf`·`eval`로 글자를 이어 붙이거나, 명령을 파일에 적어 두었다가 다음 도구 호출에서 실행하거나, 새 Claude 세션에 파일로 넘기는 것(`claude -p < 파일`)은 명령 글자만 보고는 알아볼 수 없습니다.
+- 이름을 쪼개거나 조립하는 우회는 **알려진 모양만** 막습니다. 따옴표·역슬래시·빈 변수·`$'…'`·중괄호·글로브로 쪼갠 이름은 승인·훅 진입점·되돌릴 수 없는 git 명령·원격 가지 삭제·대량 삭제·DB 초기화 규칙(리팩토링 중에는 배포·마이그레이션·원격 DB 규칙까지)에서 막고, 새 Claude 세션에 넘긴 승인 명령과 한 줄 인터프리터 코드 안의 승인 스크립트도 막습니다. 하지만 `printf`·`eval`로 글자를 이어 붙이거나, 명령을 파일에 적어 두었다가 다음 도구 호출에서 실행하거나, 새 Claude 세션에 파일로 넘기는 것(`claude -p < 파일`)은 명령 글자만 보고는 알아볼 수 없습니다.
+- 커밋 메시지처럼 따옴표 안 문장에 `;`와 위험한 명령이 함께 있으면(`git commit -m "x; rm -rf docs/refactor"`) 막힐 수 있습니다. 명령을 `;`·`&&` 조각으로 나눠 보기 때문입니다 — 메시지를 파일로 쓰고 `git commit -F <파일>`을 쓰세요.
 - 안전장치 스크립트가 고장 나거나 실행되지 못하면(Windows에서 Git Bash를 못 찾을 때 등) **막지 않고 통과**시킵니다. 모든 작업이 멈추는 것을 막기 위해서이고, 그래서 준비 단계에서 작동 시험을 합니다.
 - 플러그인 스크립트를 통째로 복사해 훅과 같은 입력을 흉내 내는 것, 승인 기록과 봉인을 함께 다시 쓰는 스크립트까지는 막지 못합니다. 커밋 전에 `git diff`로 계획서·승인 기록의 변화를 한 번 보는 습관이 가장 확실합니다.
 - 코드·설정 파일에 직접 적힌 키는 안전 실행기도 가리지 못합니다([§7](#7-안전-실행기)).
@@ -293,7 +298,7 @@ claude plugin uninstall refactor@vibe-consulting     # 지우기 — 기본 범�
 
 ## 11. 피드백·기여·라이선스
 
-- **`/refactor:report [문제 설명]`** — 플러그인 버전·설치 위치·OS·Claude Code·bash·git·python 버전, 리팩토링 단계, `problems.log` 마지막 30줄, 여러분의 설명을 모아 **진단 묶음**을 만들고 화면에 그대로 보여 줍니다. 비밀값 모양(KEY=값·토큰·주소 속 비밀번호)과 홈 폴더 경로는 가려져 있고, **이 단계에서는 아무 데도 보내지 않습니다.** "보낼까요?"에 **예**라고 답할 때만 여러분의 `gh` 로그인으로 이 저장소에 **공개 이슈**를 만듭니다. `gh`가 없거나 로그인돼 있지 않으면 제목이 채워진 이슈 작성 링크와 묶음 파일 경로를 알려 줍니다(묶음 내용을 본문에 붙여 넣으면 됩니다).
+- **`/refactor:report [문제 설명]`** — 플러그인 버전·설치 위치·OS·Claude Code·bash·git·python 버전, 리팩토링 단계, `problems.log` 마지막 30줄, 여러분의 설명을 모아 **진단 묶음**을 만들고 화면에 그대로 보여 줍니다. 비밀값 모양(KEY=값·토큰·주소 속 비밀번호)과 홈 폴더 경로는 가려져 있고, **이 단계에서는 아무 데도 보내지 않습니다.** "보낼까요?"에 **예**라고 답할 때만 여러분의 `gh` 로그인으로 이 저장소에 **공개 이슈**를 만듭니다. `gh`가 없거나 로그인돼 있지 않으면 제목이 채워진 이슈 작성 링크와 묶음 파일 경로를 알려 줍니다(묶음 내용을 본문에 붙여 넣으면 됩니다). 이 저장소에 쓰기 권한이 없는 분이 보내면 GitHub가 `bug` 라벨만 오류 없이 빼고 이슈를 만듭니다(라벨은 관리자가 붙입니다).
 - **이슈 양식**: [버그 신고](https://github.com/developer-duno/claude-code-refactor/issues/new?template=bug.yml) · [기능 제안](https://github.com/developer-duno/claude-code-refactor/issues/new?template=feature.yml)
 - **취약점(안전장치 우회 방법)**: 공개 이슈에 적지 말고 [`SECURITY.md`](SECURITY.md)의 비공개 취약점 신고로 보내 주세요.
 - **기여**: [`CONTRIBUTING.md`](CONTRIBUTING.md) — 막는 규칙을 고칠 때는 차단 케이스와 통과 대조군 시험을 함께 추가합니다.
@@ -322,7 +327,7 @@ claude plugin validate --strict plugins/refactor; claude plugin validate --stric
 ```
 
 - Windows에서는 시험이 Git Bash를 자동으로 찾습니다(PATH의 WSL bash 대신). 못 찾으면 `GUARD_BASH`에 Git Bash 절대경로를 지정하세요. `python3`은 Windows 스토어 안내 프로그램일 수 있으니 `python`을 쓰세요.
-- 0.2.1 기준 결과: 안전장치 시험 839/839, 스크립트 시험 123/123 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
+- 0.2.2 기준 결과: 안전장치 시험 1413/1413(Linux·Windows Git Bash 둘 다), 스크립트 시험 124/124(Linux)·125/125(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
 - 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올립니다.
 
 ### 폴더 구조
@@ -350,7 +355,18 @@ claude-code-refactor/
 
 ---
 
-## 13. 0.2.1 변경점
+## 13. 변경점
+
+### 0.2.2 (2026-09-27)
+
+- **쪼갠 이름 막기 확대** — 따옴표·역슬래시·빈 변수·`$'…'`·중괄호·글로브로 이름을 쪼개도, 승인·git 규칙과 똑같이 **대량 삭제·DB 초기화·(리팩토링 중) 배포·마이그레이션·원격 DB** 규칙이 알아봅니다(예: `eval "rm -rf doc"'s/refactor'`, `bash -c "supa"'base db reset'`).
+- **원격 가지·저장소 삭제 우회 차단** — `gh api -X DELETE …/git/refs/…`, `gh api -X DELETE repos/<소유자>/<저장소>`, `gh repo delete`.
+- **옛 판부터 있던 구멍 막기**(0.2.2 검사관이 찾음) — 따옴표·주석 안의 `<<'EOF'` 글자 뒤 줄을 판정에서 빼던 것, `tee`·`>`로 여러 파일에 쓸 때 첫 파일만 보던 것, `bash -e`처럼 코드 옵션이 아닌 옵션 뒤의 스크립트 실행.
+- **괜히 막히던 것 풀기**(전역 설치 첫날 실제로 막힌 명령 원문으로 확인) — 원격 주소를 개수만 세는 확인(`$( … | grep -c …)`처럼 명령 치환 안에 있어도), `git config --get-regexp '^(user|credential)\.'`, 문서·메모를 heredoc(`cat`·`tee`)으로 쓸 때 본문에 이름만 나오는 경우, 쓴 문서를 같은 명령에서 `wc`·`tail`로 보기만 하는 경우, `2~4단`·`15:00~19:00`처럼 물결표가 든 글을 Windows 짧은 파일 이름(`ENV~1`)으로 오해하던 것, `bash -c` 안의 `.md` 이어 붙이기, `test -f`·`[ -f ]` 존재 확인, 따옴표 안에 `\"`가 든 검색어. 막힐 때 안내도 보강했습니다(`cd X && rm …`로 잇기, 스쿼시 머지된 가지는 사용자에게 `git branch -D`를 부탁하기).
+- **문제 신고** — 파이썬 버전을 `python`부터 찾습니다(Windows 스토어 안내 프로그램 지연 방지). 쓰기 권한이 없는 사람이 보내면 `bug` 라벨은 빠지고 이슈만 만들어진다는 점을 [§11](#11-피드백기여라이선스)에 적었습니다.
+- **시험 도구** — 리눅스·맥에서 `gh`와 `bash`가 같은 폴더에 있으면 신고 시험이 멈추던 문제, Windows에서 스크립트 안의 `bash`가 WSL로 가던 문제를 고쳤고, 시험 중 진짜 GitHub 호출이 나가지 않게 했습니다.
+
+### 0.2.1
 
 - **승인을 입력 훅이 처리** — 스킬의 `!` 명령이 입력 훅보다 먼저 돌아 승인이 사라지던 문제를 고쳤습니다. `refactor-approve.sh`는 입력 훅이 붙이는 `--from-hook` 없이는 아무것도 바꾸지 않고, Claude가 훅 진입점(`run.sh turn|guard|post-check|session-start`)을 직접 부르는 것은 안전장치가 막습니다. 따옴표·역슬래시로 이름을 쪼개기, 새 Claude 세션에 넘기기, 한 줄 인터프리터 코드 안에서 부르기 같은 알려진 우회 모양도 막습니다(글자 조립·파일 경유 우회의 한계는 [§6-4](#6-4-한계)).
 - **문제 신고 `/refactor:report`(동의형)와 문제 기록 `problems.log`** 추가([§11](#11-피드백기여라이선스)).
