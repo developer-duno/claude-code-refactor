@@ -22,7 +22,7 @@ RUN = (ROOT / "plugins/refactor/hooks/run.sh").as_posix()
 def _default_bash():
     """Windows: PATH의 bash(WSL의 System32\\bash.exe일 수 있음) 대신 Git Bash 절대경로를 우선 찾는다."""
     if os.name != "nt":
-        return "bash"
+        return shutil.which("bash") or "bash"   # 절대경로 — 시험이 PATH 를 바꿔도(gh 빼기) bash 를 찾게
     for cand in [
         os.path.expandvars(r"%ProgramFiles%\Git\usr\bin\bash.exe"),
         os.path.expandvars(r"%ProgramFiles%\Git\bin\bash.exe"),
@@ -36,6 +36,19 @@ def _default_bash():
 
 BASH = os.environ.get("GUARD_BASH") or _default_bash()
 PATH_PREFIX = os.environ.get("GUARD_PATH_PREFIX", "")
+
+
+def _git_tools_path():
+    """Windows: Git Bash(bash.exe)를 직접 부르면 스크립트 안에서 다시 부르는 bash·awk 가 Windows PATH 의
+    System32\\bash.exe(WSL)로 갈 수 있다 → Git 의 usr\\bin·mingw64\\bin 을 PATH 앞에 둔다(Claude Code 가 훅을 부르는 Git Bash 환경과 같게)."""
+    if os.name != "nt" or not os.path.isabs(BASH):
+        return ""
+    p = pathlib.Path(BASH).parent
+    git = p.parent.parent if (p.name.lower() == "bin" and p.parent.name.lower() == "usr") else p.parent
+    return os.pathsep.join(str(d) for d in (git / "usr" / "bin", git / "mingw64" / "bin") if d.is_dir())
+
+
+GIT_TOOLS = _git_tools_path()
 # 문제 기록(problems.log)은 시험용 임시 폴더에(실제 ~/.claude/plugins/data/refactor 를 더럽히지 않게) — 모든 서브프로세스에 준다
 TEST_DATA = tempfile.mkdtemp(prefix="scriptsdata-")
 atexit.register(shutil.rmtree, TEST_DATA, True)
@@ -99,8 +112,9 @@ STATE = "---\nrefactor_state: 1\nphase: PLAN\ngate: G2-plan\nsteps_total: 0\nste
 
 def env():
     e = dict(os.environ, CLAUDE_PLUGIN_DATA=TEST_DATA)
-    if PATH_PREFIX:
-        e["PATH"] = PATH_PREFIX + os.pathsep + e["PATH"]
+    for pre in (GIT_TOOLS, PATH_PREFIX):   # 나중에 붙인 것이 맨 앞 — PATH_PREFIX 가 가장 앞
+        if pre:
+            e["PATH"] = pre + os.pathsep + e["PATH"]
     return e
 
 
@@ -681,15 +695,37 @@ def main():
     lf(pj, pj.read_text(encoding="utf-8").replace("https://github.com/developer-duno/claude-code-refactor", "https://github.com/owner/repo"))
     prun = (plug / "refactor/hooks/run.sh").as_posix()
 
+    def no_gh_path(path):
+        """gh 가 없는 컴퓨터처럼: gh(.exe) 가 든 PATH 폴더는 gh 만 뺀 임시 링크 폴더로 바꾼다
+        (리눅스는 /usr/bin 에 gh·bash·git·python3 이 같이 있어 폴더를 통째로 빼면 bash 도 사라진다).
+        링크를 못 만드는 컴퓨터(Windows 기본 — 권한 없음)는 기존 방식대로 그 폴더를 PATH 에서 뺀다."""
+        out = []
+        for i, p in enumerate(path.split(os.pathsep)):
+            if not (os.path.exists(os.path.join(p, "gh")) or os.path.exists(os.path.join(p, "gh.exe"))):
+                out.append(p)
+                continue
+            q = tmpr / f"nogh{i}"
+            try:
+                if not q.exists():
+                    q.mkdir()
+                    for name in os.listdir(p):
+                        if name not in ("gh", "gh.exe"):
+                            os.symlink(os.path.join(p, name), q / name)
+                out.append(str(q))
+            except OSError:
+                shutil.rmtree(q, ignore_errors=True)
+        return os.pathsep.join(out)
+
     def rep(args, stdin="", path_prefix=None, path_filter=False, extra=None):
         e = env()
         e["CLAUDE_PLUGIN_DATA"] = str(data)
         e["FAKE_GH_LOG"] = str(ghlog)
+        e["GH_CONFIG_DIR"] = str(tmpr / "nogh-config")   # 진짜 gh 가 남아 있어도 로그인 없는 상태로 — 실제 GitHub 호출 0
+        e.pop("GH_TOKEN", None); e.pop("GITHUB_TOKEN", None)   # 환경변수 토큰으로도 로그인되지 않게
         if path_prefix:
             e["PATH"] = str(path_prefix) + os.pathsep + e["PATH"]
-        if path_filter:   # gh 가 없는 컴퓨터처럼: gh 가 든 폴더를 PATH 에서 뺀다
-            e["PATH"] = os.pathsep.join(p for p in e["PATH"].split(os.pathsep)
-                                        if not (os.path.exists(os.path.join(p, "gh")) or os.path.exists(os.path.join(p, "gh.exe"))))
+        if path_filter:
+            e["PATH"] = no_gh_path(e["PATH"])
         if extra:
             e.update(extra)
         r = subprocess.run([BASH, prun, "refactor-report", *args], input=stdin.encode("utf-8"),
@@ -723,7 +759,8 @@ def main():
     body = files[-1].read_text(encoding="utf-8") if files else ""
     leaked = [s[max(0, s.find(fk) - 30):s.find(fk) + 30] for s in (out, body) if fk in s] + [s for s in (out, body) if "fakeperson" in s][:1]
     check("신고: 묶음 가리기(화면·파일에 가짜 비밀값 0)", rc == 0 and files and not leaked and "****" in body and "<홈>" in body, f"{rc} {leaked} {out[-800:]}")
-    check("신고: 묶음 내용(버전·상태·설명)", "플러그인 버전: 0.2.1" in out and "결제가 안 돼요" in out and "아직 아무 데도 보내지 않았습니다" in out, out[-800:])
+    ver = json.loads(pj.read_text(encoding="utf-8"))["version"]
+    check("신고: 묶음 내용(버전·상태·설명)", f"플러그인 버전: {ver}" in out and "결제가 안 돼요" in out and "아직 아무 데도 보내지 않았습니다" in out, out[-800:])
     check("신고: 묶음은 폴더 이름만", tmpr.as_posix() not in out and str(tmpr) not in out and f"폴더 이름: {tmpr.name}" in out, out[:600])
     check("신고: --collect 는 gh 를 부르지 않음", not ghlog.exists(), ghlog.read_text(encoding="utf-8") if ghlog.exists() else "")
 
@@ -735,7 +772,7 @@ def main():
     check("신고: 보낸 본문도 가려짐", "플러그인 버전" in sent and fk not in sent, sent[-400:])
 
     out, rc = rep(["--send", "--data", str(data), "--title", "결제 오류"], path_filter=True)
-    check("신고: gh 없음 → exit 4 + 링크", rc == 4 and "https://github.com/owner/repo/issues/new?template=bug.yml&title=%5Brefactor%5D%20" in out
+    check("신고: gh 없음 → exit 4 + 링크", rc == 4 and "gh(GitHub CLI)가 없어" in out and "https://github.com/owner/repo/issues/new?template=bug.yml&title=%5Brefactor%5D%20" in out
           and "묶음 파일:" in out, f"{rc} {out}")
     out, rc = rep(["--send", "--data", str(data)], path_prefix=fakebin, extra={"FAKE_GH_AUTH": "1"})
     check("신고: gh 로그인 안 됨 → exit 4", rc == 4 and "issues/new?template=bug.yml" in out, f"{rc} {out}")

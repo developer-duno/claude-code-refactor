@@ -97,7 +97,7 @@ if [ "$mode" = "collect" ]; then
   os=$(uname -srm 2>/dev/null); [ -n "${MSYSTEM:-}" ] && os="$os (MSYSTEM=$MSYSTEM)"
   gv=$(git --version 2>/dev/null | head -n 1); gv=${gv#git version }
   pv=""
-  for p in python3 python; do
+  for p in python python3; do
     pv=$(tmo 10 "$p" --version </dev/null 2>&1 | head -n 1); case "$pv" in "Python "[0-9]*) pv=${pv#Python }; break ;; *) pv="" ;; esac
   done
   pdir=${proj:-$PWD}; pdir=${pdir//\\//}; pdir=${pdir%/}; pname=${pdir##*/}
