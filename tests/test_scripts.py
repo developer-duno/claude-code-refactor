@@ -759,7 +759,10 @@ def main():
     body = files[-1].read_text(encoding="utf-8") if files else ""
     leaked = [s[max(0, s.find(fk) - 30):s.find(fk) + 30] for s in (out, body) if fk in s] + [s for s in (out, body) if "fakeperson" in s][:1]
     check("신고: 묶음 가리기(화면·파일에 가짜 비밀값 0)", rc == 0 and files and not leaked and "****" in body and "<홈>" in body, f"{rc} {leaked} {out[-800:]}")
-    ver = json.loads(pj.read_text(encoding="utf-8"))["version"]
+    try:   # plugin.json 이 깨져도 시험 전체가 죽지 않고 이 check 만 실패하게
+        ver = json.loads(pj.read_text(encoding="utf-8"))["version"]
+    except Exception as e:
+        ver = f"<plugin.json 읽기 실패: {e}>"
     check("신고: 묶음 내용(버전·상태·설명)", f"플러그인 버전: {ver}" in out and "결제가 안 돼요" in out and "아직 아무 데도 보내지 않았습니다" in out, out[-800:])
     check("신고: 묶음은 폴더 이름만", tmpr.as_posix() not in out and str(tmpr) not in out and f"폴더 이름: {tmpr.name}" in out, out[:600])
     check("신고: --collect 는 gh 를 부르지 않음", not ghlog.exists(), ghlog.read_text(encoding="utf-8") if ghlog.exists() else "")
@@ -804,6 +807,23 @@ def main():
     tail = (tmpr / "d2/problems.log").read_text(encoding="utf-8").splitlines()
     check("문제 기록: 200KB 넘으면 최근 절반", 90000 < sz <= 102400 and tail[-1].endswith("차단: 규칙설명") and tail[0].startswith("2026-09-01"), f"{sz} {tail[:1]} {tail[-1:]}")
     shutil.rmtree(tmpr, ignore_errors=True)
+
+    # 25) 판 번호 일치: plugin.json · marketplace.json · README 배지 · bug.yml placeholder 가 모두 같은 판
+    try:
+        pv = json.loads((ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
+        mk = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
+        mv = next((p.get("version") for p in mk.get("plugins", []) if p.get("name") == "refactor"), None)
+        rd = (ROOT / "README.md").read_text(encoding="utf-8")
+        rm = re.search(r"version-([0-9.]+)-blue", rd)
+        rv = rm.group(1) if rm else None
+        by = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
+        bm = re.search(r'placeholder:\s*"([0-9.]+)"', by)
+        bv = bm.group(1) if bm else None
+        check("판 번호 일치: plugin/marketplace/README/bug.yml",
+              pv is not None and pv == mv == rv == bv,
+              f"plugin.json={pv} marketplace.json={mv} README={rv} bug.yml={bv}")
+    except Exception as e:
+        check("판 번호 일치: plugin/marketplace/README/bug.yml", False, f"예외: {e}")
 
     for label, detail in fails:
         print(f"FAIL {label}\n      {detail}")
