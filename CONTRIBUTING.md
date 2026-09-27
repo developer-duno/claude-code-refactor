@@ -8,6 +8,7 @@
 
 ## 브랜치·커밋 규칙
 
+- `main` 은 보호돼 있어 직접 push 할 수 없습니다 — 가지(쓰기 권한이 없으면 포크)를 만들어 PR 로 합쳐 주세요.
 - 커밋 제목은 한국어로 써도 됩니다 (예: `fix: guard.sh 의 역슬래시 경로 처리`).
 - 커밋 메시지 마지막 줄에 서명을 남겨 주세요.
 
@@ -22,6 +23,18 @@
 ## Pull Request
 
 PR 을 올릴 때는 [PR 양식](.github/PULL_REQUEST_TEMPLATE.md)의 항목을 채워 주세요.
+
+## 릴리스 (관리자)
+
+새 판을 낼 때는 이 순서대로 합니다.
+
+1. 판 번호 네 곳을 같이 올린다(스크립트 시험이 확인합니다): `plugins/refactor/.claude-plugin/plugin.json`·`.claude-plugin/marketplace.json`·`README.md` 배지·`.github/ISSUE_TEMPLATE/bug.yml` 의 `placeholder`. `plugins/refactor` 를 바꿨으면 판을 꼭 올립니다 — 판이 그대로면 이미 설치한 사람에게 전달되지 않습니다(공식 문서: `version` 은 바꿀 때까지 그 판에 고정).
+2. 두 OS 시험 — Linux 와 Windows Git Bash 에서 각각 `python tests/test_guard.py`·`python tests/test_scripts.py` 를 돌립니다. macOS 가 있으면 기본 bash 3.2 로도 한 번(`GUARD_BASH=/bin/bash python tests/test_guard.py`).
+3. `README.md` §12(시험 수치)와 §13(변경점)을 갱신합니다.
+4. `main` 은 보호돼 있습니다 — 가지를 만들어 PR 로 합칩니다.
+5. `gh release create v<판> --target <합친 커밋> --title v<판> --notes-file <변경점 발췌>` 로 릴리스를 만듭니다.
+6. 설치본을 올립니다: `claude plugin marketplace update vibe-consulting` → `claude plugin update refactor@vibe-consulting` → 이미 열려 있는 세션은 `/reload-plugins`.
+7. 설치본이 저장소와 같은지 확인합니다: `diff -rq plugins/refactor ~/.claude/plugins/cache/vibe-consulting/refactor/<판>` — `.in_use` 한 줄만 다르면 정상입니다.
 
 ---
 
