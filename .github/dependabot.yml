@@ -1,0 +1,9 @@
+# CI 가 커밋 해시로 고정한 액션(checkout·setup-python)을 한 달에 한 번 새 판으로 올리는 PR 을 연다.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
