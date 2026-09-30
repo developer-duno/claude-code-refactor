@@ -1,0 +1,51 @@
+# 안전장치·스크립트 시험을 세 OS 에서 자동으로 돌린다.
+# 설치본은 main 을 따라가므로, 깨진 guard.sh 가 main 에 들어가면 조용히 통과·과잉차단이 된다 — PR 마다 막는다.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      PYTHONUTF8: "1" # Windows 콘솔 기본 인코딩으로 한국어 출력이 깨지지 않게
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      # README 약속(macOS 기본 bash 3.2)을 확인한다 — 훅은 PATH 의 bash 를 부르므로 시험 bash 와 PATH 맨 앞을 모두 /bin/bash 로
+      - name: macOS 는 기본 bash 3.2 로
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$RUNNER_TEMP/bash32"
+          ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+          echo "GUARD_BASH=/bin/bash" >> "$GITHUB_ENV"
+          echo "GUARD_PATH_PREFIX=$RUNNER_TEMP/bash32" >> "$GITHUB_ENV"
+      - name: 도구 판
+        shell: bash
+        run: |
+          "${GUARD_BASH:-bash}" --version | head -1
+          git --version
+          python --version
+      - name: test_guard
+        run: python tests/test_guard.py
+      - name: test_scripts
+        run: python tests/test_scripts.py

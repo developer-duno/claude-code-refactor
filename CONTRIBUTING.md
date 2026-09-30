@@ -29,7 +29,7 @@ PR 을 올릴 때는 [PR 양식](.github/PULL_REQUEST_TEMPLATE.md)의 항목을 
 새 판을 낼 때는 이 순서대로 합니다.
 
 1. 판 번호 네 곳을 같이 올린다(스크립트 시험이 확인합니다): `plugins/refactor/.claude-plugin/plugin.json`·`.claude-plugin/marketplace.json`·`README.md` 배지·`.github/ISSUE_TEMPLATE/bug.yml` 의 `placeholder`. `plugins/refactor` 를 바꿨으면 판을 꼭 올립니다 — 판이 그대로면 이미 설치한 사람에게 전달되지 않습니다(공식 문서: `version` 은 바꿀 때까지 그 판에 고정).
-2. 두 OS 시험 — Linux 와 Windows Git Bash 에서 각각 `python tests/test_guard.py`·`python tests/test_scripts.py` 를 돌립니다. macOS 가 있으면 기본 bash 3.2 로도 한 번(`GUARD_BASH=/bin/bash python tests/test_guard.py`).
+2. 세 OS 시험 — PR 을 올리면 GitHub Actions(`.github/workflows/test.yml`)가 Ubuntu·Windows(Git Bash)·macOS(기본 bash 3.2)에서 `python tests/test_guard.py`·`python tests/test_scripts.py` 를 자동으로 돌립니다. 손으로 돌릴 때도 같은 두 명령이고, macOS 기본 bash 로는 `GUARD_BASH=/bin/bash python tests/test_guard.py` 입니다.
 3. `README.md` §12(시험 수치)와 §13(변경점)을 갱신합니다.
 4. `main` 은 보호돼 있습니다 — 가지를 만들어 PR 로 합칩니다.
 5. `gh release create v<판> --target <합친 커밋> --title v<판> --notes-file <변경점 발췌>` 로 릴리스를 만듭니다.
