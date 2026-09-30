@@ -28,6 +28,8 @@ jobs:
       PYTHONUTF8: "1" # Windows 콘솔 기본 인코딩으로 한국어 출력이 깨지지 않게
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # 시험은 push 하지 않는다 — 토큰을 .git/config 에 남기지 않는다
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
@@ -43,9 +45,12 @@ jobs:
         shell: bash
         run: |
           "${GUARD_BASH:-bash}" --version | head -1
+          PATH="${GUARD_PATH_PREFIX:+$GUARD_PATH_PREFIX:}$PATH" bash --version | head -1 # run.sh 가 안에서 다시 부르는 bash
+          command -v awk
           git --version
           python --version
       - name: test_guard
         run: python tests/test_guard.py
       - name: test_scripts
+        if: ${{ !cancelled() }} # test_guard 가 실패해도 이 시험 결과는 따로 본다
         run: python tests/test_scripts.py
