@@ -3,7 +3,7 @@
 운영 중인 서비스를 AI로 **안전하게** 리팩토링하는 Claude Code 플러그인입니다.
 누구나 쓸 수 있는 공개 플러그인(MIT)이고, 화면 문구와 문서는 모두 한국어입니다(**한국어 전용 플러그인**).
 
-![version](https://img.shields.io/badge/version-0.2.2-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+![version](https://img.shields.io/badge/version-0.2.3-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
 
 > **English summary**
 > - **What it is:** A Korean-only Claude Code plugin that refactors a live service in a fixed order — code map, 25-item health check, deep audit, rebuttal review, baseline tests, plan — and then changes code only for steps a human approved, one step at a time.
@@ -193,6 +193,7 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 - 이름을 쪼개거나 조립하는 우회는 **알려진 모양만** 막습니다. 따옴표·역슬래시·빈 변수·`$'…'`·중괄호·글로브로 쪼갠 이름은 승인·훅 진입점·되돌릴 수 없는 git 명령·원격 가지 삭제·대량 삭제·DB 초기화 규칙(리팩토링 중에는 배포·마이그레이션·원격 DB 규칙까지)에서 막고, 새 Claude 세션에 넘긴 승인 명령과 한 줄 인터프리터 코드 안의 승인 스크립트도 막습니다. 하지만 `printf`·`eval`로 글자를 이어 붙이거나, 명령을 파일에 적어 두었다가 다음 도구 호출에서 실행하거나, 새 Claude 세션에 파일로 넘기는 것(`claude -p < 파일`)은 명령 글자만 보고는 알아볼 수 없습니다.
 - 커밋 메시지처럼 따옴표 안 문장에 `;`와 위험한 명령이 함께 있으면(`git commit -m "x; rm -rf docs/refactor"`) 막힐 수 있습니다. 명령을 `;`·`&&` 조각으로 나눠 보기 때문입니다 — 메시지를 파일로 쓰고 `git commit -F <파일>`을 쓰세요.
 - 안전장치 스크립트가 고장 나거나 실행되지 못하면(Windows에서 Git Bash를 못 찾을 때 등) **막지 않고 통과**시킵니다. 모든 작업이 멈추는 것을 막기 위해서이고, 그래서 준비 단계에서 작동 시험을 합니다.
+- 판정이 **25초 안에 끝나지 않으면 통과시키지 않고 막습니다**("판정이 너무 오래 걸려 막았습니다"). Claude Code는 제한 시간을 넘긴 훅을 "막지 않음"으로 처리하므로, 판정이 느린 입력이 검사 없이 지나가지 않게 실행기가 먼저 끊습니다. 명령 줄이 수천 개인 지시문이나 구분자(`;`·`&&`)가 수천 개인 명령처럼 아주 긴 입력은 컴퓨터가 느리거나 바쁠 때 이 제한에 걸립니다 — 안내대로 내용을 파일로 저장해 경로를 넘기거나 명령을 나누면 됩니다.
 - 플러그인 스크립트를 통째로 복사해 훅과 같은 입력을 흉내 내는 것, 승인 기록과 봉인을 함께 다시 쓰는 스크립트까지는 막지 못합니다. 커밋 전에 `git diff`로 계획서·승인 기록의 변화를 한 번 보는 습관이 가장 확실합니다.
 - 코드·설정 파일에 직접 적힌 키는 안전 실행기도 가리지 못합니다([§7](#7-안전-실행기)).
 - 안전 실행기 강제는 `/refactor:go`로 시작한 대화(그 뒤 질문에 답하거나 단계 보고를 받은 뒤 이어지는 대화 포함)에만 적용됩니다. 평소 개발 대화에서는 막지 않습니다.
@@ -284,6 +285,7 @@ claude plugin uninstall refactor@vibe-consulting     # 지우기 — 기본 범�
 | `WSL … execvpe(/bin/bash) failed` | 안전 실행기를 PowerShell 도구로 실행했습니다. Bash 도구(Git Bash)로 다시 실행하세요([§7](#7-안전-실행기)) |
 | `[refactor 안전장치]`로 멈춤 | 정상입니다. → 줄의 안내를 따르거나, 정말 필요하면 사람이 `!`로 직접 실행 |
 | "명령이 너무 깁니다(16KB 초과)" | 명령을 파일로 저장하고, 무엇을 하는지 확인한 뒤 실행 |
+| "판정이 너무 오래 걸려 막았습니다(N초 초과)" | 판정이 제한 시간 안에 끝나지 않은 것입니다. 긴 지시문·SQL은 파일로 저장해 경로를 넘기고, 긴 명령은 나누거나 스크립트 파일로 만들어 무엇을 하는지 확인한 뒤 실행합니다. N이 25가 아니면 환경 변수 `REFACTOR_GUARD_LIMIT`이 설정돼 있는 것입니다(지우면 25초) |
 | "이번 턴에 보호된 파일(…)이 바뀌었습니다" | `git diff <파일>`로 무엇이 바뀌었는지 보고 결정. 사람이 일부러 바꾼 것이면 그대로 둠 |
 | "승인 뒤 카드 내용이 바뀜" | `/refactor:status`가 보여 주는 바뀐 줄(− 승인 때 / + 지금)을 읽어 보고 괜찮으면 `/refactor:approve <ID>`로 다시 승인 |
 | "이번 턴에 승인 기록(…)이 바뀌었습니다" / "승인 기록(APPROVALS.log)이 /refactor:approve 밖에서 바뀌었습니다" | `git diff docs/refactor/APPROVALS.log`로 보고, 모르는 줄이면 지운 뒤 `/refactor:approve 확인` |
@@ -314,7 +316,7 @@ Git Bash·macOS·Linux:
 
 ```bash
 python tests/test_guard.py && python tests/test_scripts.py   # 안전장치·스크립트 시험
-GUARD_BASH=/bin/bash python tests/test_guard.py              # macOS 기본 bash 3.2로 시험
+GUARD_BASH=/bin/bash python3 tests/test_guard.py             # macOS 기본 bash 3.2로 시험(macOS는 python3)
 claude plugin validate --strict plugins/refactor && claude plugin validate --strict .
 ```
 
@@ -327,7 +329,7 @@ claude plugin validate --strict plugins/refactor; claude plugin validate --stric
 ```
 
 - Windows에서는 시험이 Git Bash를 자동으로 찾습니다(PATH의 WSL bash 대신). 못 찾으면 `GUARD_BASH`에 Git Bash 절대경로를 지정하세요. `python3`은 Windows 스토어 안내 프로그램일 수 있으니 `python`을 쓰세요.
-- 0.2.2 기준 결과: 안전장치 시험 1413/1413(Linux·Windows Git Bash 둘 다), 스크립트 시험 124/124(Linux)·125/125(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
+- 0.2.3 기준 결과(GitHub Actions): 안전장치 시험 1424/1424(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 154/154(Ubuntu·macOS)·155/155(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
 - 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올립니다.
 
 ### 폴더 구조
@@ -356,6 +358,13 @@ claude-code-refactor/
 ---
 
 ## 13. 변경점
+
+### 0.2.3 (2026-10-02)
+
+- **판정이 느리면 통과되던 구멍 막기** — Claude Code는 제한 시간을 넘긴 훅을 "막지 않음"으로 처리합니다. 그래서 판정이 30초를 넘기는 입력은 위험한 명령이어도 검사 없이 실행될 수 있었습니다(macOS 기본 bash 3.2에서 20KB 지시문, Linux·Windows에서 따옴표 짝이 안 맞는 명령 줄 2,000개짜리 지시문). 이제 실행기(`run.sh`)가 안전장치를 지켜보다 **25초 안에 판정이 안 끝나면 막습니다**("판정이 너무 오래 걸려 막았습니다" — [§6-4](#6-4-한계)·[§10](#10-문제가-생기면)). 훅 제한 시간은 60초로 올려 실행기가 먼저 끊을 여유를 두었습니다.
+- **macOS 기본 bash(3.2)에서 빨라짐** — bash 3.2는 긴 글에서 `${변수//찾을말/바꿀말}`이 길이의 제곱~세제곱으로 느려집니다. 지시문 줄 세기·줄 나누기, SQL 풀기, 따옴표 짝 세기를 1KB가 넘으면 awk 한 번으로 처리합니다(macOS CI 기준 20KB 지시문 판정 52초 → 0.2초, 250KB SQL은 90초 초과 → 2초). awk가 없거나 실패하면 옛 방식으로 계산하므로 판정을 건너뛰지 않습니다.
+- **문제 신고** — macOS 기본 bash에서 `bad substitution` 오류로 진단 묶음을 만들지 못하던 것을 고쳤습니다.
+- **시험** — GitHub Actions가 Ubuntu·Windows(Git Bash)·macOS(기본 bash 3.2) 세 곳에서 두 시험을 돌리고, 셋 다 통과해야 합쳐집니다. 훅을 부르는 시험은 30초를 넘기면 실패로 셉니다(예전에는 90초까지 기다려 느린 판정이 가려졌습니다). 옛 계산과 새 계산이 글자 하나까지 같은지 대조하는 시험, 실행기 감시 시험, awk가 실패했을 때의 시험을 넣었습니다.
 
 ### 0.2.2 (2026-09-27)
 

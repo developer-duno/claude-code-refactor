@@ -56,9 +56,10 @@ s#((/[A-Za-z])|[A-Za-z]:)?[\\\\/]Users[\\\\/][^\\\\/[:space:]\"']+#<홈>#g
 s#/home/[^/[:space:]\"']+#<홈>#g
 "
 redact() { # 표준입력 → 가린 결과. $1 이 있으면 그 경로 글자 그대로도 <프로젝트>로 바꾼다
-  local s p=${1:-}
+  local s p=${1:-} pb
   s=$(cat; printf x); s=${s%x}
-  if [ -n "$p" ] && [ "${#p}" -gt 3 ]; then s=${s//"$p"/<프로젝트>}; s=${s//"${p//\//\\}"/<프로젝트>}; fi
+  # 역슬래시 판 경로는 따로 만든다 — 바꾸기 패턴 안에 다시 바꾸기를 넣으면 bash 3.2 에서 bad substitution
+  if [ -n "$p" ] && [ "${#p}" -gt 3 ]; then pb=${p//\//\\}; s=${s//"$p"/<프로젝트>}; s=${s//"$pb"/<프로젝트>}; fi
   if [ -n "${HOME:-}" ] && [ "${#HOME}" -gt 3 ]; then s=${s//"$HOME"/<홈>}; fi
   printf '%s' "$s" | sed -E "$SED_REDACT"
 }

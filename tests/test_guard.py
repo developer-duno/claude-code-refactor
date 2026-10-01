@@ -61,6 +61,24 @@ GIT_TOOLS = _git_tools_path()
 TEST_DATA = tempfile.mkdtemp(prefix="guarddata-")
 atexit.register(shutil.rmtree, TEST_DATA, True)
 
+# 훅(guard·turn·post-check·session-start) 호출의 시간 한도. Claude Code 는 시간 초과된 PreToolUse 훅을 막지 않고 통과시키므로
+# 오래 걸린 차단은 실제로는 통과다 → 시험도 30초를 넘기면 실패로 센다(시험을 멈추지 않고 계속). 훅이 아닌 스크립트 호출은 90초 그대로.
+HOOK_TIMEOUT = 30
+HOOK_TIMEOUTS = []
+
+
+def run_hook(argv, watch_ok=False, **kw):
+    """watch_ok: 감시(run.sh 가 느린 guard 를 끊음) 자체를 시험하는 호출만 True. 그 밖의 호출이 감시에 끊기면
+    종료 코드가 기대(2)와 같아도 "훅 시간 초과"로 센다 — 느린 컴퓨터에서 "막혀야 함" 시험이 감시 차단으로 조용히 초록이 되지 않게."""
+    try:
+        r = subprocess.run(argv, timeout=HOOK_TIMEOUT, **kw)
+    except subprocess.TimeoutExpired:
+        HOOK_TIMEOUTS.append(" ".join(str(a) for a in argv[1:]))
+        return subprocess.CompletedProcess(argv, 124, b"", f"[시험] 훅이 {HOOK_TIMEOUT}초 안에 끝나지 않음".encode("utf-8"))
+    if not watch_ok and "판정이 너무 오래 걸려".encode("utf-8") in (r.stderr or b""):
+        HOOK_TIMEOUTS.append("감시 차단: " + " ".join(str(a) for a in argv[1:]))
+    return r
+
 
 def lf(path, text):
     """LF 줄바꿈으로 고정해 쓴다(Windows에서 write_text의 기본 CRLF 변환을 막는다)."""
@@ -142,8 +160,8 @@ def make_project(phase=None, allow=(), baseline_approved=False, crlf_plan=False,
 def turn(proj, sess, prompt):
     """UserPromptSubmit 훅(turn.sh)을 실행한다."""
     pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
-    subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
-                   capture_output=True, env=env_for(proj), timeout=90)
+    run_hook([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
+             capture_output=True, env=env_for(proj))
 
 
 def env_for(proj, project_dir=None):
@@ -162,8 +180,8 @@ def run(proj, tool, tool_input, project_dir=None, script="guard", event="PreTool
     }
     if extra:
         payload.update(extra)
-    r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), script], input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                       capture_output=True, env=env_for(proj, project_dir), timeout=90)
+    r = run_hook([BASH, (HOOKS / "run.sh").as_posix(), script], input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                 capture_output=True, env=env_for(proj, project_dir))
     return r.returncode, r.stderr.decode("utf-8", "replace")
 
 
@@ -736,8 +754,8 @@ def main():
     for sess, prompt, gate, want in steps:
         set_gate(gate)
         pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
-        subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
-                       capture_output=True, env=env_for(proj), timeout=90)
+        run_hook([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
+                 capture_output=True, env=env_for(proj))
         exists = (proj / "docs/refactor/.turn.s1").exists()
         ok = exists == want and (not want or (proj / "docs/refactor/.turn.s1").read_text().splitlines()[0].strip() == "go s1")
         res["total"] += 1
@@ -751,7 +769,7 @@ def main():
     # run.sh 를 슬래시 없이 부를 때(hooks 폴더 안에서 bash run.sh guard)
     proj = make_project()
     pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "cat .env"}, "cwd": str(proj)}).encode()
-    r = subprocess.run([BASH, "run.sh", "guard"], input=pl, capture_output=True, env=env_for(proj), cwd=str(HOOKS), timeout=90)
+    r = run_hook([BASH, "run.sh", "guard"], input=pl, capture_output=True, env=env_for(proj), cwd=str(HOOKS))
     res["total"] += 1
     if r.returncode != B:
         res["fails"].append(("run.sh 상대 경로", B, r.returncode, "Bash", "cat .env", r.stderr.decode()[:200]))
@@ -765,12 +783,12 @@ def main():
     g.write_bytes(lines[0] + b"\n" + b"\r\n".join(lines[1:]))
     proj = make_project()
     pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "cat .env"}, "cwd": str(proj)}).encode()
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=90)
+    r = run_hook([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj))
     res["total"] += 1
     if r.returncode != B:
         res["fails"].append(("run.sh CRLF 중간", B, r.returncode, "Bash", "cat .env", r.stderr.decode()[:200]))
     lf(g, "#!/usr/bin/env bash\nif then\n")
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=90)
+    r = run_hook([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj))
     res["total"] += 1
     if r.returncode != 1:
         res["fails"].append(("run.sh 고장 난 스크립트", 1, r.returncode, "Bash", "문법 오류", r.stderr.decode()[:200]))
@@ -797,6 +815,13 @@ def main():
 
     check_upgrade_021(res)
     check_upgrade_022(res)
+    check_subst_023(res)
+    check_awkfail_023(res)
+    check_fsmon_023(res)
+
+    res["total"] += 1
+    if HOOK_TIMEOUTS:
+        res["fails"].append((f"훅 시간 초과({HOOK_TIMEOUT}초)", 0, len(HOOK_TIMEOUTS), "", "", " / ".join(HOOK_TIMEOUTS)[:300]))
 
     for f in res["fails"]:
         print("FAIL [%s] 기대 %s 실제 %s  %s %s\n      %s" % f)
@@ -1600,6 +1625,209 @@ def check_upgrade_022(res):
                 res["fails"].append(("0.2.2 · " + title, B, code, "Bash", cmd, err.strip()[:300]))
     finally:
         shutil.rmtree(proj, ignore_errors=True)
+
+
+# ── 0.2.3 B: bash 3.2 에서 큰 값의 ${x//…} 가 폭주하던 곳(지시문 줄 세기·줄 나누기, SQL 풀기)을 awk 로 바꾼 함수가
+#    옛 함수(0.2.2 그대로 아래에 둔다 — 지시문 따옴표 홀짝 세기 포함)와 글자 하나까지 같은지 대조한다. 1KB 경계 양쪽(bash 판·awk 판)을 모두 지난다.
+OLD_SUBST_FUNCS = r'''
+unesc_nl_old() {
+  local v=$1
+  v=${v//"$P_BS2"/$PH}
+  v=${v//"$PH$P_BSR$P_BSN"/}; v=${v//"$PH$P_BSN"/}
+  v=${v//"$P_BSQ"/$Q}; v=${v//"$P_BSSL"/$SL}
+  v=${v//"$P_BSR"/}; v=${v//"$P_BSN"/$NL}; v=${v//"$P_BST"/ }
+  UV=${v//$PH/$BS}
+}
+nl_split_old() {
+  local nl
+  nl=${1//"$P_BSN"/$'\001'}; nl=${nl//[!$'\001']/}; NLC=${#nl}
+  NLV=${1//"$P_BSN"/$NL}
+}
+quote_odd_old() {
+  local q=${1//[!\'\"\`]/}
+  local sq=${q//[!\']/} dq=${q//[!\"]/} bq=${q//[!\`]/}
+  [ $((${#sq} % 2)) -ne 0 ] || [ $((${#dq} % 2)) -ne 0 ] || [ $((${#bq} % 2)) -ne 0 ]
+}
+for f in "$1"/in-*; do
+  IFS= read -r -d '' v < "$f"
+  i=${f##*/in-}
+  unesc_nl "$v"; printf '%s' "$UV" > "$1/nu-$i"
+  unesc_nl_old "$v"; printf '%s' "$UV" > "$1/ou-$i"
+  nl_split "$v"; printf '%s|%s' "$NLC" "$NLV" > "$1/ns-$i"
+  nl_split_old "$v"; printf '%s|%s' "$NLC" "$NLV" > "$1/os-$i"
+  if quote_odd "$v"; then printf 1; else printf 0; fi > "$1/nq-$i"
+  if quote_odd_old "$v"; then printf 1; else printf 0; fi > "$1/oq-$i"
+done
+'''
+
+
+def _guard_funcs(*names):
+    """guard.sh 에서 기본 변수 줄과 이름이 같은 함수 본문(이름() { … 첫 '}' 줄까지)을 꺼낸다."""
+    lines = (HOOKS / "guard.sh").read_text(encoding="utf-8").splitlines()
+    out = [l for l in lines if l.startswith("BS='") or l.startswith("P_BS2=")]
+    for name in names:
+        i = lines.index(f"{name}() {{")
+        j = lines.index("}", i)
+        out += lines[i:j + 1]
+    return "\n".join(out)
+
+
+def check_subst_023(res):
+    import random
+    rnd = random.Random(20261001)
+    toks = ["\\n", "\\\\", "\\r\\n", "\\r", "\\t", '\\"', "\\/", "\\", "\x01", "\x01\\n", "\x01\\r\\n", "n", "r", "t", '"', "/",
+            "x", "a", " ", "é", "가", "\n", "\r", "\\\\n", "\\\\\\n", "$ ls", "`cat`", "'", "`", "it's"]
+    cases = ["", "x", "\\", "\\n", "\\\\", "\\\\n", "\\\\\\n", "\\r\\n", "\x01", "\x01\\n", "a\n", "\n\n", "\\n\\n\\n", "끝\\",
+             "\\n" * 512, "\\n" * 513, "a" * 1024, "a" * 1025, "\\n" * 600 + "x", "\\\\" * 513 + "n", "\x01" * 1100, "\n" * 1100 + "\\n"]
+    for k in range(300):
+        size = rnd.choice([3, 10, 40, 200, 900]) if k < 220 else rnd.randint(1025, 1500)
+        s = ""
+        while len(s.encode("utf-8")) < size:
+            s += rnd.choice(toks)
+        cases.append(s)
+    # 날 CR·\001 이 든 값은 bash 판으로 가므로, awk 판을 지나는 큰 입력(날 제어 글자 없음)을 따로 더 만든다
+    plain = [t for t in toks if t not in ("\x01", "\x01\\n", "\x01\\r\\n", "\r")]
+    for k in range(80):
+        s, size = "", rnd.randint(1025, 2500)
+        while len(s.encode("utf-8")) < size:
+            s += rnd.choice(plain)
+        cases.append(s)
+    # 이 컴퓨터에 있는 다른 awk(mawk·original-awk·busybox 등)로도 — PATH 맨 앞 폴더에 awk 이름의 링크를 둔다(링크를 못 만들면 건너뜀)
+    d = pathlib.Path(tempfile.mkdtemp(prefix="subst-"))
+    awks, seen = [("기본 awk", None)], {os.path.realpath(shutil.which("awk") or "")}
+    for name in ("gawk", "mawk", "nawk", "original-awk", "onetrue-awk", "bwk-awk", "busybox"):
+        w = shutil.which(name)
+        if not w or os.path.realpath(w) in seen:
+            continue
+        seen.add(os.path.realpath(w))
+        try:
+            (d / f"awk-{name}").mkdir()
+            os.symlink(w, d / f"awk-{name}" / "awk")
+            awks.append((name, d / f"awk-{name}"))
+        except OSError:
+            pass
+    try:
+        for i, s in enumerate(cases):
+            (d / f"in-{i:04d}").write_bytes(s.encode("utf-8"))
+        script = "LC_ALL=C\nexport LC_ALL\nshopt -u patsub_replacement 2>/dev/null\n" + _guard_funcs("unesc_nl", "nl_split", "quote_odd") + "\n" + OLD_SUBST_FUNCS
+        (d / "t.sh").write_bytes(script.encode("utf-8"))
+        bad, errs = [], ""
+        for aname, adir in awks:
+            e = env_for(d)
+            if adir:
+                e["PATH"] = str(adir) + os.pathsep + e["PATH"]
+            r = subprocess.run([BASH, (d / "t.sh").as_posix(), d.as_posix()], capture_output=True, env=e, timeout=600)
+            if r.returncode != 0:
+                errs += f"[{aname}] " + r.stderr.decode("utf-8", "replace")[:200]
+            for i, s in enumerate(cases):
+                for a, b, what in [("nu", "ou", "unesc_nl"), ("ns", "os", "nl_split"), ("nq", "oq", "quote_odd")]:
+                    fa, fb = d / f"{a}-{i:04d}", d / f"{b}-{i:04d}"
+                    if not fa.exists() or not fb.exists() or fa.read_bytes() != fb.read_bytes():
+                        bad.append(f"[{aname}] {what} #{i} 길이 {len(s)} {s[:40]!r}")
+                    for f in (fa, fb):
+                        if f.exists():
+                            f.unlink()
+        res["total"] += 1
+        big = [c for c in cases if len(c.encode()) > 1024]
+        nawk = sum(1 for c in big if "\r" not in c and "\x01" not in c)
+        print(f"  0.2.3 · 차등 시험(옛 함수 대조) {len(cases)}개 입력 × 3함수 · 1KB 초과 {len(big)}개(awk 판 {nawk}개)"
+              f" · awk: {', '.join(n for n, _ in awks)}")
+        if bad or errs:
+            res["fails"].append(("0.2.3 B 차등 시험(옛 함수와 같은 결과)", 0, len(bad), "", " / ".join(bad[:5]), errs[:300]))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 줄 수 경계(2,000줄 이하 계속 · 초과 차단)는 그대로 — 1KB 를 넘는 awk 판에서
+    proj = make_project()
+    blk = "도구 입력이 너무 깁니다(2,000줄 초과)"
+    for n_lines, want in [(2000, OK), (2001, B)]:
+        code, err = run(proj, "Agent", {"description": "t", "prompt": "줄\n" * n_lines})
+        res["total"] += 1
+        if code != want or ((want == B) != (blk in err)):
+            res["fails"].append(("0.2.3 B 줄 수 경계", want, code, "Agent", f"{n_lines}줄", err.strip()[:200]))
+    # 1KB 를 넘는 작은 SQL(awk 판)에서도 줄 주석 뒤 줄의 DROP/**/TABLE 을 막는다 — 맥 awk(BWK)의 한 글자 split 이 줄바꿈도 갈라 \n 을 푼 줄바꿈이 \ 로 바뀌었고, 줄 주석이 DROP 까지 삼켜 통과했다(0.2.3 A2)
+    sql = "INSERT INTO t (a, b) VALUES (1, 'x'); -- 메모\n" * 40 + "DROP/**/TABLE orders;"
+    code, err = run(proj, "mcp__x__execute_sql", {"project_id": "p", "query": sql})
+    res["total"] += 1
+    if code != B:
+        res["fails"].append(("0.2.3 A2 SQL 2KB 주석 뒤 DROP/**/TABLE 차단", B, code, "mcp__x__execute_sql", f"{len(sql)}자", err.strip()[:200]))
+    # 같은 함수(unesc_nl)를 Bash 의 DB 프로그램 명령(hv_db)도 쓴다 — 1KB 넘는 psql -c 의 주석 줄 뒤 DROP/**/TABLE (0.2.3 A3 F8)
+    cmd = 'psql "$DATABASE_URL" -c "' + "INSERT INTO t (a, b) VALUES (1, 2); -- 메모\n" * 30 + 'DROP/**/TABLE orders;"'
+    code, err = run(proj, "Bash", {"command": cmd, "description": "t"})
+    res["total"] += 1
+    if code != B:
+        res["fails"].append(("0.2.3 A3 Bash psql 1KB 넘는 SQL 주석 뒤 DROP 차단", B, code, "Bash", f"{len(cmd)}자", err.strip()[:200]))
+    shutil.rmtree(proj, ignore_errors=True)
+
+
+def check_fsmon_023(res):
+    """0.2.3 A4 F12: guard 의 git 호출이 저장소 설정(core.fsmonitor)의 프로그램을 띄우지 않는다 — 띄우면 그 프로그램이 감시 파이프를
+    물려받고, 판정 시간도 남의 손에 넘어간다. 표시 파일이 안 생기고 판정은 설정이 없을 때와 같아야 한다."""
+    proj = make_project(phase="EXECUTE")
+    lf(proj / ".gitignore", "node_modules\n")   # .env 가 무시되지 않음 → 내용 검색에서 git check-ignore 를 탄다
+    mark = proj.parent / (proj.name + "-fsmon-ran")
+    hook = proj.parent / (proj.name + "-fsmon.sh")
+    lf(hook, "#!/bin/sh\n: > '" + mark.as_posix() + "'\nexit 1\n")
+    os.chmod(hook, 0o755)
+    cases = [("내용 검색(무시 안 된 비밀 파일)", ("Grep", {"pattern": "KEY", "output_mode": "content"})),
+             ("커밋된 마이그레이션 수정(git ls-files)", ("Edit", {"file_path": "supabase/migrations/0001_init.sql", "old_string": "x", "new_string": "y"}))]
+    try:
+        for label, (tool, tin) in cases:
+            subprocess.run(["git", "-C", str(proj), "config", "--unset-all", "core.fsmonitor"], capture_output=True)
+            want, _ = run(proj, tool, tin)
+            git(proj, "config", "core.fsmonitor", hook.as_posix())
+            if mark.exists():
+                mark.unlink()
+            got, err = run(proj, tool, tin)
+            res["total"] += 1
+            if got != want or mark.exists():
+                res["fails"].append(("0.2.3 A4 git 이 fsmonitor 프로그램을 안 띄움", f"{want}·표시 없음", f"{got}·표시 {'있음' if mark.exists() else '없음'}", tool, label, err.strip()[:200]))
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
+        for p in (mark, hook):
+            if p.exists():
+                p.unlink()
+
+
+def check_awkfail_023(res):
+    """0.2.3 A3 F1: 새 awk 판(unesc_nl·nl_split·quote_odd)의 awk 가 실패해도(빈 출력으로 종료 0·1 / 종료 127) 판정 없이 통과하지 않는다
+    — 그 awk 호출만 실패시키는 가짜 awk 를 PATH 맨 앞에 두고, 진짜 awk 일 때와 결과가 같은지 본다."""
+    d = pathlib.Path(tempfile.mkdtemp(prefix="awkfail-"))
+    for rc in (0, 1, 127):   # 0 = 성공으로 끝나되 빈 출력(끝 표시 확인이 잡는다)
+        (d / f"bin{rc}").mkdir()
+        lf(d / f"bin{rc}" / "awk", "#!/usr/bin/env bash\n"
+           "case \"$*\" in *'rlit('*|*'c += gsub'*|*'s += gsub(/'*) cat >/dev/null; exit " + str(rc) + " ;; esac\n"
+           "PATH=${PATH#*:}; exec awk \"$@\"\n")
+        os.chmod(d / f"bin{rc}" / "awk", 0o755)
+    # 성공(0)으로 끝나되 숫자 한 줄 + 잘린 내용(끝 표시 없음) — nl_split 의 끝 표시 확인이 잡는다(0.2.3 A4 F13)
+    (d / "bintrunc").mkdir()
+    lf(d / "bintrunc" / "awk", "#!/usr/bin/env bash\n"
+       "case \"$*\" in *'rlit('*|*'c += gsub'*|*'s += gsub(/'*) cat >/dev/null; printf '3\\nsrc'; exit 0 ;; esac\n"
+       "PATH=${PATH#*:}; exec awk \"$@\"\n")
+    os.chmod(d / "bintrunc" / "awk", 0o755)
+    sec = "." + "env"
+    cases = [
+        ("MCP SQL 1.5KB 끝 DROP", B, "mcp__x__execute_sql", {"project_id": "p", "query": "INSERT INTO t (a, b) VALUES (1, 'x');\n" * 40 + "DROP TABLE users;\n"}),
+        ("Agent 1.8KB 마지막 줄 비밀 파일 읽기", B, "Agent", {"description": "t", "prompt": "src 정리.\n" * 150 + "$ cat " + sec + "\n"}),
+        # 홀수 따옴표 큰 조각 둘 사이의 위험 명령: 큰 조각을 "짝 맞음"으로 잘못 보면 셋이 한 묶음이 되어 위험 명령이 따옴표 안에 숨는다
+        ("홀수 따옴표 1.5KB 조각 둘 사이 reset --hard", B, "Agent", {"description": "t", "prompt": "$ echo it's " + "a" * 1500 + "\n$ git reset --hard\n$ echo 'b" + "b" * 1500 + "\n"}),
+    ]
+    proj = make_project()
+    global PATH_PREFIX
+    keep = PATH_PREFIX
+    try:
+        for label, want, tool, tin in cases:
+            got = []
+            for pre in ("", str(d / "bin0"), str(d / "bin1"), str(d / "bin127"), str(d / "bintrunc")):
+                PATH_PREFIX = pre
+                got.append(run(proj, tool, tin)[0])
+            res["total"] += 1
+            if got != [want] * 5:
+                res["fails"].append(("0.2.3 A3 awk 실패해도 판정(진짜·빈 출력 0·종료1·종료127·잘린 출력 0)", want, got, tool, label, ""))
+    finally:
+        PATH_PREFIX = keep
+        shutil.rmtree(proj, ignore_errors=True)
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":
