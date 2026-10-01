@@ -220,8 +220,18 @@ unesc_line() {
   UV=${UV//$'\002'/$BS}   # 이스케이프된 역슬래시(\\)는 awk 안에서 \002 로 두었다가 되돌린다(unesc_short 와 같게 — 역슬래시로 쪼갠 단어 판정)
 }
 # JSON 이스케이프를 풀되 줄바꿈은 진짜 줄바꿈으로 둔다(SQL 판정용 — 줄바꿈은 문장 구분이 아니다). 줄 이어쓰기는 지운다 → UV
+#   큰 값(1KB 초과)은 awk 한 번으로 — bash 3.2 의 ${v//…} 는 맞는 곳마다 남은 길이를 다시 훑어 값이 크면 길이의 제곱으로 느려진다.
+#   awk 판도 아래 bash 판과 같은 순서로 같은 글자를 바꾼다(결과는 글자 하나까지 같다 — 시험이 무작위 입력으로 대조한다).
+#   끝에 x 를 붙였다 떼는 것은 $( ) 가 끝 줄바꿈을 지우지 않게 하려는 것.
 unesc_nl() {
   local v=$1
+  if [ "${#v}" -gt 1024 ]; then
+    v=$(printf '%sx' "$v" | awk 'function rall(s, re, w,   n, i, P, out) { n = split(s, P, re); if (n < 2) return s; out = P[1]; for (i = 2; i <= n; i++) out = out w P[i]; return out }
+      { j = (NR > 1 ? j "\n" : "") $0 }
+      END { j = rall(j, "\\\\\\\\", "\001"); j = rall(rall(j, "\001\\\\r\\\\n", ""), "\001\\\\n", ""); j = rall(rall(j, "\\\\\"", "\""), "\\\\/", "/")
+        j = rall(rall(rall(j, "\\\\r", ""), "\\\\n", "\n"), "\\\\t", " "); printf "%s", rall(j, "\001", "\\") }')
+    UV=${v%x}; return 0
+  fi
   v=${v//"$P_BS2"/$PH}
   v=${v//"$PH$P_BSR$P_BSN"/}; v=${v//"$PH$P_BSN"/}
   v=${v//"$P_BSQ"/$Q}; v=${v//"$P_BSSL"/$SL}
@@ -236,6 +246,26 @@ unesc_short() {
   v=${v//"$P_BSQ"/$Q}; v=${v//"$P_BSSL"/$SL}
   v=${v//"$P_BSN"/ ; }; v=${v//"$P_BSR"/ ; }; v=${v//"$P_BST"/ }
   UV=${v//$PH/$BS}
+}
+# 하위 에이전트 지시문의 줄 수 → NLC(줄바꿈 표시 \n 의 수 + 날 \001 의 수 — 옛 계산과 같다), 줄바꿈 표시를 진짜 줄바꿈으로 바꾼 값 → NLV.
+#   큰 값(1KB 초과)은 awk 한 번으로(bash 3.2 에서 ${x//[!…]/} 로 세면 길이의 세제곱, \n 바꾸기는 제곱으로 느려진다 — 20KB 에 50초).
+nl_split() {
+  if [ "${#1}" -gt 1024 ]; then
+    NLV=$(printf '%sx' "$1" | awk '{ c += gsub(/\\n/, "\n"); c += gsub("\001", "\001"); s = (NR > 1 ? s "\n" : "") $0 } END { printf "%d\n%s", c, s }')
+    NLC=${NLV%%"$NL"*}; NLV=${NLV#*"$NL"}; NLV=${NLV%x}
+  else
+    NLV=${1//"$P_BSN"/}; NLC=$(( (${#1} - ${#NLV}) / 2 + ${#NLV} )); NLV=${NLV//$PH/}; NLC=$(( NLC - ${#NLV} )); NLV=${1//"$P_BSN"/$NL}
+  fi
+}
+# 따옴표(' " `) 가운데 개수가 홀수인 것이 하나라도 있으면 참. 큰 값(1KB 초과)은 awk 한 번으로(${x//[!…]/} 는 bash 3.2 에서 길이의 세제곱)
+quote_odd() {
+  if [ "${#1}" -gt 1024 ]; then
+    printf '%s' "$1" | awk '{ s += gsub(/\047/, ""); d += gsub(/"/, ""); b += gsub(/`/, "") } END { exit !(s % 2 || d % 2 || b % 2) }'
+    return
+  fi
+  local q=${1//[!\'\"\`]/}
+  local sq=${q//[!\']/} dq=${q//[!\"]/} bq=${q//[!\`]/}
+  [ $((${#sq} % 2)) -ne 0 ] || [ $((${#dq} % 2)) -ne 0 ] || [ $((${#bq} % 2)) -ne 0 ]
 }
 
 # ── 기본 정보 ───────────────────────────────────────────────────────────────
@@ -2653,16 +2683,15 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
 # 코드 조각(```…```, `…`, 줄 맨 앞 $ ·!)만 셸 명령 판정에 태운다. 문장 속 언급(.env 는 읽지 마)과
 # 금지 목록 줄(…금지·하지 마·never·do not 이 있는 줄)은 통과. 문장 속 "cat .env" 처럼 읽기 동사+비밀값 파일이 붙은 형태는 막는다.
 check_agent() {
-  local p k frag line rest re_fence='```[a-zA-Z0-9_-]*(([^`]|`[^`]|``[^`])*)```' re_tick='`([^`]+)`' conv nl batch=""
+  local p k frag line rest re_fence='```[a-zA-Z0-9_-]*(([^`]|`[^`]|``[^`])*)```' re_tick='`([^`]+)`' conv batch=""
   local re_ban='금지|하지[[:space:]]*마|하지[[:space:]]*말|말[[:space:]]*것|쓰지[[:space:]]*마|쓰지[[:space:]]*않|부르지[[:space:]]*마|부르지[[:space:]]*않|실행하지|건드리지|never|do not|don'"'"'t|must not|forbidden|prohibited|avoid'
   AGENT_MODE=1
   BLOCK_NOTE="(하위 에이전트에게 시키는 것도 같은 우회입니다. 금지 사항을 적는 거라면 명령 형태 없이 '비밀값 파일은 열지 말 것'처럼 쓰세요.)"
   # 판정할 명령 조각은 모아서(12KB 까지 한 번에) 셸 판정에 넣는다 — 줄마다 따로 부르면 수천 줄에서 훅 제한 시간을 넘긴다.
   # 따옴표 개수가 맞지 않는 조각은 옆 조각과 섞여 판정을 흐리지 않게 따로 본다
   agent_cmd() {
-    local f=$1 q=${1//[!\'\"\`]/}
-    local sq=${q//[!\']/} dq=${q//[!\"]/} bq=${q//[!\`]/}
-    if [ $((${#sq} % 2)) -ne 0 ] || [ $((${#dq} % 2)) -ne 0 ] || [ $((${#bq} % 2)) -ne 0 ]; then check_shell "$f"; return; fi
+    local f=$1
+    if quote_odd "$f"; then check_shell "$f"; return; fi
     if [ $((${#batch} + ${#f})) -gt 12000 ] && [ -n "$batch" ]; then check_shell "$batch"; batch=""; fi
     batch="$batch$P_BSN$f"
   }
@@ -2670,10 +2699,9 @@ check_agent() {
     jget "$k"; p=$JV
     [ -z "$p" ] && continue
     # 줄 수 상한: 줄마다 명령 판정을 하므로 아주 긴 지시문은 판정하지 않고 막는다(파일로 넘기면 된다)
-    nl=${p//"$P_BSN"/$'\001'}; nl=${nl//[!$'\001']/}
-    [ "${#nl}" -gt 2000 ] && block "도구 입력이 너무 깁니다(2,000줄 초과) — 파일로 저장해 경로를 넘기세요." "지시문을 파일(예: /tmp/지시.md)로 저장하고, 하위 에이전트에게는 그 파일 경로를 읽으라고 짧게 쓰세요."
+    nl_split "$p"; conv=$NLV
+    [ "${NLC:-0}" -gt 2000 ] && block "도구 입력이 너무 깁니다(2,000줄 초과) — 파일로 저장해 경로를 넘기세요." "지시문을 파일(예: /tmp/지시.md)로 저장하고, 하위 에이전트에게는 그 파일 경로를 읽으라고 짧게 쓰세요."
     # 줄 나누기는 한 번에(here-string) — ${x#*…} 를 줄마다 되풀이하면 줄 수의 제곱만큼 느려진다
-    conv=${p//"$P_BSN"/$NL}
     while IFS= read -r line; do
       has "$line" "$re_ban" && continue
       # 문장 속 읽기 동사 + 비밀값 파일(cat .env, head .env.local, Get-Content .env)

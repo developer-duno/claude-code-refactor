@@ -61,6 +61,19 @@ GIT_TOOLS = _git_tools_path()
 TEST_DATA = tempfile.mkdtemp(prefix="guarddata-")
 atexit.register(shutil.rmtree, TEST_DATA, True)
 
+# 훅(guard·turn·post-check·session-start) 호출의 시간 한도. Claude Code 는 시간 초과된 PreToolUse 훅을 막지 않고 통과시키므로
+# 오래 걸린 차단은 실제로는 통과다 → 시험도 30초를 넘기면 실패로 센다(시험을 멈추지 않고 계속). 훅이 아닌 스크립트 호출은 90초 그대로.
+HOOK_TIMEOUT = 30
+HOOK_TIMEOUTS = []
+
+
+def run_hook(argv, **kw):
+    try:
+        return subprocess.run(argv, timeout=HOOK_TIMEOUT, **kw)
+    except subprocess.TimeoutExpired:
+        HOOK_TIMEOUTS.append(" ".join(str(a) for a in argv[1:]))
+        return subprocess.CompletedProcess(argv, 124, b"", f"[시험] 훅이 {HOOK_TIMEOUT}초 안에 끝나지 않음".encode("utf-8"))
+
 
 def lf(path, text):
     """LF 줄바꿈으로 고정해 쓴다(Windows에서 write_text의 기본 CRLF 변환을 막는다)."""
@@ -142,8 +155,8 @@ def make_project(phase=None, allow=(), baseline_approved=False, crlf_plan=False,
 def turn(proj, sess, prompt):
     """UserPromptSubmit 훅(turn.sh)을 실행한다."""
     pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
-    subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
-                   capture_output=True, env=env_for(proj), timeout=90)
+    run_hook([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
+             capture_output=True, env=env_for(proj))
 
 
 def env_for(proj, project_dir=None):
@@ -162,8 +175,8 @@ def run(proj, tool, tool_input, project_dir=None, script="guard", event="PreTool
     }
     if extra:
         payload.update(extra)
-    r = subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), script], input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                       capture_output=True, env=env_for(proj, project_dir), timeout=90)
+    r = run_hook([BASH, (HOOKS / "run.sh").as_posix(), script], input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                 capture_output=True, env=env_for(proj, project_dir))
     return r.returncode, r.stderr.decode("utf-8", "replace")
 
 
@@ -736,8 +749,8 @@ def main():
     for sess, prompt, gate, want in steps:
         set_gate(gate)
         pl = {"session_id": sess, "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(proj)}
-        subprocess.run([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
-                       capture_output=True, env=env_for(proj), timeout=90)
+        run_hook([BASH, (HOOKS / "run.sh").as_posix(), "turn"], input=json.dumps(pl, ensure_ascii=False).encode(),
+                 capture_output=True, env=env_for(proj))
         exists = (proj / "docs/refactor/.turn.s1").exists()
         ok = exists == want and (not want or (proj / "docs/refactor/.turn.s1").read_text().splitlines()[0].strip() == "go s1")
         res["total"] += 1
@@ -751,7 +764,7 @@ def main():
     # run.sh 를 슬래시 없이 부를 때(hooks 폴더 안에서 bash run.sh guard)
     proj = make_project()
     pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "cat .env"}, "cwd": str(proj)}).encode()
-    r = subprocess.run([BASH, "run.sh", "guard"], input=pl, capture_output=True, env=env_for(proj), cwd=str(HOOKS), timeout=90)
+    r = run_hook([BASH, "run.sh", "guard"], input=pl, capture_output=True, env=env_for(proj), cwd=str(HOOKS))
     res["total"] += 1
     if r.returncode != B:
         res["fails"].append(("run.sh 상대 경로", B, r.returncode, "Bash", "cat .env", r.stderr.decode()[:200]))
@@ -765,12 +778,12 @@ def main():
     g.write_bytes(lines[0] + b"\n" + b"\r\n".join(lines[1:]))
     proj = make_project()
     pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "cat .env"}, "cwd": str(proj)}).encode()
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=90)
+    r = run_hook([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj))
     res["total"] += 1
     if r.returncode != B:
         res["fails"].append(("run.sh CRLF 중간", B, r.returncode, "Bash", "cat .env", r.stderr.decode()[:200]))
     lf(g, "#!/usr/bin/env bash\nif then\n")
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj), timeout=90)
+    r = run_hook([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=pl, capture_output=True, env=env_for(proj))
     res["total"] += 1
     if r.returncode != 1:
         res["fails"].append(("run.sh 고장 난 스크립트", 1, r.returncode, "Bash", "문법 오류", r.stderr.decode()[:200]))
@@ -797,6 +810,11 @@ def main():
 
     check_upgrade_021(res)
     check_upgrade_022(res)
+    check_subst_023(res)
+
+    res["total"] += 1
+    if HOOK_TIMEOUTS:
+        res["fails"].append((f"훅 시간 초과({HOOK_TIMEOUT}초)", 0, len(HOOK_TIMEOUTS), "", "", " / ".join(HOOK_TIMEOUTS)[:300]))
 
     for f in res["fails"]:
         print("FAIL [%s] 기대 %s 실제 %s  %s %s\n      %s" % f)
@@ -1600,6 +1618,95 @@ def check_upgrade_022(res):
                 res["fails"].append(("0.2.2 · " + title, B, code, "Bash", cmd, err.strip()[:300]))
     finally:
         shutil.rmtree(proj, ignore_errors=True)
+
+
+# ── 0.2.3 B: bash 3.2 에서 큰 값의 ${x//…} 가 폭주하던 곳(지시문 줄 세기·줄 나누기, SQL 풀기)을 awk 로 바꾼 함수가
+#    옛 함수(0.2.2 그대로 아래에 둔다 — 지시문 따옴표 홀짝 세기 포함)와 글자 하나까지 같은지 대조한다. 1KB 경계 양쪽(bash 판·awk 판)을 모두 지난다.
+OLD_SUBST_FUNCS = r'''
+unesc_nl_old() {
+  local v=$1
+  v=${v//"$P_BS2"/$PH}
+  v=${v//"$PH$P_BSR$P_BSN"/}; v=${v//"$PH$P_BSN"/}
+  v=${v//"$P_BSQ"/$Q}; v=${v//"$P_BSSL"/$SL}
+  v=${v//"$P_BSR"/}; v=${v//"$P_BSN"/$NL}; v=${v//"$P_BST"/ }
+  UV=${v//$PH/$BS}
+}
+nl_split_old() {
+  local nl
+  nl=${1//"$P_BSN"/$'\001'}; nl=${nl//[!$'\001']/}; NLC=${#nl}
+  NLV=${1//"$P_BSN"/$NL}
+}
+quote_odd_old() {
+  local q=${1//[!\'\"\`]/}
+  local sq=${q//[!\']/} dq=${q//[!\"]/} bq=${q//[!\`]/}
+  [ $((${#sq} % 2)) -ne 0 ] || [ $((${#dq} % 2)) -ne 0 ] || [ $((${#bq} % 2)) -ne 0 ]
+}
+for f in "$1"/in-*; do
+  IFS= read -r -d '' v < "$f"
+  i=${f##*/in-}
+  unesc_nl "$v"; printf '%s' "$UV" > "$1/nu-$i"
+  unesc_nl_old "$v"; printf '%s' "$UV" > "$1/ou-$i"
+  nl_split "$v"; printf '%s|%s' "$NLC" "$NLV" > "$1/ns-$i"
+  nl_split_old "$v"; printf '%s|%s' "$NLC" "$NLV" > "$1/os-$i"
+  if quote_odd "$v"; then printf 1; else printf 0; fi > "$1/nq-$i"
+  if quote_odd_old "$v"; then printf 1; else printf 0; fi > "$1/oq-$i"
+done
+'''
+
+
+def _guard_funcs(*names):
+    """guard.sh 에서 기본 변수 줄과 이름이 같은 함수 본문(이름() { … 첫 '}' 줄까지)을 꺼낸다."""
+    lines = (HOOKS / "guard.sh").read_text(encoding="utf-8").splitlines()
+    out = [l for l in lines if l.startswith("BS='") or l.startswith("P_BS2=")]
+    for name in names:
+        i = lines.index(f"{name}() {{")
+        j = lines.index("}", i)
+        out += lines[i:j + 1]
+    return "\n".join(out)
+
+
+def check_subst_023(res):
+    import random
+    rnd = random.Random(20261001)
+    toks = ["\\n", "\\\\", "\\r\\n", "\\r", "\\t", '\\"', "\\/", "\\", "\x01", "\x01\\n", "\x01\\r\\n", "n", "r", "t", '"', "/",
+            "x", "a", " ", "é", "가", "\n", "\r", "\\\\n", "\\\\\\n", "$ ls", "`cat`", "'", "`", "it's"]
+    cases = ["", "x", "\\", "\\n", "\\\\", "\\\\n", "\\\\\\n", "\\r\\n", "\x01", "\x01\\n", "a\n", "\n\n", "\\n\\n\\n", "끝\\",
+             "\\n" * 512, "\\n" * 513, "a" * 1024, "a" * 1025, "\\n" * 600 + "x", "\\\\" * 513 + "n", "\x01" * 1100, "\n" * 1100 + "\\n"]
+    for k in range(300):
+        size = rnd.choice([3, 10, 40, 200, 900]) if k < 220 else rnd.randint(1025, 1500)
+        s = ""
+        while len(s.encode("utf-8")) < size:
+            s += rnd.choice(toks)
+        cases.append(s)
+    d = pathlib.Path(tempfile.mkdtemp(prefix="subst-"))
+    try:
+        for i, s in enumerate(cases):
+            (d / f"in-{i:04d}").write_bytes(s.encode("utf-8"))
+        script = "LC_ALL=C\nexport LC_ALL\nshopt -u patsub_replacement 2>/dev/null\n" + _guard_funcs("unesc_nl", "nl_split", "quote_odd") + "\n" + OLD_SUBST_FUNCS
+        (d / "t.sh").write_bytes(script.encode("utf-8"))
+        r = subprocess.run([BASH, (d / "t.sh").as_posix(), d.as_posix()], capture_output=True, env=env_for(d), timeout=600)
+        bad = []
+        for i, s in enumerate(cases):
+            for a, b, what in [("nu", "ou", "unesc_nl"), ("ns", "os", "nl_split"), ("nq", "oq", "quote_odd")]:
+                fa, fb = d / f"{a}-{i:04d}", d / f"{b}-{i:04d}"
+                if not fa.exists() or not fb.exists() or fa.read_bytes() != fb.read_bytes():
+                    bad.append(f"{what} #{i} 길이 {len(s)} {s[:40]!r}")
+        res["total"] += 1
+        print(f"  0.2.3 · 차등 시험(옛 함수 대조) {len(cases)}개 입력 × 3함수 · 1KB 초과 {sum(len(c.encode()) > 1024 for c in cases)}개")
+        if bad or r.returncode != 0:
+            res["fails"].append(("0.2.3 B 차등 시험(옛 함수와 같은 결과)", 0, len(bad), "", " / ".join(bad[:5]), r.stderr.decode("utf-8", "replace")[:200]))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 줄 수 경계(2,000줄 이하 계속 · 초과 차단)는 그대로 — 1KB 를 넘는 awk 판에서
+    proj = make_project()
+    blk = "도구 입력이 너무 깁니다(2,000줄 초과)"
+    for n_lines, want in [(2000, OK), (2001, B)]:
+        code, err = run(proj, "Agent", {"description": "t", "prompt": "줄\n" * n_lines})
+        res["total"] += 1
+        if code != want or ((want == B) != (blk in err)):
+            res["fails"].append(("0.2.3 B 줄 수 경계", want, code, "Agent", f"{n_lines}줄", err.strip()[:200]))
+    shutil.rmtree(proj, ignore_errors=True)
 
 
 if __name__ == "__main__":

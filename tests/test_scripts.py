@@ -53,6 +53,18 @@ GIT_TOOLS = _git_tools_path()
 TEST_DATA = tempfile.mkdtemp(prefix="scriptsdata-")
 atexit.register(shutil.rmtree, TEST_DATA, True)
 
+# 훅(guard·turn·post-check·session-start) 호출의 시간 한도(test_guard.py 와 같음) — 넘기면 실패로 세고 계속. 훅이 아닌 스크립트 호출은 90초 그대로.
+HOOK_TIMEOUT = 30
+HOOK_TIMEOUTS = []
+
+
+def run_hook(argv, **kw):
+    try:
+        return subprocess.run(argv, timeout=HOOK_TIMEOUT, **kw)
+    except subprocess.TimeoutExpired:
+        HOOK_TIMEOUTS.append(" ".join(str(a) for a in argv[1:]))
+        return subprocess.CompletedProcess(argv, 124, b"", f"[시험] 훅이 {HOOK_TIMEOUT}초 안에 끝나지 않음".encode("utf-8"))
+
 
 def lf(path, text):
     """LF 줄바꿈으로 고정해 쓴다(Windows에서 write_text의 기본 CRLF 변환을 막는다)."""
@@ -151,7 +163,7 @@ def hook(name, proj, payload, extra_env=None):
         e.update(extra_env)
     data = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     t0 = time.perf_counter()
-    r = subprocess.run([BASH, str(RUN), name], input=data, capture_output=True, env=e, timeout=90)
+    r = run_hook([BASH, str(RUN), name], input=data, capture_output=True, env=e)
     return r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace"), r.returncode, time.perf_counter() - t0
 
 
@@ -503,7 +515,7 @@ def main():
     lf(tmpd / "refactor/scripts/refactor-approve.sh", "#!/usr/bin/env bash\necho broken >&2\nexit 5\n")
     e = env(); e["CLAUDE_PROJECT_DIR"] = str(d)
     pl = json.dumps({"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "/refactor:approve P1-1", "cwd": str(d)}).encode()
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "turn"], input=pl, capture_output=True, env=e, timeout=90)
+    r = run_hook([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "turn"], input=pl, capture_output=True, env=e)
     so = r.stdout.decode("utf-8", "replace")
     check("훅: 승인 스크립트가 실패해도 exit 0", r.returncode == 0 and HEAD_ in so and "broken" in so, f"{r.returncode} {so}")
     shutil.rmtree(tmpd, ignore_errors=True)
@@ -577,7 +589,7 @@ def main():
     (tmpd / "refactor/hooks/guard.sh").unlink()
     e1 = env()
     e1["CLAUDE_PLUGIN_DATA"] = str(tmpd / "d")
-    r = subprocess.run([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=b"{}", capture_output=True, env=e1, timeout=90)
+    r = run_hook([BASH, (tmpd / "refactor/hooks/run.sh").as_posix(), "guard"], input=b"{}", capture_output=True, env=e1)
     check("run.sh: 훅 파일 없음 → 1(막지 않음)", r.returncode == 1, str(r.returncode))
     pl1 = (tmpd / "d/problems.log").read_text(encoding="utf-8") if (tmpd / "d/problems.log").exists() else ""
     check("run.sh: 훅 파일 없음 기록은 실제 종료 코드(exit 1)", pl1.rstrip().endswith(" | run.sh | guard exit 1 (파일 없음)"), pl1)
@@ -587,7 +599,9 @@ def main():
             r"\b(declare|local|typeset)\s+-[a-zA-Z]*n\b", r"\bwait\s+-n\b", r"\[\[?\s+-v\s", r"\$\{[a-zA-Z_][a-zA-Z0-9_]*[\^,]", r"\[-1\]",
             r"\{[0-9]+\.\.[0-9]+\.\.", r"(^|[\s;&|{(])(mapfile|readarray|coproc)\s", r"\b(declare|local|typeset)\s+-[a-zA-Z]*A",
             r"\bdeclare\s+-[a-zA-Z]*g", r"\bread\s[^;|\n]*-t\s*[0-9]*\.[0-9]", r"\$\{[a-zA-Z_]+@[QEPAa]\}",
-            r"(^|\s);;?&(\s|$)", r"\|&\s", r"\bBASHPID\b|\bSRANDOM\b"]
+            r"(^|\s);;?&(\s|$)", r"\|&\s", r"\bBASHPID\b|\bSRANDOM\b",
+            # 치환(${x/…}·${x//…}) 안에 다시 치환 — bash 3.2 는 bad substitution(맥 CI 0.2.2). ${x/"${BASH_REMATCH[0]}"/…}·${x:-${y}} 같은 3.2 에서 되는 꼴은 걸리지 않게 안쪽도 치환일 때만
+            r"\$\{[A-Za-z_][A-Za-z0-9_]*//?[^}]*\$\{[A-Za-z_][A-Za-z0-9_]*//?"]
     hits = []
     for f in sorted((ROOT / "plugins/refactor").glob("*/*.sh")):
         for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
@@ -596,6 +610,116 @@ def main():
             hits += [f"{f.name}:{i}: {p}" for p in pats if re.search(p, line)]
     check("bash 3.2: bash 4 전용 문법 0건", not hits, "\n".join(hits[:20]))
     shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 19-3) run.sh 감시(0.2.3 #13): 시간 초과된 PreToolUse 훅은 도구 호출을 막지 않는다(공식 문서) → guard 판정이 T초
+    #       (기본 25, REFACTOR_GUARD_LIMIT 로 1~25 사이로만 줄일 수 있음)를 넘기면 run.sh 가 guard 를 죽이고 2(차단).
+    #       "막혔다"는 종료 코드·문구로 판정하고 시간은 상한만 본다(느린 CI 에서 헛빨강이 나지 않게 넉넉히).
+    TMSG = "[refactor 안전장치] 판정이 너무 오래 걸려 막았습니다({}초 초과) — 내용을 파일로 저장해 경로를 넘기거나, 명령을 나눠 주세요."
+    tmpw = pathlib.Path(tempfile.mkdtemp(prefix="watch-"))
+    shutil.copytree(ROOT / "plugins/refactor", tmpw / "refactor")
+    wrun = (tmpw / "refactor/hooks/run.sh").as_posix()
+    wdata = tmpw / "d"
+    wdata.mkdir()
+    # 가짜 guard: FAKE_BUSY 초 동안 bash 안에서만 돈다(자식 프로세스 없음 — 긴 확장 한 번에 갇힌 것과 같음), FAKE_CODE 로 끝난다
+    lf(tmpw / "refactor/hooks/guard.sh", "#!/usr/bin/env bash\n"
+       "IFS= read -r -d '' input || true\n"
+       "printf '%s' \"$$\" > \"$CLAUDE_PLUGIN_DATA/fake.pid\"\n"
+       "if [ -n \"${FAKE_ECHO:-}\" ]; then printf 'out:ok'; printf 'in:%s\\n' \"$input\" >&2; fi\n"
+       "s=$SECONDS; x=aaaaaaaaaa\n"
+       "while [ $((SECONDS - s)) -lt \"${FAKE_BUSY:-0}\" ]; do y=${x//a/b}; done\n"
+       "exit \"${FAKE_CODE:-0}\"\n")
+
+    def wcall(limit=None, busy=0, code=0, echo=False, stdin=b'{"tool_name":"Bash","tool_input":{"command":"ls"}}', tmo=15):
+        e = env()
+        e["CLAUDE_PLUGIN_DATA"] = str(wdata)
+        e.pop("REFACTOR_GUARD_LIMIT", None)
+        if limit is not None:
+            e["REFACTOR_GUARD_LIMIT"] = limit
+        e["FAKE_BUSY"], e["FAKE_CODE"] = str(busy), str(code)
+        if echo:
+            e["FAKE_ECHO"] = "1"
+        t0 = time.perf_counter()
+        try:
+            r = subprocess.run([BASH, wrun, "guard"], input=stdin, capture_output=True, env=e, timeout=tmo)
+            return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace"), time.perf_counter() - t0
+        except subprocess.TimeoutExpired:
+            return "시간 초과", "", "", time.perf_counter() - t0
+
+    def wlog():
+        f = wdata / "problems.log"
+        return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+
+    def leftovers():
+        """이 시험의 사본 플러그인 경로가 명령줄에 든 프로세스(감시용 셸·가짜 guard)가 남았는지 — Windows 는 ps 가 인자를 안 보여 줘 건너뛴다."""
+        if os.name == "nt":
+            return []
+        hits = []
+        for _ in range(30):   # 끝나는 중인 프로세스에 3초까지 여유
+            ps = subprocess.run(["ps", "-axo", "pid=,args="], capture_output=True).stdout.decode("utf-8", "replace")
+            hits = [l.strip() for l in ps.splitlines() if str(tmpw) in l]
+            if not hits:
+                return []
+            time.sleep(0.1)
+        return hits
+
+    def pid_alive():
+        if os.name == "nt":
+            return False
+        try:
+            os.kill(int((wdata / "fake.pid").read_text()), 0)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    # (가) 느린 guard + 한도 2초 → 10초 안에 2(차단) + 문구 + 기록 한 줄, guard·감시가 남지 않음
+    n0 = len(wlog())
+    rc, so, se, dt = wcall(limit="2", busy=999)
+    lines = se.splitlines()
+    check("감시: 한도 2초 → 차단(2)", rc == 2 and dt < 10, f"{rc} {dt:.1f}s {se[-300:]}")
+    check("감시: 첫 줄 문구(2초)", bool(lines) and lines[0] == TMSG.format(2), se[:400])
+    check("감시: 끝 줄 우회 금지 안내", bool(lines) and lines[-1].startswith("  (같은 결과를 내는 다른 명령으로 우회하지 말고"), se[-300:])
+    new = wlog()[n0:]
+    check("감시: 문제 기록 한 줄(명령·값 없음)", len(new) == 1 and new[0].endswith(" | run.sh | guard 시간 초과(2초) → 차단"), "\n".join(new))
+    check("감시: 시간 초과 뒤 guard 죽음", not pid_alive())
+    left = leftovers()
+    check("감시: 시간 초과 뒤 남은 프로세스 0", not left, "\n".join(left))
+
+    # (다) A2: 1~25 정수만 받는다 — 0·26·글자·빈 값은 25(3초 걸리는 guard 를 막지 않음), 99 는 25 로 취급(늘릴 수 없음)
+    for lim in ["0", "26", "x", ""]:
+        rc, so, se, dt = wcall(limit=lim, busy=3)
+        check(f"감시: 한도 {lim!r} → 25초(3초 판정은 그대로)", rc == 0 and se == "", f"{rc} {dt:.1f}s {se[:300]}")
+    rc, so, se, dt = wcall(limit="99", busy=999, tmo=45)
+    check("감시: 한도 99 → 25초에 차단", rc == 2 and 20 < dt < 40 and se.splitlines()[:1] == [TMSG.format(25)], f"{rc} {dt:.1f}s {se[:300]}")
+
+    # (다) A5·A6: 빨리 끝나는 호출 — 표준입력·표준출력·표준오류 전달, 종료 코드 변환(42→2, 2→1, 그 외 그대로), 한도를 기다리지 않고 바로 돌아옴
+    stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo 가나다"}}, ensure_ascii=False).encode("utf-8")
+    n1 = len(wlog())
+    for code, want in [(0, 0), (42, 2), (2, 1), (7, 7)]:
+        rc, so, se, dt = wcall(code=code, echo=True, stdin=stdin)
+        check(f"감시: 정상 경로 종료 코드 {code}→{want}·입출력 그대로·바로 돌아옴", rc == want and so == "out:ok"
+              and se == "in:" + stdin.decode("utf-8") + "\n" and dt < 5, f"{rc} {dt:.2f}s {so!r} {se[:300]!r}")
+    left = leftovers()
+    check("감시: 정상 종료 뒤 남은 프로세스 0", not left, "\n".join(left))
+    check("감시: 정상 경로는 문제 기록 없음", not any("시간 초과" in l for l in wlog()[n1:]), "\n".join(wlog()[n1:]))
+    shutil.rmtree(tmpw, ignore_errors=True)
+
+    # (나) 실제 guard: 홀수 따옴표 2,000줄 지시문(마지막 줄에 비밀값 파일 읽기 지시) → 30초 안에 2(판정이 끝나든 감시가 끊든 막힌다)
+    d = project()
+    e = env()
+    e["CLAUDE_PROJECT_DIR"] = str(d)
+    e.pop("REFACTOR_GUARD_LIMIT", None)
+    pl = json.dumps({"session_id": "s1", "tool_name": "Agent", "cwd": str(d),
+                     "tool_input": {"description": "t", "prompt": "$ echo it's\n" * 1999 + "$ cat .env\n"}}).encode()
+    t0 = time.perf_counter()
+    try:
+        r = subprocess.run([BASH, RUN, "guard"], input=pl, capture_output=True, env=e, timeout=30)
+        rc = r.returncode
+    except subprocess.TimeoutExpired:
+        rc = "시간 초과"
+    dt = time.perf_counter() - t0
+    print(f"  성능 · 홀수 따옴표 2,000줄 지시문(실제 guard): {dt*1000:.0f}ms")
+    check("감시: 실제 guard 홀수 따옴표 2,000줄 → 30초 안에 차단", rc == 2, f"{rc} {dt:.1f}s")
+    shutil.rmtree(d, ignore_errors=True)
 
     # 20) 훅 조기 종료(#18): 보통 프로젝트에서는 입력을 (거의) 읽지 않고 끝난다(출력 0B·exit 0)
     #     시간 기준은 기계 부하에 흔들리므로, "입력 쪽을 닫지 않아도 끝나는가"로 판정한다(입력을 다 읽는 훅이면 여기서 멈춘다)
@@ -793,7 +917,7 @@ def main():
     gp.mkdir()
     e["CLAUDE_PROJECT_DIR"] = str(gp)
     pl = json.dumps({"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "cat .env.production"}}).encode()
-    r = subprocess.run([BASH, prun, "guard"], input=pl, capture_output=True, env=e, timeout=90)
+    r = run_hook([BASH, prun, "guard"], input=pl, capture_output=True, env=e)
     plog = (tmpr / "d2/problems.log").read_text(encoding="utf-8")
     last = plog.rstrip().splitlines()[-1]
     check("문제 기록: 안전장치 차단(명령은 적지 않음)", r.returncode == 2 and " | guard | 차단: " in last and "cat " not in last
@@ -824,6 +948,8 @@ def main():
               f"plugin.json={pv} marketplace.json={mv} README={rv} bug.yml={bv}")
     except Exception as e:
         check("판 번호 일치: plugin/marketplace/README/bug.yml", False, f"예외: {e}")
+
+    check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
     for label, detail in fails:
         print(f"FAIL {label}\n      {detail}")
