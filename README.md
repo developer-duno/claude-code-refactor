@@ -329,7 +329,7 @@ claude plugin validate --strict plugins/refactor; claude plugin validate --stric
 ```
 
 - Windows에서는 시험이 Git Bash를 자동으로 찾습니다(PATH의 WSL bash 대신). 못 찾으면 `GUARD_BASH`에 Git Bash 절대경로를 지정하세요. `python3`은 Windows 스토어 안내 프로그램일 수 있으니 `python`을 쓰세요.
-- 0.2.3 기준 결과(GitHub Actions): 안전장치 시험 1424/1424(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 152/152(Ubuntu·macOS)·153/153(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
+- 0.2.3 기준 결과(GitHub Actions): 안전장치 시험 1424/1424(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 154/154(Ubuntu·macOS)·155/155(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
 - 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올립니다.
 
 ### 폴더 구조

@@ -20,7 +20,7 @@ shift; c=$(<"$f"); if [ "$n" = guard ]; then T=${REFACTOR_GUARD_LIMIT:-}; case "
   p=""; u=""; trap 'u=1; [ -n "$p" ] && kill -9 "$p" 2>/dev/null' USR1 #
   exec 5> >(exec >/dev/null 2>&1; s=$SECONDS; e=1; while :; do l=$((T - (SECONDS - s))); if [ "$l" -le 0 ]; then e=255; break; fi; read -r -d '' -t "$l" x; e=$?; [ "$e" = 0 ] || break; done; if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then [ "$e" -gt 128 ]; else [ $((SECONDS - s)) -ge $((T > 1 ? T - 1 : T)) ]; fi && kill -USR1 $$); exec 3<&0 #
   case "$c" in *$'\r'*) bash <(printf '%s\n' "$c" | tr -d '\r') "$@" <&3 3<&- & ;; *) bash "$f" "$@" <&3 3<&- & ;; esac; p=$!; exec 5>&- 3<&-; wait "$p" 2>/dev/null; r=$? #
-  if [ "$u" = 1 ] && [ "$r" -gt 128 ] && [ "$r" != 137 ]; then wait "$p" 2>/dev/null; r=$?; fi # USR1 이 wait 를 깨웠으면 KILL 된 guard 를 다시 거둔다(137)
+  if [ "$u" = 1 ] && [ "$r" -gt 128 ] && [ "$r" != 137 ]; then wait "$p" 2>/dev/null; r=$?; case "$r" in 0|1|2|42) ;; *) r=137 ;; esac; fi # USR1 이 wait 를 깨웠으면 KILL 된 guard 를 다시 거둔다(137). guard 가 그 순간 스스로 끝나 있었으면 상태를 못 찾을 수 있다(127·255) — 판정을 모르면 막는다(137)
   if [ "$r" = 137 ]; then printf '[refactor 안전장치] 판정이 너무 오래 걸려 막았습니다(%s초 초과) — 내용을 파일로 저장해 경로를 넘기거나, 명령을 나눠 주세요.\n  → 긴 지시문·SQL 은 파일로 저장해 경로를 넘기고, 긴 명령은 Write 도구로 스크립트 파일을 만들어 무엇을 하는지 사용자에게 보여 준 뒤 실행하세요.\n  (같은 결과를 내는 다른 명령으로 우회하지 말고, 무엇이 막혔는지 사용자에게 보고하세요. → 로 안내된 방법은 써도 됩니다.)\n' "$T" >&2; r=t; exit 2; fi #
 else case "$c" in *$'\r'*) bash <(printf '%s\n' "$c" | tr -d '\r') "$@" ;; *) bash "$f" "$@" ;; esac; r=$?; fi #
 if [ "$h" = 1 ]; then [ "$r" = 42 ] && exit 2; [ "$r" = 2 ] && exit 1; fi; exit "$r" #
