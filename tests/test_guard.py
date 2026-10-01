@@ -1678,23 +1678,55 @@ def check_subst_023(res):
         while len(s.encode("utf-8")) < size:
             s += rnd.choice(toks)
         cases.append(s)
+    # 날 CR·\001 이 든 값은 bash 판으로 가므로, awk 판을 지나는 큰 입력(날 제어 글자 없음)을 따로 더 만든다
+    plain = [t for t in toks if t not in ("\x01", "\x01\\n", "\x01\\r\\n", "\r")]
+    for k in range(80):
+        s, size = "", rnd.randint(1025, 2500)
+        while len(s.encode("utf-8")) < size:
+            s += rnd.choice(plain)
+        cases.append(s)
+    # 이 컴퓨터에 있는 다른 awk(mawk·original-awk·busybox 등)로도 — PATH 맨 앞 폴더에 awk 이름의 링크를 둔다(링크를 못 만들면 건너뜀)
     d = pathlib.Path(tempfile.mkdtemp(prefix="subst-"))
+    awks, seen = [("기본 awk", None)], {os.path.realpath(shutil.which("awk") or "")}
+    for name in ("gawk", "mawk", "nawk", "original-awk", "onetrue-awk", "bwk-awk", "busybox"):
+        w = shutil.which(name)
+        if not w or os.path.realpath(w) in seen:
+            continue
+        seen.add(os.path.realpath(w))
+        try:
+            (d / f"awk-{name}").mkdir()
+            os.symlink(w, d / f"awk-{name}" / "awk")
+            awks.append((name, d / f"awk-{name}"))
+        except OSError:
+            pass
     try:
         for i, s in enumerate(cases):
             (d / f"in-{i:04d}").write_bytes(s.encode("utf-8"))
         script = "LC_ALL=C\nexport LC_ALL\nshopt -u patsub_replacement 2>/dev/null\n" + _guard_funcs("unesc_nl", "nl_split", "quote_odd") + "\n" + OLD_SUBST_FUNCS
         (d / "t.sh").write_bytes(script.encode("utf-8"))
-        r = subprocess.run([BASH, (d / "t.sh").as_posix(), d.as_posix()], capture_output=True, env=env_for(d), timeout=600)
-        bad = []
-        for i, s in enumerate(cases):
-            for a, b, what in [("nu", "ou", "unesc_nl"), ("ns", "os", "nl_split"), ("nq", "oq", "quote_odd")]:
-                fa, fb = d / f"{a}-{i:04d}", d / f"{b}-{i:04d}"
-                if not fa.exists() or not fb.exists() or fa.read_bytes() != fb.read_bytes():
-                    bad.append(f"{what} #{i} 길이 {len(s)} {s[:40]!r}")
+        bad, errs = [], ""
+        for aname, adir in awks:
+            e = env_for(d)
+            if adir:
+                e["PATH"] = str(adir) + os.pathsep + e["PATH"]
+            r = subprocess.run([BASH, (d / "t.sh").as_posix(), d.as_posix()], capture_output=True, env=e, timeout=600)
+            if r.returncode != 0:
+                errs += f"[{aname}] " + r.stderr.decode("utf-8", "replace")[:200]
+            for i, s in enumerate(cases):
+                for a, b, what in [("nu", "ou", "unesc_nl"), ("ns", "os", "nl_split"), ("nq", "oq", "quote_odd")]:
+                    fa, fb = d / f"{a}-{i:04d}", d / f"{b}-{i:04d}"
+                    if not fa.exists() or not fb.exists() or fa.read_bytes() != fb.read_bytes():
+                        bad.append(f"[{aname}] {what} #{i} 길이 {len(s)} {s[:40]!r}")
+                    for f in (fa, fb):
+                        if f.exists():
+                            f.unlink()
         res["total"] += 1
-        print(f"  0.2.3 · 차등 시험(옛 함수 대조) {len(cases)}개 입력 × 3함수 · 1KB 초과 {sum(len(c.encode()) > 1024 for c in cases)}개")
-        if bad or r.returncode != 0:
-            res["fails"].append(("0.2.3 B 차등 시험(옛 함수와 같은 결과)", 0, len(bad), "", " / ".join(bad[:5]), r.stderr.decode("utf-8", "replace")[:200]))
+        big = [c for c in cases if len(c.encode()) > 1024]
+        nawk = sum(1 for c in big if "\r" not in c and "\x01" not in c)
+        print(f"  0.2.3 · 차등 시험(옛 함수 대조) {len(cases)}개 입력 × 3함수 · 1KB 초과 {len(big)}개(awk 판 {nawk}개)"
+              f" · awk: {', '.join(n for n, _ in awks)}")
+        if bad or errs:
+            res["fails"].append(("0.2.3 B 차등 시험(옛 함수와 같은 결과)", 0, len(bad), "", " / ".join(bad[:5]), errs[:300]))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -1706,6 +1738,12 @@ def check_subst_023(res):
         res["total"] += 1
         if code != want or ((want == B) != (blk in err)):
             res["fails"].append(("0.2.3 B 줄 수 경계", want, code, "Agent", f"{n_lines}줄", err.strip()[:200]))
+    # 1KB 를 넘는 작은 SQL(awk 판)에서도 줄 주석 뒤 줄의 DROP/**/TABLE 을 막는다 — 맥 awk(BWK)의 한 글자 split 이 줄바꿈도 갈라 \n 을 푼 줄바꿈이 \ 로 바뀌었고, 줄 주석이 DROP 까지 삼켜 통과했다(0.2.3 A2)
+    sql = "INSERT INTO t (a, b) VALUES (1, 'x'); -- 메모\n" * 40 + "DROP/**/TABLE orders;"
+    code, err = run(proj, "mcp__x__execute_sql", {"project_id": "p", "query": sql})
+    res["total"] += 1
+    if code != B:
+        res["fails"].append(("0.2.3 A2 SQL 2KB 주석 뒤 DROP/**/TABLE 차단", B, code, "mcp__x__execute_sql", f"{len(sql)}자", err.strip()[:200]))
     shutil.rmtree(proj, ignore_errors=True)
 
 

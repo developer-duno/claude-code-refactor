@@ -222,15 +222,17 @@ unesc_line() {
 # JSON 이스케이프를 풀되 줄바꿈은 진짜 줄바꿈으로 둔다(SQL 판정용 — 줄바꿈은 문장 구분이 아니다). 줄 이어쓰기는 지운다 → UV
 #   큰 값(1KB 초과)은 awk 한 번으로 — bash 3.2 의 ${v//…} 는 맞는 곳마다 남은 길이를 다시 훑어 값이 크면 길이의 제곱으로 느려진다.
 #   awk 판도 아래 bash 판과 같은 순서로 같은 글자를 바꾼다(결과는 글자 하나까지 같다 — 시험이 무작위 입력으로 대조한다).
-#   끝에 x 를 붙였다 떼는 것은 $( ) 가 끝 줄바꿈을 지우지 않게 하려는 것.
+#   awk 판은 split·정규식을 쓰지 않고 index·substr 로 글자 그대로 찾는다 — 맥 기본 awk(BWK)의 split 은 한 글자 구분자일 때
+#   줄바꿈에서도 갈라(run.c split) \001→\ 되돌리기가 줄바꿈까지 \ 로 바꿨다. 날 CR·\001 글자가 든 값은 bash 판으로(Windows 에서 CR 이 달라졌다.
+#   JSON 입력에는 날 제어 글자가 없어 실제로는 거의 안 탄다). 끝에 x 를 붙였다 떼는 것은 $( ) 가 끝 줄바꿈을 지우지 않게 하려는 것.
 unesc_nl() {
   local v=$1
-  if [ "${#v}" -gt 1024 ]; then
-    v=$(printf '%sx' "$v" | awk 'function rall(s, re, w,   n, i, P, out) { n = split(s, P, re); if (n < 2) return s; out = P[1]; for (i = 2; i <= n; i++) out = out w P[i]; return out }
+  if [ "${#v}" -gt 1024 ]; then case "$v" in *$'\r'*|*"$PH"*) ;; *)
+    v=$(printf '%sx' "$v" | awk 'function rlit(s, f, w,   i, n, out) { n = length(f); out = ""; while ((i = index(s, f)) > 0) { out = out substr(s, 1, i - 1) w; s = substr(s, i + n) } return out s }
       { j = (NR > 1 ? j "\n" : "") $0 }
-      END { j = rall(j, "\\\\\\\\", "\001"); j = rall(rall(j, "\001\\\\r\\\\n", ""), "\001\\\\n", ""); j = rall(rall(j, "\\\\\"", "\""), "\\\\/", "/")
-        j = rall(rall(rall(j, "\\\\r", ""), "\\\\n", "\n"), "\\\\t", " "); printf "%s", rall(j, "\001", "\\") }')
-    UV=${v%x}; return 0
+      END { B = "\\"; P = "\001"; j = rlit(j, B B, P); j = rlit(rlit(j, P B "r" B "n", ""), P B "n", ""); j = rlit(rlit(j, B "\"", "\""), B "/", "/")
+        j = rlit(rlit(rlit(j, B "r", ""), B "n", "\n"), B "t", " "); printf "%s", rlit(j, P, B) }')
+    UV=${v%x}; return 0 ;; esac
   fi
   v=${v//"$P_BS2"/$PH}
   v=${v//"$PH$P_BSR$P_BSN"/}; v=${v//"$PH$P_BSN"/}
@@ -249,9 +251,10 @@ unesc_short() {
 }
 # 하위 에이전트 지시문의 줄 수 → NLC(줄바꿈 표시 \n 의 수 + 날 \001 의 수 — 옛 계산과 같다), 줄바꿈 표시를 진짜 줄바꿈으로 바꾼 값 → NLV.
 #   큰 값(1KB 초과)은 awk 한 번으로(bash 3.2 에서 ${x//[!…]/} 로 세면 길이의 세제곱, \n 바꾸기는 제곱으로 느려진다 — 20KB 에 50초).
+#   날 CR·\001 글자가 든 값은 bash 판으로(unesc_nl 과 같은 까닭 — awk 판은 \001 을 셀 일이 없다).
 nl_split() {
-  if [ "${#1}" -gt 1024 ]; then
-    NLV=$(printf '%sx' "$1" | awk '{ c += gsub(/\\n/, "\n"); c += gsub("\001", "\001"); s = (NR > 1 ? s "\n" : "") $0 } END { printf "%d\n%s", c, s }')
+  if [ "${#1}" -gt 1024 ] && case "$1" in *$'\r'*|*"$PH"*) false ;; esac; then
+    NLV=$(printf '%sx' "$1" | awk '{ c += gsub(/\\n/, "\n"); s = (NR > 1 ? s "\n" : "") $0 } END { printf "%d\n%s", c, s }')
     NLC=${NLV%%"$NL"*}; NLV=${NLV#*"$NL"}; NLV=${NLV%x}
   else
     NLV=${1//"$P_BSN"/}; NLC=$(( (${#1} - ${#NLV}) / 2 + ${#NLV} )); NLV=${NLV//$PH/}; NLC=$(( NLC - ${#NLV} )); NLV=${1//"$P_BSN"/$NL}
