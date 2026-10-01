@@ -667,9 +667,15 @@ def main():
         return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
 
     def bash_count():
-        """Windows(Git Bash): ps 가 인자를 안 보여 주므로 bash 프로세스 수로 본다(시험이 쓰는 bash 의 ps)."""
-        ps = subprocess.run([BASH, "-c", "ps -ef"], capture_output=True, env=env()).stdout.decode("utf-8", "replace")
-        return sum(1 for l in ps.splitlines() if l.rstrip().lower().endswith(("/bash", "/bash.exe")))
+        """Windows: 살아 있는 bash.exe 수(tasklist). 세지 못하면 -1.
+        Git Bash 의 ps 로 세던 판은 CI 에서 늘 0 이 나와 '전 0 = 후 0' 헛초록이었다 — 이 시험 자신(python)이 목록에 보이는지로 세기가 되는지 확인한다."""
+        try:
+            out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, timeout=30).stdout.decode("mbcs", "replace").lower()
+        except Exception:
+            return -1
+        if '"python' not in out:
+            return -1
+        return sum(1 for l in out.splitlines() if l.startswith('"bash.exe"'))
 
     def leftovers(before=None):
         """이 시험의 사본 플러그인 경로가 명령줄에 든 프로세스(감시용 셸·가짜 guard)가 남았는지.
@@ -678,7 +684,7 @@ def main():
         for _ in range(30):   # 끝나는 중인 프로세스에 3초까지 여유
             if os.name == "nt":
                 n = bash_count()
-                if not before or n < 1:   # ps 를 돌린 bash 자신이 늘 하나 잡힌다 — 0 이면 세지 못한 것(헛초록 방지, 0.2.3 A4 F14)
+                if before is None or before < 0 or n < 0:   # -1 = 세지 못한 것(헛초록 방지, 0.2.3 A4 F14)
                     return [f"bash 프로세스 수를 세지 못함(전 {before} · 후 {n})"]
                 hits = [] if n <= before else [f"bash 프로세스 {before} → {n}"]
             else:
