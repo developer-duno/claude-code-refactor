@@ -14,9 +14,13 @@ if [ -z "$f" ]; then printf '[refactor] 스크립트 없음: %s\n' "$n" >&2; [ "
 #   T초가 지나면 guard 를 KILL 한다(bash 3.2 는 긴 확장 한 번 중에는 trap 을 못 돌린다). 배경 명령은 표준입력이 비워지므로 3 으로 넘긴다.
 #   시간 초과 판정: bash 4 이상은 read -t 가 시간 초과면 128 넘는 코드를 낸다(끝남=1 과 구별). bash 3.2 는 둘 다 1 이라 경과 초로 보되
 #   read 가 조금 일찍 돌아와도 놓치지 않게 1초 여유(T-1 이상, T=1 이면 여유 0 — 바로 끝난 guard 를 치지 않게). 한도 값은 로캘과 무관하게 1~25 를 나열.
+#   감시는 파이프에 무엇이 쓰여도(guard·자식이 물려받은 fd 5 — 줄·글자·NUL) 손을 놓지 않는다: 남은 시간으로 되풀이해 읽고, 기다리는 것은
+#   "파이프 닫힘(guard 끝)"과 "한도 경과" 둘뿐. 파이프에서 guard 번호를 받지 않고, 한도가 지나면 이 셸($$)에 USR1 을 보내 이 셸이 guard 를 KILL 한다.
 shift; c=$(<"$f"); if [ "$n" = guard ]; then T=${REFACTOR_GUARD_LIMIT:-}; case "$T" in 1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25) ;; *) T=25 ;; esac #
-  exec 5> >(exec >/dev/null 2>&1; read -r p; s=$SECONDS; read -r -t "$T" x; e=$?; if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then [ "$e" -gt 128 ]; else [ $((SECONDS - s)) -ge $((T > 1 ? T - 1 : T)) ]; fi && [ -n "$p" ] && kill -9 "$p"); exec 3<&0 #
-  case "$c" in *$'\r'*) bash <(printf '%s\n' "$c" | tr -d '\r') "$@" <&3 3<&- & ;; *) bash "$f" "$@" <&3 3<&- & ;; esac; p=$!; echo "$p" >&5; exec 5>&- 3<&-; wait "$p" 2>/dev/null; r=$? #
+  p=""; u=""; trap 'u=1; [ -n "$p" ] && kill -9 "$p" 2>/dev/null' USR1 #
+  exec 5> >(exec >/dev/null 2>&1; s=$SECONDS; e=1; while :; do l=$((T - (SECONDS - s))); if [ "$l" -le 0 ]; then e=255; break; fi; read -r -d '' -t "$l" x; e=$?; [ "$e" = 0 ] || break; done; if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then [ "$e" -gt 128 ]; else [ $((SECONDS - s)) -ge $((T > 1 ? T - 1 : T)) ]; fi && kill -USR1 $$); exec 3<&0 #
+  case "$c" in *$'\r'*) bash <(printf '%s\n' "$c" | tr -d '\r') "$@" <&3 3<&- & ;; *) bash "$f" "$@" <&3 3<&- & ;; esac; p=$!; exec 5>&- 3<&-; wait "$p" 2>/dev/null; r=$? #
+  if [ "$u" = 1 ] && [ "$r" -gt 128 ] && [ "$r" != 137 ]; then wait "$p" 2>/dev/null; r=$?; fi # USR1 이 wait 를 깨웠으면 KILL 된 guard 를 다시 거둔다(137)
   if [ "$r" = 137 ]; then printf '[refactor 안전장치] 판정이 너무 오래 걸려 막았습니다(%s초 초과) — 내용을 파일로 저장해 경로를 넘기거나, 명령을 나눠 주세요.\n  → 긴 지시문·SQL 은 파일로 저장해 경로를 넘기고, 긴 명령은 Write 도구로 스크립트 파일을 만들어 무엇을 하는지 사용자에게 보여 준 뒤 실행하세요.\n  (같은 결과를 내는 다른 명령으로 우회하지 말고, 무엇이 막혔는지 사용자에게 보고하세요. → 로 안내된 방법은 써도 됩니다.)\n' "$T" >&2; r=t; exit 2; fi #
 else case "$c" in *$'\r'*) bash <(printf '%s\n' "$c" | tr -d '\r') "$@" ;; *) bash "$f" "$@" ;; esac; r=$?; fi #
 if [ "$h" = 1 ]; then [ "$r" = 42 ] && exit 2; [ "$r" = 2 ] && exit 1; fi; exit "$r" #

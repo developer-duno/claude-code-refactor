@@ -817,6 +817,7 @@ def main():
     check_upgrade_022(res)
     check_subst_023(res)
     check_awkfail_023(res)
+    check_fsmon_023(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -1759,6 +1760,35 @@ def check_subst_023(res):
     shutil.rmtree(proj, ignore_errors=True)
 
 
+def check_fsmon_023(res):
+    """0.2.3 A4 F12: guard 의 git 호출이 저장소 설정(core.fsmonitor)의 프로그램을 띄우지 않는다 — 띄우면 그 프로그램이 감시 파이프를
+    물려받고, 판정 시간도 남의 손에 넘어간다. 표시 파일이 안 생기고 판정은 설정이 없을 때와 같아야 한다."""
+    proj = make_project(phase="EXECUTE")
+    lf(proj / ".gitignore", "node_modules\n")   # .env 가 무시되지 않음 → 내용 검색에서 git check-ignore 를 탄다
+    mark = proj.parent / (proj.name + "-fsmon-ran")
+    hook = proj.parent / (proj.name + "-fsmon.sh")
+    lf(hook, "#!/bin/sh\n: > '" + mark.as_posix() + "'\nexit 1\n")
+    os.chmod(hook, 0o755)
+    cases = [("내용 검색(무시 안 된 비밀 파일)", ("Grep", {"pattern": "KEY", "output_mode": "content"})),
+             ("커밋된 마이그레이션 수정(git ls-files)", ("Edit", {"file_path": "supabase/migrations/0001_init.sql", "old_string": "x", "new_string": "y"}))]
+    try:
+        for label, (tool, tin) in cases:
+            subprocess.run(["git", "-C", str(proj), "config", "--unset-all", "core.fsmonitor"], capture_output=True)
+            want, _ = run(proj, tool, tin)
+            git(proj, "config", "core.fsmonitor", hook.as_posix())
+            if mark.exists():
+                mark.unlink()
+            got, err = run(proj, tool, tin)
+            res["total"] += 1
+            if got != want or mark.exists():
+                res["fails"].append(("0.2.3 A4 git 이 fsmonitor 프로그램을 안 띄움", f"{want}·표시 없음", f"{got}·표시 {'있음' if mark.exists() else '없음'}", tool, label, err.strip()[:200]))
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
+        for p in (mark, hook):
+            if p.exists():
+                p.unlink()
+
+
 def check_awkfail_023(res):
     """0.2.3 A3 F1: 새 awk 판(unesc_nl·nl_split·quote_odd)의 awk 가 실패해도(빈 출력으로 종료 0·1 / 종료 127) 판정 없이 통과하지 않는다
     — 그 awk 호출만 실패시키는 가짜 awk 를 PATH 맨 앞에 두고, 진짜 awk 일 때와 결과가 같은지 본다."""
@@ -1769,6 +1799,12 @@ def check_awkfail_023(res):
            "case \"$*\" in *'rlit('*|*'c += gsub'*|*'s += gsub(/'*) cat >/dev/null; exit " + str(rc) + " ;; esac\n"
            "PATH=${PATH#*:}; exec awk \"$@\"\n")
         os.chmod(d / f"bin{rc}" / "awk", 0o755)
+    # 성공(0)으로 끝나되 숫자 한 줄 + 잘린 내용(끝 표시 없음) — nl_split 의 끝 표시 확인이 잡는다(0.2.3 A4 F13)
+    (d / "bintrunc").mkdir()
+    lf(d / "bintrunc" / "awk", "#!/usr/bin/env bash\n"
+       "case \"$*\" in *'rlit('*|*'c += gsub'*|*'s += gsub(/'*) cat >/dev/null; printf '3\\nsrc'; exit 0 ;; esac\n"
+       "PATH=${PATH#*:}; exec awk \"$@\"\n")
+    os.chmod(d / "bintrunc" / "awk", 0o755)
     sec = "." + "env"
     cases = [
         ("MCP SQL 1.5KB 끝 DROP", B, "mcp__x__execute_sql", {"project_id": "p", "query": "INSERT INTO t (a, b) VALUES (1, 'x');\n" * 40 + "DROP TABLE users;\n"}),
@@ -1782,12 +1818,12 @@ def check_awkfail_023(res):
     try:
         for label, want, tool, tin in cases:
             got = []
-            for pre in ("", str(d / "bin0"), str(d / "bin1"), str(d / "bin127")):
+            for pre in ("", str(d / "bin0"), str(d / "bin1"), str(d / "bin127"), str(d / "bintrunc")):
                 PATH_PREFIX = pre
                 got.append(run(proj, tool, tin)[0])
             res["total"] += 1
-            if got != [want] * 4:
-                res["fails"].append(("0.2.3 A3 awk 실패해도 판정(진짜·빈 출력 0·종료1·종료127)", want, got, tool, label, ""))
+            if got != [want] * 5:
+                res["fails"].append(("0.2.3 A3 awk 실패해도 판정(진짜·빈 출력 0·종료1·종료127·잘린 출력 0)", want, got, tool, label, ""))
     finally:
         PATH_PREFIX = keep
         shutil.rmtree(proj, ignore_errors=True)

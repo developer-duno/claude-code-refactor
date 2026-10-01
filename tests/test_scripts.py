@@ -639,11 +639,12 @@ def main():
        "IFS= read -r -d '' input || true\n"
        "printf '%s' \"$$\" > \"$CLAUDE_PLUGIN_DATA/fake.pid\"\n"
        "if [ -n \"${FAKE_ECHO:-}\" ]; then printf 'out:ok'; printf 'in:%s\\n' \"$input\" >&2; fi\n"
+       "if [ -n \"${FAKE_PRE:-}\" ]; then eval \"$FAKE_PRE\"; fi\n"
        "s=$SECONDS; x=aaaaaaaaaa\n"
        "while [ $((SECONDS - s)) -lt \"${FAKE_BUSY:-0}\" ]; do y=${x//a/b}; done\n"
        "exit \"${FAKE_CODE:-0}\"\n")
 
-    def wcall(limit=None, busy=0, code=0, echo=False, stdin=b'{"tool_name":"Bash","tool_input":{"command":"ls"}}', tmo=15):
+    def wcall(limit=None, busy=0, code=0, echo=False, stdin=b'{"tool_name":"Bash","tool_input":{"command":"ls"}}', tmo=15, pre=None):
         e = env()
         e["CLAUDE_PLUGIN_DATA"] = str(wdata)
         e.pop("REFACTOR_GUARD_LIMIT", None)
@@ -652,6 +653,8 @@ def main():
         e["FAKE_BUSY"], e["FAKE_CODE"] = str(busy), str(code)
         if echo:
             e["FAKE_ECHO"] = "1"
+        if pre:
+            e["FAKE_PRE"] = pre
         t0 = time.perf_counter()
         try:
             r = subprocess.run([BASH, wrun, "guard"], input=stdin, capture_output=True, env=e, timeout=tmo)
@@ -666,7 +669,7 @@ def main():
     def bash_count():
         """Windows(Git Bash): ps 가 인자를 안 보여 주므로 bash 프로세스 수로 본다(시험이 쓰는 bash 의 ps)."""
         ps = subprocess.run([BASH, "-c", "ps -ef"], capture_output=True, env=env()).stdout.decode("utf-8", "replace")
-        return sum(1 for l in ps.splitlines() if l.rstrip().endswith("/bash"))
+        return sum(1 for l in ps.splitlines() if l.rstrip().lower().endswith(("/bash", "/bash.exe")))
 
     def leftovers(before=None):
         """이 시험의 사본 플러그인 경로가 명령줄에 든 프로세스(감시용 셸·가짜 guard)가 남았는지.
@@ -675,6 +678,8 @@ def main():
         for _ in range(30):   # 끝나는 중인 프로세스에 3초까지 여유
             if os.name == "nt":
                 n = bash_count()
+                if not before or n < 1:   # ps 를 돌린 bash 자신이 늘 하나 잡힌다 — 0 이면 세지 못한 것(헛초록 방지, 0.2.3 A4 F14)
+                    return [f"bash 프로세스 수를 세지 못함(전 {before} · 후 {n})"]
                 hits = [] if n <= before else [f"bash 프로세스 {before} → {n}"]
             else:
                 ps = subprocess.run(["ps", "-axo", "pid=,args="], capture_output=True).stdout.decode("utf-8", "replace")
@@ -708,6 +713,13 @@ def main():
     check("감시: 시간 초과 뒤 guard 죽음", not pid_alive())
     left = leftovers(nb)
     check("감시: 시간 초과 뒤 남은 프로세스 0", not left, "\n".join(left))
+
+    # (가-2) 감시 파이프(fd 5 — guard 와 그 자식이 물려받는다)에 무엇을 써도 감시가 손을 놓지 않는다(0.2.3 A4 F11)
+    #   한 줄 · 줄바꿈 없는 글자 · NUL 글자 · 자식 프로세스가 쓰기 — 넷 다 한도 2초에 막혀야 한다
+    for label, pre in [("한 줄", "echo x >&5"), ("줄바꿈 없는 글자", "printf x >&5"), ("NUL 글자", "printf '\\0' >&5"),
+                       ("자식이 한 줄", "bash -c 'echo hook >&5'")]:
+        rc, so, se, dt = wcall(limit="2", busy=30, pre=pre)
+        check(f"감시: 감시 파이프에 {label}을 써도 차단", rc == 2 and dt < 10 and se.splitlines()[:1] == [TMSG.format(2)], f"{rc} {dt:.1f}s {se[:200]}")
 
     # (다) A2: 1~25 정수만 받는다 — 0·26·글자·빈 값·전각 숫자는 25(3초 걸리는 guard 를 막지 않음), 26 은 25 로 취급(늘릴 수 없음 — 26~29 를 받는 변이를 잡게 26)
     for lim in ["0", "26", "x", "", "\uff12"]:

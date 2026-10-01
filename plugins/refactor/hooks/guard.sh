@@ -442,7 +442,7 @@ is_migration_path() {
 # git이 이미 추적하는 파일인가(새로 만든 파일은 아직 고쳐도 된다). git이 없으면 보호 쪽으로.
 is_tracked() {
   command -v git >/dev/null 2>&1 || return 0
-  git -C "$proj" ls-files --error-unmatch -- "$1" >/dev/null 2>&1
+  git -c core.fsmonitor=false -C "$proj" ls-files --error-unmatch -- "$1" >/dev/null 2>&1   # 저장소 설정의 fsmonitor 프로그램을 띄우지 않는다(guard 의 git 호출 전부 — 남의 프로그램이 감시 파이프를 물려받지 않게)
 }
 is_human_only() {
   case "$1" in */docs/refactor/.allow-*|*/docs/refactor/approvals.log|*/docs/refactor/.turn*|*/docs/refactor/approved/*) return 0 ;; esac
@@ -638,8 +638,8 @@ unignored_secret_under() { # $1 폴더 $2 (있으면) 이 glob에 맞는 파일�
   done
   [ -z "$list" ] && return 1
   # git 저장소면 무시된 파일은 뺀다(Grep 도구가 보지 않음). git이 아니면 모두 보인다고 본다.
-  if command -v git >/dev/null 2>&1 && git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    ign=$(printf '%s' "$list" | git -C "$root" check-ignore --stdin 2>/dev/null)
+  if command -v git >/dev/null 2>&1 && git -c core.fsmonitor=false -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    ign=$(printf '%s' "$list" | git -c core.fsmonitor=false -C "$root" check-ignore --stdin 2>/dev/null)
     while IFS= read -r f; do
       [ -z "$f" ] && continue
       case "$NL$ign$NL" in *"$NL$f$NL"*) continue ;; esac
