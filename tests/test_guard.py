@@ -67,12 +67,17 @@ HOOK_TIMEOUT = 30
 HOOK_TIMEOUTS = []
 
 
-def run_hook(argv, **kw):
+def run_hook(argv, watch_ok=False, **kw):
+    """watch_ok: 감시(run.sh 가 느린 guard 를 끊음) 자체를 시험하는 호출만 True. 그 밖의 호출이 감시에 끊기면
+    종료 코드가 기대(2)와 같아도 "훅 시간 초과"로 센다 — 느린 컴퓨터에서 "막혀야 함" 시험이 감시 차단으로 조용히 초록이 되지 않게."""
     try:
-        return subprocess.run(argv, timeout=HOOK_TIMEOUT, **kw)
+        r = subprocess.run(argv, timeout=HOOK_TIMEOUT, **kw)
     except subprocess.TimeoutExpired:
         HOOK_TIMEOUTS.append(" ".join(str(a) for a in argv[1:]))
         return subprocess.CompletedProcess(argv, 124, b"", f"[시험] 훅이 {HOOK_TIMEOUT}초 안에 끝나지 않음".encode("utf-8"))
+    if not watch_ok and "판정이 너무 오래 걸려".encode("utf-8") in (r.stderr or b""):
+        HOOK_TIMEOUTS.append("감시 차단: " + " ".join(str(a) for a in argv[1:]))
+    return r
 
 
 def lf(path, text):
@@ -811,6 +816,7 @@ def main():
     check_upgrade_021(res)
     check_upgrade_022(res)
     check_subst_023(res)
+    check_awkfail_023(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -1744,7 +1750,48 @@ def check_subst_023(res):
     res["total"] += 1
     if code != B:
         res["fails"].append(("0.2.3 A2 SQL 2KB 주석 뒤 DROP/**/TABLE 차단", B, code, "mcp__x__execute_sql", f"{len(sql)}자", err.strip()[:200]))
+    # 같은 함수(unesc_nl)를 Bash 의 DB 프로그램 명령(hv_db)도 쓴다 — 1KB 넘는 psql -c 의 주석 줄 뒤 DROP/**/TABLE (0.2.3 A3 F8)
+    cmd = 'psql "$DATABASE_URL" -c "' + "INSERT INTO t (a, b) VALUES (1, 2); -- 메모\n" * 30 + 'DROP/**/TABLE orders;"'
+    code, err = run(proj, "Bash", {"command": cmd, "description": "t"})
+    res["total"] += 1
+    if code != B:
+        res["fails"].append(("0.2.3 A3 Bash psql 1KB 넘는 SQL 주석 뒤 DROP 차단", B, code, "Bash", f"{len(cmd)}자", err.strip()[:200]))
     shutil.rmtree(proj, ignore_errors=True)
+
+
+def check_awkfail_023(res):
+    """0.2.3 A3 F1: 새 awk 판(unesc_nl·nl_split·quote_odd)의 awk 가 실패해도(빈 출력으로 종료 0·1 / 종료 127) 판정 없이 통과하지 않는다
+    — 그 awk 호출만 실패시키는 가짜 awk 를 PATH 맨 앞에 두고, 진짜 awk 일 때와 결과가 같은지 본다."""
+    d = pathlib.Path(tempfile.mkdtemp(prefix="awkfail-"))
+    for rc in (0, 1, 127):   # 0 = 성공으로 끝나되 빈 출력(끝 표시 확인이 잡는다)
+        (d / f"bin{rc}").mkdir()
+        lf(d / f"bin{rc}" / "awk", "#!/usr/bin/env bash\n"
+           "case \"$*\" in *'rlit('*|*'c += gsub'*|*'s += gsub(/'*) cat >/dev/null; exit " + str(rc) + " ;; esac\n"
+           "PATH=${PATH#*:}; exec awk \"$@\"\n")
+        os.chmod(d / f"bin{rc}" / "awk", 0o755)
+    sec = "." + "env"
+    cases = [
+        ("MCP SQL 1.5KB 끝 DROP", B, "mcp__x__execute_sql", {"project_id": "p", "query": "INSERT INTO t (a, b) VALUES (1, 'x');\n" * 40 + "DROP TABLE users;\n"}),
+        ("Agent 1.8KB 마지막 줄 비밀 파일 읽기", B, "Agent", {"description": "t", "prompt": "src 정리.\n" * 150 + "$ cat " + sec + "\n"}),
+        # 홀수 따옴표 큰 조각 둘 사이의 위험 명령: 큰 조각을 "짝 맞음"으로 잘못 보면 셋이 한 묶음이 되어 위험 명령이 따옴표 안에 숨는다
+        ("홀수 따옴표 1.5KB 조각 둘 사이 reset --hard", B, "Agent", {"description": "t", "prompt": "$ echo it's " + "a" * 1500 + "\n$ git reset --hard\n$ echo 'b" + "b" * 1500 + "\n"}),
+    ]
+    proj = make_project()
+    global PATH_PREFIX
+    keep = PATH_PREFIX
+    try:
+        for label, want, tool, tin in cases:
+            got = []
+            for pre in ("", str(d / "bin0"), str(d / "bin1"), str(d / "bin127")):
+                PATH_PREFIX = pre
+                got.append(run(proj, tool, tin)[0])
+            res["total"] += 1
+            if got != [want] * 4:
+                res["fails"].append(("0.2.3 A3 awk 실패해도 판정(진짜·빈 출력 0·종료1·종료127)", want, got, tool, label, ""))
+    finally:
+        PATH_PREFIX = keep
+        shutil.rmtree(proj, ignore_errors=True)
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

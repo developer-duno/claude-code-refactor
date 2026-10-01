@@ -58,12 +58,17 @@ HOOK_TIMEOUT = 30
 HOOK_TIMEOUTS = []
 
 
-def run_hook(argv, **kw):
+def run_hook(argv, watch_ok=False, **kw):
+    """watch_ok: 감시(run.sh 가 느린 guard 를 끊음) 자체를 시험하는 호출만 True. 그 밖의 호출이 감시에 끊기면
+    종료 코드가 기대(2)와 같아도 "훅 시간 초과"로 센다 — 느린 컴퓨터에서 "막혀야 함" 시험이 감시 차단으로 조용히 초록이 되지 않게."""
     try:
-        return subprocess.run(argv, timeout=HOOK_TIMEOUT, **kw)
+        r = subprocess.run(argv, timeout=HOOK_TIMEOUT, **kw)
     except subprocess.TimeoutExpired:
         HOOK_TIMEOUTS.append(" ".join(str(a) for a in argv[1:]))
         return subprocess.CompletedProcess(argv, 124, b"", f"[시험] 훅이 {HOOK_TIMEOUT}초 안에 끝나지 않음".encode("utf-8"))
+    if not watch_ok and "판정이 너무 오래 걸려".encode("utf-8") in (r.stderr or b""):
+        HOOK_TIMEOUTS.append("감시 차단: " + " ".join(str(a) for a in argv[1:]))
+    return r
 
 
 def lf(path, text):
@@ -611,6 +616,15 @@ def main():
     check("bash 3.2: bash 4 전용 문법 0건", not hits, "\n".join(hits[:20]))
     shutil.rmtree(tmpd, ignore_errors=True)
 
+    # 19-2b) hooks.json(0.2.3 A3): guard 제한은 감시 한도(25초)보다 넉넉히(45초 이상) — 감시가 끊기 전에 Claude Code 가 먼저 끊으면 통과다. 나머지 훅은 30초
+    try:
+        hj = json.loads((ROOT / "plugins/refactor/hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+        lims = {h["command"].rsplit(" ", 1)[-1]: h.get("timeout") for ev in hj.values() for m in ev for h in m["hooks"]}
+        ok = (lims.get("guard") or 0) >= 45 and all(lims.get(k) == 30 for k in ("post-check", "turn", "session-start"))
+    except Exception as ex:
+        ok, lims = False, ex
+    check("hooks.json: guard 제한 45초 이상·나머지 훅 30초", ok, str(lims))
+
     # 19-3) run.sh 감시(0.2.3 #13): 시간 초과된 PreToolUse 훅은 도구 호출을 막지 않는다(공식 문서) → guard 판정이 T초
     #       (기본 25, REFACTOR_GUARD_LIMIT 로 1~25 사이로만 줄일 수 있음)를 넘기면 run.sh 가 guard 를 죽이고 2(차단).
     #       "막혔다"는 종료 코드·문구로 판정하고 시간은 상한만 본다(느린 CI 에서 헛빨강이 나지 않게 넉넉히).
@@ -649,22 +663,31 @@ def main():
         f = wdata / "problems.log"
         return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
 
-    def leftovers():
-        """이 시험의 사본 플러그인 경로가 명령줄에 든 프로세스(감시용 셸·가짜 guard)가 남았는지 — Windows 는 ps 가 인자를 안 보여 줘 건너뛴다."""
-        if os.name == "nt":
-            return []
+    def bash_count():
+        """Windows(Git Bash): ps 가 인자를 안 보여 주므로 bash 프로세스 수로 본다(시험이 쓰는 bash 의 ps)."""
+        ps = subprocess.run([BASH, "-c", "ps -ef"], capture_output=True, env=env()).stdout.decode("utf-8", "replace")
+        return sum(1 for l in ps.splitlines() if l.rstrip().endswith("/bash"))
+
+    def leftovers(before=None):
+        """이 시험의 사본 플러그인 경로가 명령줄에 든 프로세스(감시용 셸·가짜 guard)가 남았는지.
+        Windows 는 부르기 전 bash 프로세스 수(before)보다 늘었는지로 본다."""
         hits = []
         for _ in range(30):   # 끝나는 중인 프로세스에 3초까지 여유
-            ps = subprocess.run(["ps", "-axo", "pid=,args="], capture_output=True).stdout.decode("utf-8", "replace")
-            hits = [l.strip() for l in ps.splitlines() if str(tmpw) in l]
+            if os.name == "nt":
+                n = bash_count()
+                hits = [] if n <= before else [f"bash 프로세스 {before} → {n}"]
+            else:
+                ps = subprocess.run(["ps", "-axo", "pid=,args="], capture_output=True).stdout.decode("utf-8", "replace")
+                hits = [l.strip() for l in ps.splitlines() if str(tmpw) in l]
             if not hits:
                 return []
             time.sleep(0.1)
         return hits
 
     def pid_alive():
-        if os.name == "nt":
-            return False
+        if os.name == "nt":   # 가짜 guard 가 적은 번호는 MSYS 번호 — 시험이 쓰는 bash 로 확인
+            pid = (wdata / "fake.pid").read_text().strip() if (wdata / "fake.pid").exists() else ""
+            return pid.isdigit() and subprocess.run([BASH, "-c", f"kill -0 {pid}"], capture_output=True, env=env()).returncode == 0
         try:
             os.kill(int((wdata / "fake.pid").read_text()), 0)
             return True
@@ -673,32 +696,38 @@ def main():
 
     # (가) 느린 guard + 한도 2초 → 10초 안에 2(차단) + 문구 + 기록 한 줄, guard·감시가 남지 않음
     n0 = len(wlog())
+    nb = bash_count() if os.name == "nt" else None
     rc, so, se, dt = wcall(limit="2", busy=999)
     lines = se.splitlines()
     check("감시: 한도 2초 → 차단(2)", rc == 2 and dt < 10, f"{rc} {dt:.1f}s {se[-300:]}")
     check("감시: 첫 줄 문구(2초)", bool(lines) and lines[0] == TMSG.format(2), se[:400])
+    check("감시: 둘째 줄 안내(→)", len(lines) >= 3 and lines[1] == "  → 긴 지시문·SQL 은 파일로 저장해 경로를 넘기고, 긴 명령은 Write 도구로 스크립트 파일을 만들어 무엇을 하는지 사용자에게 보여 준 뒤 실행하세요.", se[:600])
     check("감시: 끝 줄 우회 금지 안내", bool(lines) and lines[-1].startswith("  (같은 결과를 내는 다른 명령으로 우회하지 말고"), se[-300:])
     new = wlog()[n0:]
     check("감시: 문제 기록 한 줄(명령·값 없음)", len(new) == 1 and new[0].endswith(" | run.sh | guard 시간 초과(2초) → 차단"), "\n".join(new))
     check("감시: 시간 초과 뒤 guard 죽음", not pid_alive())
-    left = leftovers()
+    left = leftovers(nb)
     check("감시: 시간 초과 뒤 남은 프로세스 0", not left, "\n".join(left))
 
-    # (다) A2: 1~25 정수만 받는다 — 0·26·글자·빈 값은 25(3초 걸리는 guard 를 막지 않음), 99 는 25 로 취급(늘릴 수 없음)
-    for lim in ["0", "26", "x", ""]:
+    # (다) A2: 1~25 정수만 받는다 — 0·26·글자·빈 값·전각 숫자는 25(3초 걸리는 guard 를 막지 않음), 26 은 25 로 취급(늘릴 수 없음 — 26~29 를 받는 변이를 잡게 26)
+    for lim in ["0", "26", "x", "", "\uff12"]:
         rc, so, se, dt = wcall(limit=lim, busy=3)
         check(f"감시: 한도 {lim!r} → 25초(3초 판정은 그대로)", rc == 0 and se == "", f"{rc} {dt:.1f}s {se[:300]}")
-    rc, so, se, dt = wcall(limit="99", busy=999, tmo=45)
-    check("감시: 한도 99 → 25초에 차단", rc == 2 and 20 < dt < 40 and se.splitlines()[:1] == [TMSG.format(25)], f"{rc} {dt:.1f}s {se[:300]}")
+    rc, so, se, dt = wcall(limit="26", busy=999, tmo=45)
+    check("감시: 한도 26 → 25초에 차단", rc == 2 and 20 < dt < 40 and se.splitlines()[:1] == [TMSG.format(25)], f"{rc} {dt:.1f}s {se[:300]}")
 
     # (다) A5·A6: 빨리 끝나는 호출 — 표준입력·표준출력·표준오류 전달, 종료 코드 변환(42→2, 2→1, 그 외 그대로), 한도를 기다리지 않고 바로 돌아옴
     stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo 가나다"}}, ensure_ascii=False).encode("utf-8")
     n1 = len(wlog())
+    nb = bash_count() if os.name == "nt" else None
     for code, want in [(0, 0), (42, 2), (2, 1), (7, 7)]:
         rc, so, se, dt = wcall(code=code, echo=True, stdin=stdin)
         check(f"감시: 정상 경로 종료 코드 {code}→{want}·입출력 그대로·바로 돌아옴", rc == want and so == "out:ok"
               and se == "in:" + stdin.decode("utf-8") + "\n" and dt < 5, f"{rc} {dt:.2f}s {so!r} {se[:300]!r}")
-    left = leftovers()
+    # 한도 1(시간 여유 0): 바로 끝나는 guard 는 죽지 않는다(여러 번)
+    got = [wcall(limit="1", code=0)[0] for _ in range(5)]
+    check("감시: 한도 1 에서도 빨리 끝나는 guard 는 통과", got == [0] * 5, str(got))
+    left = leftovers(nb)
     check("감시: 정상 종료 뒤 남은 프로세스 0", not left, "\n".join(left))
     check("감시: 정상 경로는 문제 기록 없음", not any("시간 초과" in l for l in wlog()[n1:]), "\n".join(wlog()[n1:]))
     shutil.rmtree(tmpw, ignore_errors=True)

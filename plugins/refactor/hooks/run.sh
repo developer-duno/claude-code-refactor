@@ -12,8 +12,11 @@ if [ -z "$f" ]; then printf '[refactor] 스크립트 없음: %s\n' "$n" >&2; [ "
 # - guard 감시: 시간 초과된 PreToolUse 훅은 도구 호출을 막지 않는다 → guard 가 T초(기본 25, REFACTOR_GUARD_LIMIT 로 1~25 사이로만 줄일 수 있음) 안에
 #   안 끝나면 guard 를 죽이고 2(차단). 감시(>( … ))는 guard 만 쥔 파이프의 끝을 read -t 로 기다린다 — guard 가 끝나면 바로 끝나고(sleep·kill 없음),
 #   T초가 지나면 guard 를 KILL 한다(bash 3.2 는 긴 확장 한 번 중에는 trap 을 못 돌린다). 배경 명령은 표준입력이 비워지므로 3 으로 넘긴다.
-shift; c=$(<"$f"); if [ "$n" = guard ]; then T=${REFACTOR_GUARD_LIMIT:-}; case "$T" in [1-9]|1[0-9]|2[0-5]) ;; *) T=25 ;; esac; exec 5> >(exec >/dev/null 2>&1; read -r p; s=$SECONDS; read -r -t "$T" x; [ -n "$p" ] && [ $((SECONDS - s)) -ge "$T" ] && kill -9 "$p"); exec 3<&0 #
+#   시간 초과 판정: bash 4 이상은 read -t 가 시간 초과면 128 넘는 코드를 낸다(끝남=1 과 구별). bash 3.2 는 둘 다 1 이라 경과 초로 보되
+#   read 가 조금 일찍 돌아와도 놓치지 않게 1초 여유(T-1 이상, T=1 이면 여유 0 — 바로 끝난 guard 를 치지 않게). 한도 값은 로캘과 무관하게 1~25 를 나열.
+shift; c=$(<"$f"); if [ "$n" = guard ]; then T=${REFACTOR_GUARD_LIMIT:-}; case "$T" in 1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25) ;; *) T=25 ;; esac #
+  exec 5> >(exec >/dev/null 2>&1; read -r p; s=$SECONDS; read -r -t "$T" x; e=$?; if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then [ "$e" -gt 128 ]; else [ $((SECONDS - s)) -ge $((T > 1 ? T - 1 : T)) ]; fi && [ -n "$p" ] && kill -9 "$p"); exec 3<&0 #
   case "$c" in *$'\r'*) bash <(printf '%s\n' "$c" | tr -d '\r') "$@" <&3 3<&- & ;; *) bash "$f" "$@" <&3 3<&- & ;; esac; p=$!; echo "$p" >&5; exec 5>&- 3<&-; wait "$p" 2>/dev/null; r=$? #
-  if [ "$r" = 137 ]; then printf '[refactor 안전장치] 판정이 너무 오래 걸려 막았습니다(%s초 초과) — 내용을 파일로 저장해 경로를 넘기거나, 명령을 나눠 주세요.\n  (같은 결과를 내는 다른 명령으로 우회하지 말고, 무엇이 막혔는지 사용자에게 보고하세요. → 로 안내된 방법은 써도 됩니다.)\n' "$T" >&2; r=t; exit 2; fi #
+  if [ "$r" = 137 ]; then printf '[refactor 안전장치] 판정이 너무 오래 걸려 막았습니다(%s초 초과) — 내용을 파일로 저장해 경로를 넘기거나, 명령을 나눠 주세요.\n  → 긴 지시문·SQL 은 파일로 저장해 경로를 넘기고, 긴 명령은 Write 도구로 스크립트 파일을 만들어 무엇을 하는지 사용자에게 보여 준 뒤 실행하세요.\n  (같은 결과를 내는 다른 명령으로 우회하지 말고, 무엇이 막혔는지 사용자에게 보고하세요. → 로 안내된 방법은 써도 됩니다.)\n' "$T" >&2; r=t; exit 2; fi #
 else case "$c" in *$'\r'*) bash <(printf '%s\n' "$c" | tr -d '\r') "$@" ;; *) bash "$f" "$@" ;; esac; r=$?; fi #
 if [ "$h" = 1 ]; then [ "$r" = 42 ] && exit 2; [ "$r" = 2 ] && exit 1; fi; exit "$r" #
