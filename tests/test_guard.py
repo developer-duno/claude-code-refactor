@@ -818,6 +818,7 @@ def main():
     check_subst_023(res)
     check_awkfail_023(res)
     check_fsmon_023(res)
+    check_grep_024(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -1828,6 +1829,140 @@ def check_awkfail_023(res):
         PATH_PREFIX = keep
         shutil.rmtree(proj, ignore_errors=True)
         shutil.rmtree(d, ignore_errors=True)
+
+
+def check_grep_024(res):
+    """0.2.4 B: Grep 도구 내용 검색 — 범위가 git 저장소 안이면 폴더를 훑지 않고 git 파일 목록(추적 + 안 추적, 무시된 것 제외)으로
+    판정한다(폴더 수·깊이 제한 없음 · 숨김·무거운 폴더도 봄 · 안 추적 중첩 저장소·서브모듈 안도 봄). git 밖은 지금 방식(훑기)."""
+    global PATH_PREFIX
+    sec = "." + "env"
+    G = lambda **kw: ("Grep", dict({"pattern": "KEY", "output_mode": "content"}, **kw))
+    wide2 = 'path로 코드 폴더(예: src)를 지정하거나 type(예: "js")으로 파일 종류를 좁히세요.'
+    made = []
+
+    def proj_(gitignore=None, folders=0, nogit=False):
+        p = make_project()
+        made.append(p)
+        if gitignore is not None:
+            lf(p / ".gitignore", gitignore)
+        for i in range(folders):
+            (p / "pkg" / f"d{i:04d}").mkdir(parents=True)
+        if nogit:
+            rmtree_rw(p / ".git")
+        return p
+
+    def put(p, rel, commit=False):
+        (p / rel).parent.mkdir(parents=True, exist_ok=True)
+        lf(p / rel, "KEY=1\n")
+        if commit:
+            git(p, "add", "-f", rel)
+            git(p, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "c")
+
+    def case(title, want, p, tin, need=None):
+        t0 = time.perf_counter()
+        code, err = run(p, *tin)
+        dt = time.perf_counter() - t0
+        res["total"] += 1
+        bad = code != want or (need is not None and need not in err)
+        if bad:
+            res["fails"].append(("0.2.4 B " + title, want, code, tin[0], json.dumps(tin[1], ensure_ascii=False)[:120], err.strip()[:200]))
+        return dt
+
+    try:
+        # T1·T2: git 저장소, 폴더 250개, 비밀값은 무시된 .env 뿐 → 통과 / 무시된 .env 가 4단계 아래 → 통과
+        p = proj_(folders=250)
+        case("T1 폴더 250개·무시된 .env 만", OK, p, G())
+        put(p, "a/b/c/d/" + sec)
+        case("T2 무시된 .env 4단계 아래", OK, p, G())
+        # T3·T4·T5: 지금 방식이 놓치던 곳(4단계 아래 · 3단계 숨김 폴더 · 커밋된 vendor)의 무시 안 된 .env → 막음
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "a/b/c/d/" + sec)
+        case("T3 무시 안 된 .env 4단계 아래", B, p, G())
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "a/b/.cfg/" + sec)
+        case("T4 무시 안 된 .env 3단계 숨김 폴더", B, p, G())
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "vendor/" + sec, commit=True)
+        case("T5 커밋된 vendor/.env", B, p, G())
+        # T6: .gitignore 에 있지만 이미 커밋된 .env → 막음 / T7: .env.example 만 → 통과
+        p = proj_()
+        git(p, "add", "-f", sec)
+        git(p, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "c")
+        case("T6 무시 목록에 있지만 커밋된 .env", B, p, G())
+        p = proj_(gitignore="node_modules\n")
+        (p / sec).unlink()
+        put(p, sec + ".example")
+        case("T7 .env.example 만", OK, p, G())
+        # T8: glob 이 실제로 좁힌다(폴더 250개에서도) — *.ts + 무시 안 된 .env.ts → 막음 / *.ts + 무시 안 된 .env 만 → 통과
+        p = proj_(folders=250)
+        put(p, "src/" + sec + ".ts")
+        case("T8 glob *.ts + .env.ts", B, p, G(glob="*.ts"))
+        (p / "src" / (sec + ".ts")).unlink()
+        lf(p / ".gitignore", "node_modules\n")
+        case("T8 glob *.ts + 무시 안 된 .env 만", OK, p, G(glob="*.ts"))
+        # T14: 내용 검색이 아니거나 type 이 있으면 그대로 통과(무시 안 된 .env 가 있어도)
+        case("T14 files_with_matches", OK, p, ("Grep", {"pattern": "KEY", "output_mode": "files_with_matches"}))
+        case("T14 type js", OK, p, G(type="js"))
+        # T9·T15: git 아닌 폴더 250개 → 막음(지금처럼) + 새 안내 문구 + 기록 줄에 한도 종류·숫자(60자 안)
+        p = proj_(folders=250, nogit=True)
+        case("T9 git 아닌 폴더 250개", B, p, G(), need=wide2)
+        log = pathlib.Path(TEST_DATA) / "problems.log"
+        last = log.read_text(encoding="utf-8").splitlines()[-1] if log.exists() else ""
+        res["total"] += 1
+        if "[Grep · 폴더 수 " not in last:
+            res["fails"].append(("0.2.4 B T15 기록 줄에 [Grep · 폴더 수", "있음", "없음", "Grep", "", last[-120:]))
+        # T10: git 아닌 작은 폴더 + .env → 막음
+        p = proj_(nogit=True)
+        case("T10 git 아닌 작은 폴더 + .env", B, p, G())
+        # T11: 범위가 저장소의 하위 폴더 — 그 밖에만 무시 안 된 .env → 통과 / 그 안에 있음 → 막음
+        p = proj_(gitignore="node_modules\n")
+        case("T11 하위 폴더 범위(밖에만 .env)", OK, p, G(path="src"))
+        put(p, "src/" + sec)
+        case("T11 하위 폴더 범위(안에 .env)", B, p, G(path="src"))
+        # T12: 안 추적 중첩 저장소 안의 무시 안 된 .env → 막음 / 서브모듈(추적된 gitlink) 안 → 막음
+        p = proj_(gitignore="/" + sec + "\n")
+        (p / "nested").mkdir()
+        git(p / "nested", "init", "-q")
+        put(p, "nested/" + sec)
+        case("T12 안 추적 중첩 저장소 안 .env", B, p, G())
+        p = proj_(gitignore="/" + sec + "\n")
+        (p / "sub").mkdir()
+        git(p / "sub", "init", "-q")
+        put(p / "sub", "s.txt", commit=True)
+        git(p, "add", "sub")
+        git(p, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "gitlink")
+        put(p, "sub/deep/" + sec)
+        case("T12 gitlink(서브모듈) 안 .env", B, p, G())
+        # T13: 한글 이름 폴더 안의 무시 안 된 .env → 막음
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "설정/비밀/" + sec)
+        case("T13 한글 폴더 안 .env", B, p, G())
+        # T16: 목록 명령(ls-files)만 실패하는 가짜 git(PATH 맨 앞) + 무시 안 된 .env → 통과시키지 않는다
+        p = proj_(gitignore="node_modules\n")
+        fake = pathlib.Path(tempfile.mkdtemp(prefix="fakegit-"))
+        made.append(fake)
+        lf(fake / "git", "#!/usr/bin/env bash\ncase \" $* \" in *' ls-files '*) exit 1 ;; esac\nPATH=${PATH#*:}; exec git \"$@\"\n")
+        os.chmod(fake / "git", 0o755)
+        keep = PATH_PREFIX
+        PATH_PREFIX = str(fake)
+        try:
+            case("T16 가짜 git(목록 실패) + 무시 안 된 .env", B, p, G())
+        finally:
+            PATH_PREFIX = keep
+        # T17: 폴더 1,500개 git 저장소 + 무시된 .env 만 → 통과, 5초 안
+        p = proj_(folders=1500)
+        dt = case("T17 폴더 1,500개·무시된 .env 만", OK, p, G())
+        print(f"  0.2.4 · T17 폴더 1,500개 git 목록 판정: {dt*1000:.0f}ms")
+        res["total"] += 1
+        if dt > 5:
+            res["fails"].append(("0.2.4 B T17 시간", "5초 안", f"{dt:.2f}s", "Grep", "", ""))
+        # T18: 대문자 이름 .ENV(무시 안 됨) — 지금 방식과 같은 판정(이름 꼴은 대소문자를 가린다 → 통과)
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "src/" + sec.upper())
+        case("T18 대문자 .ENV", OK, p, G())
+    finally:
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
 
 
 if __name__ == "__main__":

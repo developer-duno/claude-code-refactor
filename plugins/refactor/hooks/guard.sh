@@ -603,37 +603,96 @@ glob_hits_secret() {
 # 비밀값 파일을 겨냥한 glob인가(.env* 처럼) — 평범한 파일(package.json 등)에도 맞는 넓은 glob은 아니다
 glob_targets_secret() { glob_hits_secret "$1" && ! glob_hits_secret "$1" "$PLAIN_SAMPLES"; }
 heavy_dir() { [ -d "$1" ] || return 0; case "${1%/}" in */node_modules|*/.git|*/.next|*/.nuxt|*/.cache|*/.turbo|*/.vercel|*/dist|*/build|*/.venv|*/venv|*/__pycache__|*/vendor|*/target|*/coverage|*/.idea|*/.vscode) return 0 ;; esac; return 1; }
-# 이 폴더(세 단계 아래까지)에 git이 무시하지 않는 비밀값 파일이 있나 → SEC_FOUND(첫 파일 이름)
+# 비밀값 파일 이름 꼴 — 훑기(unignored_secret_scan)의 파일 glob 과 git 목록의 pathspec 이 이 한 목록을 같이 쓴다(어긋나지 않게)
+SEC_NAME_GLOBS=(".env*" "*.env" ".dev.vars*" "*.pem" "*.key" "credentials.json" "secrets.*" "*service*account*.json" "*firebase-adminsdk*.json" "client_secret*.json")
+MSG_WIDE="범위가 넓어 판정할 수 없습니다 — 폴더를 좁혀 주세요."
+MSG_WIDE2="path로 코드 폴더(예: src)를 지정하거나 type(예: \"js\")으로 파일 종류를 좁히세요."
+SEC_REPOS=0
+# 이 폴더 아래에 git이 무시하지 않는 비밀값 파일이 있나 → SEC_FOUND(첫 파일 이름)
+# git 저장소(작업 트리) 안이면 폴더를 훑지 않고 git 이 아는 파일 목록(추적 + 안 추적, 무시된 것 제외)에서 이름 꼴로 찾는다 —
+#   깊이·폴더 수 제한이 없고 숨김·vendor 같은 폴더도 본다. 목록이 안을 보여 주지 않는 안 추적 중첩 저장소("폴더/" 한 줄)와
+#   서브모듈(gitlink)은 그 폴더를 다시 판정한다. git 이 없거나 목록 명령이 실패하면(git 밖 포함) 지금 방식(훑기)으로 내려간다.
+#   git 호출: 범위당 2번(목록 1 + gitlink 찾기 1, 비밀값을 찾으면 1번) + 중첩 저장소·서브모듈마다 같은 수
 unignored_secret_under() { # $1 폴더 $2 (있으면) 이 glob에 맞는 파일만
-  local root=$1 f d1 d2 list="" ign n=0 g=${2:-}
+  local root=$1 g=${2:-} p f rc="" out pat pspec=() subs=() s
+  SEC_FOUND=""
+  [ -d "$root" ] || return 1
+  if ! command -v git >/dev/null 2>&1; then unignored_secret_scan "$root" "$g"; return; fi
+  for pat in "${SEC_NAME_GLOBS[@]}"; do pspec+=(":(glob)**/$pat"); done
+  # -z 목록은 $( ) 가 NUL 을 버리므로 read -d '' 로 읽는다. 끝에 종료 코드를 "/rc=N" 으로 붙인다(목록 이름은 /로 시작하지 않는다)
+  # ":(glob)**/" = 끝이 / 인 항목 = 안 추적 중첩 저장소(git 은 그 안을 보여 주지 않는다)
+  while IFS= read -r -d '' p; do
+    case "$p" in
+      /rc=*) rc=${p#/rc=}; continue ;;
+      */) subs+=("${p%/}"); continue ;;
+    esac
+    f=$root/$p
+    [ -f "$f" ] || continue
+    is_secret_path "$f" || continue
+    if [ -n "$g" ]; then glob_hits_secret "$g" "${f##*/}" || continue; fi
+    SEC_FOUND=$f; return 0
+  done < <(git -c core.fsmonitor=false -c core.quotePath=false -C "$root" ls-files -z -co --exclude-standard -- "${pspec[@]}" ':(glob)**/' 2>/dev/null; printf '/rc=%s\0' "$?")
+  if [ "$rc" != 0 ]; then unignored_secret_scan "$root" "$g"; return; fi
+  # 서브모듈(gitlink, 모드 160000): 목록에 그 안의 파일이 나오지 않는다
+  out=$(git -c core.fsmonitor=false -c core.quotePath=false -C "$root" ls-files -c -s 2>/dev/null | grep '^160000 '; echo "/rc=${PIPESTATUS[0]}")
+  rc=""
+  while IFS= read -r p; do
+    case "$p" in
+      /rc=*) rc=${p#/rc=} ;;
+      *"$TAB"'"'*) block "$MSG_WIDE [Grep · 하위 저장소 이름]" "$MSG_WIDE2" ;;   # 이름이 인용됨(특수 글자) — 폴더를 찾을 수 없으니 막는다
+      *"$TAB"*) subs+=("${p#*"$TAB"}") ;;
+    esac
+  done <<EOF
+$out
+EOF
+  if [ "$rc" != 0 ]; then unignored_secret_scan "$root" "$g"; return; fi
+  for s in "${subs[@]}"; do
+    [ -d "$root/$s" ] || continue
+    SEC_REPOS=$((SEC_REPOS + 1))
+    [ "$SEC_REPOS" -gt 20 ] && block "$MSG_WIDE [Grep · 저장소 수 $SEC_REPOS>20]" "$MSG_WIDE2"
+    if [ -e "$root/$s/.git" ]; then
+      unignored_secret_under "$root/$s" "$g" && return 0
+    else
+      unignored_secret_scan "$root/$s" "$g" && return 0   # 저장소가 아닌 gitlink 폴더(초기화 안 된 서브모듈 등)
+    fi
+  done
+  SEC_FOUND=""
+  return 1
+}
+# 지금 방식(git 밖·git 실패): 세 단계 아래까지 훑어 비밀값 이름 꼴 파일을 찾고, git 저장소면 무시된 것을 뺀다 → SEC_FOUND
+unignored_secret_scan() { # $1 폴더 $2 (있으면) 이 glob에 맞는 파일만
+  local root=$1 f d1 d2 list="" ign n=0 g=${2:-} pat t0=$SECONDS
   SEC_FOUND=""
   [ -d "$root" ] || return 1
   # 세 단계 아래까지(숨김 폴더 포함) 훑되, node_modules 같은 큰 폴더에는 들어가지 않는다
-  # 폴더가 너무 많거나(200개) 오래 걸리면(5초) 판정할 수 없으니 통과시키지 않고 막는다
-  local dirs=("$root") d3 MSG_WIDE="범위가 넓어 판정할 수 없습니다 — 폴더를 좁혀 주세요." MSG_WIDE2="path로 코드 폴더(예: src)를 지정하거나 glob(예: \"*.ts\")·type(예: \"js\")으로 파일 종류를 좁히세요."
+  # 폴더가 너무 많거나(200개) 오래 걸리면(이 함수 시작부터 5초) 판정할 수 없으니 통과시키지 않고 막는다
+  local dirs=("$root") d3
   # 하위 폴더 목록을 먼저 펼쳐 개수를 보고, 넘으면 더 들어가지 않고 바로 막는다(맞지 않은 glob 글자 2개 몫은 여유)
   local l1=("$root"/*/ "$root"/.[!.]*/) l2 l3
-  [ "${#l1[@]}" -gt 202 ] && block "$MSG_WIDE" "$MSG_WIDE2"
+  [ "${#l1[@]}" -gt 202 ] && block "$MSG_WIDE [Grep · 폴더 수 ${#l1[@]}>200]" "$MSG_WIDE2"
   for d1 in "${l1[@]}"; do
     heavy_dir "$d1" && continue
     dirs+=("${d1%/}")
     l2=("$d1"*/ "$d1".[!.]*/)
-    [ $((${#dirs[@]} + ${#l2[@]})) -gt 202 ] && block "$MSG_WIDE" "$MSG_WIDE2"
+    n=$((${#dirs[@]} + ${#l2[@]})); [ "$n" -gt 202 ] && block "$MSG_WIDE [Grep · 폴더 수 $n>200]" "$MSG_WIDE2"
     for d2 in "${l2[@]}"; do
       heavy_dir "$d2" && continue
       dirs+=("${d2%/}")
       l3=("$d2"*/)
-      [ $((${#dirs[@]} + ${#l3[@]})) -gt 201 ] && block "$MSG_WIDE" "$MSG_WIDE2"
+      n=$((${#dirs[@]} + ${#l3[@]})); [ "$n" -gt 201 ] && block "$MSG_WIDE [Grep · 폴더 수 $n>200]" "$MSG_WIDE2"
       for d3 in "${l3[@]}"; do heavy_dir "$d3" && continue; dirs+=("${d3%/}"); done
-      [ "$SECONDS" -ge 5 ] && block "$MSG_WIDE" "$MSG_WIDE2"
+      [ $((SECONDS - t0)) -ge 5 ] && block "$MSG_WIDE [Grep · 시간 5초]" "$MSG_WIDE2"
     done
   done
+  n=0
   for d1 in "${dirs[@]}"; do
-    for f in "$d1"/.env* "$d1"/*.env "$d1"/.dev.vars* "$d1"/*.pem "$d1"/*.key "$d1"/credentials.json "$d1"/secrets.* "$d1"/*service*account*.json "$d1"/*firebase-adminsdk*.json "$d1"/client_secret*.json; do
-      [ -f "$f" ] || continue
-      is_secret_path "$f" || continue
-      if [ -n "$g" ]; then glob_hits_secret "$g" "${f##*/}" || continue; fi
-      list="$list$f$NL"; n=$((n + 1)); [ "$n" -ge 40 ] && break 2
+    for pat in "${SEC_NAME_GLOBS[@]}"; do
+      for f in "$d1"/$pat; do
+        [ -f "$f" ] || continue
+        is_secret_path "$f" || continue
+        if [ -n "$g" ]; then glob_hits_secret "$g" "${f##*/}" || continue; fi
+        list="$list$f$NL"; n=$((n + 1)); [ "$n" -ge 40 ] && break 3
+      done
     done
   done
   [ -z "$list" ] && return 1
