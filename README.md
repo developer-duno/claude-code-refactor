@@ -3,7 +3,7 @@
 운영 중인 서비스를 AI로 **안전하게** 리팩토링하는 Claude Code 플러그인입니다.
 누구나 쓸 수 있는 공개 플러그인(MIT)이고, 화면 문구와 문서는 모두 한국어입니다(**한국어 전용 플러그인**).
 
-![version](https://img.shields.io/badge/version-0.2.3-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+![version](https://img.shields.io/badge/version-0.2.4-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
 
 > **English summary**
 > - **What it is:** A Korean-only Claude Code plugin that refactors a live service in a fixed order — code map, 25-item health check, deep audit, rebuttal review, baseline tests, plan — and then changes code only for steps a human approved, one step at a time.
@@ -157,10 +157,10 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 
 | 언제 | 막는 것 |
 |---|---|
-| **항상** (플러그인이 켜진 모든 대화) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기·출력·복사·전송·수정하는 명령과 도구, 환경변수 전체 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색, git이 무시하지 않는 `.env`가 든 범위의 내용 검색 · 강제 push, `reset --hard`, `clean -f`, `checkout .`, `branch -D`, 원격 가지·저장소 삭제(`gh api -X DELETE`·`gh repo delete` 포함), 기록 다시 쓰기, `rm -rf ~`·프로젝트 통째 삭제 같은 대량 삭제, DB 삭제·초기화 · 승인 스크립트와 플러그인 훅을 직접 부르기, 승인 기록(`APPROVALS.log`)·허용 파일(`.allow-*`)·`.turn*`을 만들기·복사·이동·개명·압축 해제로 바꾸기, 계획서 승인 칸 체크, 플러그인 폴더 수정 · MCP 도구나 하위 에이전트 지시로 위 금지를 우회하기 |
+| **항상** (플러그인이 켜진 모든 대화) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기·출력·복사·전송·수정하는 명령과 도구, 환경변수 전체 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색, git이 무시하지 않는 `.env`가 든 범위의 내용 검색 · 강제 push, `reset --hard`, `clean -f`, `checkout .`, 합치지 않은 가지 강제 삭제(`branch -D`·`-d -f` 등 — 이미 합쳐진 가지는 허용, [§6-2](#6-2-막지-않는-것-일부러-허용)), 원격 가지·저장소 삭제(`gh api -X DELETE`·`gh repo delete` 포함), 기록 다시 쓰기, `rm -rf ~`·프로젝트 통째 삭제 같은 대량 삭제, DB 삭제·초기화 · 승인 스크립트와 플러그인 훅을 직접 부르기, 승인 기록(`APPROVALS.log`)·허용 파일(`.allow-*`)·`.turn*`을 만들기·복사·이동·개명·압축 해제로 바꾸기, 계획서 승인 칸 체크, 플러그인 폴더 수정 · MCP 도구나 하위 에이전트 지시로 위 금지를 우회하기 |
 | **리팩토링 진행 중** (`docs/refactor/STATE.md`가 있고 마무리 전) | push·배포·원격 서버 명령, DB 구조 적용(마이그레이션), 원격 DB 접속, MCP로 운영 DB 조회·배포·메시지 발송, 플러그인 끄기, Claude 설정 수정, `git stash`, 파일을 지정하지 않은 `git log -p`, 프로젝트 전체 포맷터 · 커밋된 기준선 테스트와 마이그레이션 파일 수정(스냅숏 갱신 옵션 포함) |
 | **`/refactor:go` 실행 중** | 대표 실행 명령(npm·pnpm·yarn·bun·npx, python·node·deno, pytest, uv·poetry·pipenv run, make, turbo·nx, docker compose 등)은 안전 실행기로만 · 읽기 전용 단계, 그리고 승인된 실행 대기 단계가 없을 때는 `docs/refactor/` 밖 수정 금지 |
-| **너무 긴 입력** | 셸 명령 16KB(MCP 도구의 명령 칸 포함) · Grep 입력·Edit의 바꿀 부분·파일 경로 32KB · 하위 에이전트(Agent) 지시문 32KB(바이트 기준이라 한글만 쓰면 약 1만 글자) 또는 2,000줄을 넘거나, Grep 검색 범위가 너무 넓으면(폴더 200개 또는 5초 이상) 판정하지 않고 막습니다 — 파일로 저장해 실행하거나 범위를 좁히세요. **Write 본문과 MCP 도구(노션·DB·메일 등) 입력은 크기로 막지 않습니다** — 큰 파일 쓰기·긴 문서·큰 SQL은 정상 작업이기 때문입니다. 대신 그 안의 경로·명령 규칙은 크기와 상관없이 적용되고, SQL은 256KB까지 문장마다 판정하며 그보다 크면 위험한 낱말(DROP·DELETE 등)이 하나라도 있을 때 막습니다 |
+| **너무 긴 입력** | 셸 명령 16KB(MCP 도구의 명령 칸 포함) · Grep 입력·Edit의 바꿀 부분·파일 경로 32KB · 하위 에이전트(Agent) 지시문 32KB(바이트 기준이라 한글만 쓰면 약 1만 글자) 또는 2,000줄을 넘거나, git 저장소 밖에서 Grep 검색 범위가 너무 넓으면(폴더 200개 또는 5초 이상) 판정하지 않고 막습니다(git 저장소 안에서는 git이 아는 파일 목록으로 판정하므로 폴더 수와 상관없습니다) — 파일로 저장해 실행하거나 범위를 좁히세요. **Write 본문과 MCP 도구(노션·DB·메일 등) 입력은 크기로 막지 않습니다** — 큰 파일 쓰기·긴 문서·큰 SQL은 정상 작업이기 때문입니다. 대신 그 안의 경로·명령 규칙은 크기와 상관없이 적용되고, SQL은 256KB까지 문장마다 판정하며 그보다 크면 위험한 낱말(DROP·DELETE 등)이 하나라도 있을 때 막습니다 |
 
 명령이 끝난 뒤에도(PostToolUse 훅) 한 번 더 확인해서, **이번 턴에** 커밋된 기준선·마이그레이션 파일이나 승인 기록이 바뀌었으면 그 턴의 Claude에게 바로 알립니다. 승인 기록은 `/refactor:approve`가 쓸 때마다 봉인되므로, 그 밖에서 바뀐 기록은 사람이 `/refactor:approve 확인`을 입력하기 전까지 인정되지 않습니다.
 
@@ -174,6 +174,7 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 - `bash -c '…'` 안에서 `.md` 파일을 이어 붙이는 것(`cat a.md >> b.md`). `.md`를 **실행**하는 것(`bash x.md`, `source x.md`)만 막습니다.
 - `test -f .env`·`[ -f .env ]`처럼 있는지만 보는 확인.
 - `node_modules`·`.next`·`dist`·`build` 같은 폴더 지우기.
+- **이미 합쳐진 가지 지우기**(`git branch -D <가지>`와 `-d -f` 같은 다른 철자) — 그 가지의 내용이 기본 가지에 이미 다 들어 있을 때만 통과합니다(스쿼시 합침 포함). 기본 가지는 GitHub 쪽(`origin/HEAD` → `origin/main` → `origin/master`)이고, `origin` 원격이 없는 저장소만 내 컴퓨터의 `main`·`master`입니다. 방금 GitHub에서 합쳤다면 `git fetch origin`을 먼저 하세요. Bash 도구로 친 한 줄 명령(`git branch -D a b`, `cd <경로> && git branch -D a`, `git -C <경로> branch -D a`)에서 가지 이름을 그대로 적었을 때만 판정하고, 가지 10개까지, git 2.38 이상이 필요합니다. 하나라도 안 합쳐졌거나 판정할 수 없으면 통째로 막습니다.
 
 > 훅은 도구를 쓸 때마다 실행되므로 조금 느려집니다. 이 PC 실측으로 호출마다 0.15~0.4초 정도이고, 컴퓨터가 매우 바쁠 때는 몇 초까지 늘 수 있습니다.
 
@@ -197,7 +198,8 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 - 플러그인 스크립트를 통째로 복사해 훅과 같은 입력을 흉내 내는 것, 승인 기록과 봉인을 함께 다시 쓰는 스크립트까지는 막지 못합니다. 커밋 전에 `git diff`로 계획서·승인 기록의 변화를 한 번 보는 습관이 가장 확실합니다.
 - 코드·설정 파일에 직접 적힌 키는 안전 실행기도 가리지 못합니다([§7](#7-안전-실행기)).
 - 안전 실행기 강제는 `/refactor:go`로 시작한 대화(그 뒤 질문에 답하거나 단계 보고를 받은 뒤 이어지는 대화 포함)에만 적용됩니다. 평소 개발 대화에서는 막지 않습니다.
-- 입력 훅(`/refactor:go`·`/refactor:approve` 처리)은 컴퓨터가 매우 바쁠 때 3~10초 걸릴 수 있고, 30초를 넘기면 그 턴의 결과 안내가 생략됩니다 — 그때는 같은 명령을 한 번 더 치세요(승인은 두 번 기록되지 않습니다).
+- 입력 훅(`/refactor:go`·`/refactor:approve` 처리)은 컴퓨터가 매우 바쁠 때 3~10초 걸릴 수 있고, 30초를 넘기면 그 턴의 결과 안내가 생략됩니다 — 그때는 같은 명령을 한 번 더 치세요(승인은 두 번 기록되지 않습니다). `/refactor:go` 처리가 도중에 끊긴 턴은 읽기 전용·안전 실행기 규칙은 켜진 채 단계 실행의 코드 수정만 막히고 "/refactor:go 를 다시 입력"하라는 안내가 나옵니다. 10초 넘게 걸린 입력은 문제 기록(`problems.log`)에 한 줄 남습니다.
+- 합쳐진 가지 판정은 가지 **끝의 내용**만 봅니다. 가지 안에서 만들었다가 같은 가지에서 다시 지운 작업은 기본 가지에 없어도 "다 들어 있음"으로 보고 삭제를 허용합니다(그 중간 기록은 가지와 함께 사라집니다). 기준이 되는 원격 추적 참조를 미리 옮겨 두는 길도 `git update-ref`는 막지만 모든 길을 막지는 못합니다(`git fetch .`·`git push .`로 옮기기 등). git 2.38 미만에서는 판정할 수 없어 늘 막힙니다.
 - `/refactor:report`의 전송은 스킬이 "보낼까요?"라고 물은 뒤 예일 때만 실행하도록 되어 있고, 안전장치가 전송 자체를 강제로 막지는 않습니다.
 
 ---
@@ -286,6 +288,10 @@ claude plugin uninstall refactor@vibe-consulting     # 지우기 — 기본 범�
 | `[refactor 안전장치]`로 멈춤 | 정상입니다. → 줄의 안내를 따르거나, 정말 필요하면 사람이 `!`로 직접 실행 |
 | "명령이 너무 깁니다(16KB 초과)" | 명령을 파일로 저장하고, 무엇을 하는지 확인한 뒤 실행 |
 | "판정이 너무 오래 걸려 막았습니다(N초 초과)" | 판정이 제한 시간 안에 끝나지 않은 것입니다. 긴 지시문·SQL은 파일로 저장해 경로를 넘기고, 긴 명령은 나누거나 스크립트 파일로 만들어 무엇을 하는지 확인한 뒤 실행합니다. N이 25가 아니면 환경 변수 `REFACTOR_GUARD_LIMIT`이 설정돼 있는 것입니다(지우면 25초) |
+| "합치지 않은 가지는 지우지 않습니다(…)" | 그 가지의 내용이 기본 가지에 아직 없습니다. GitHub에서 방금 합쳤다면 `git fetch origin` 뒤 다시 시도하고, 정말 지워야 하면 사람이 직접 `git branch -D <가지>` |
+| "가지 삭제를 판정할 수 없어 막았습니다(…)" | 괄호 안 이유를 보세요. 가지 이름을 그대로 적어 한 줄로 실행하고(`git branch -D a b`, 다른 저장소면 `git -C <경로>` 하나만), `git --version`이 2.38 이상인지 확인 |
+| "입력 처리가 늦어 실행 대기 단계를 확인하지 못해 …" | 입력 훅이 시간 안에 끝나지 못했습니다. `/refactor:go`를 다시 입력하세요 |
+| "범위가 넓어 판정할 수 없습니다 … [Grep · …]" | git 저장소 밖에서 폴더가 많은 범위를 내용 검색했습니다. `path`로 코드 폴더를 지정하거나 `type`으로 파일 종류를 좁히세요 |
 | "이번 턴에 보호된 파일(…)이 바뀌었습니다" | `git diff <파일>`로 무엇이 바뀌었는지 보고 결정. 사람이 일부러 바꾼 것이면 그대로 둠 |
 | "승인 뒤 카드 내용이 바뀜" | `/refactor:status`가 보여 주는 바뀐 줄(− 승인 때 / + 지금)을 읽어 보고 괜찮으면 `/refactor:approve <ID>`로 다시 승인 |
 | "이번 턴에 승인 기록(…)이 바뀌었습니다" / "승인 기록(APPROVALS.log)이 /refactor:approve 밖에서 바뀌었습니다" | `git diff docs/refactor/APPROVALS.log`로 보고, 모르는 줄이면 지운 뒤 `/refactor:approve 확인` |
@@ -329,7 +335,7 @@ claude plugin validate --strict plugins/refactor; claude plugin validate --stric
 ```
 
 - Windows에서는 시험이 Git Bash를 자동으로 찾습니다(PATH의 WSL bash 대신). 못 찾으면 `GUARD_BASH`에 Git Bash 절대경로를 지정하세요. `python3`은 Windows 스토어 안내 프로그램일 수 있으니 `python`을 쓰세요.
-- 0.2.3 기준 결과(GitHub Actions): 안전장치 시험 1424/1424(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 154/154(Ubuntu·macOS)·155/155(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
+- 0.2.4 기준 결과(GitHub Actions): 안전장치 시험 1531/1531(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 154/154(Ubuntu·macOS)·155/155(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
 - 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올립니다.
 
 ### 폴더 구조
@@ -358,6 +364,14 @@ claude-code-refactor/
 ---
 
 ## 13. 변경점
+
+### 0.2.4 (2026-10-02)
+
+- **이미 합쳐진 가지는 Claude가 지울 수 있음** — 예전에는 `git branch -D`를 글자만 보고 늘 막아서, GitHub에서 스쿼시로 합친 가지(git이 "안 합쳐짐"으로 보아 `-d`로는 안 지워짐)도 매번 사람이 지워야 했습니다. 이제 안전장치가 그 저장소에서 가지 내용이 기본 가지(GitHub 쪽 `origin/main` 등)에 이미 다 들어 있는지 확인하고, 다 들어 있으면 통과시킵니다. 안 합쳐진 가지와 판정할 수 없는 꼴은 지금처럼 막고, 막힌 이유를 문구에 적습니다([§6-2](#6-2-막지-않는-것-일부러-허용)·[§6-4](#6-4-한계)).
+- **가지 강제 삭제의 다른 철자 막기**(0.2.3까지 있던 구멍) — `-df`·`-fd`·`-d -f`·`-f -d`·`-d --force`·`--delete -f`·`--force -d`·`--delete -q --force`·`--dele --forc`는 모두 `-D`와 같은데 막히지 않았습니다. 이제 같은 규칙으로 판정합니다. 판정 기준(원격 추적 참조)을 `git update-ref`로 옮기는 명령도 막습니다.
+- **Grep "범위가 넓어" 과잉차단 풀기** — git 저장소 안에서는 폴더를 하나하나 훑지 않고 git이 아는 파일 목록에서 비밀값 파일을 찾습니다. 폴더가 많은 레포에서 비밀값 파일이 없는데도 막히던 것이 풀리고(개발자 PC 기록에서 하루 차단의 절반이 이 문구였습니다), 세 단계보다 깊은 곳·숨김 폴더·커밋된 `vendor/` 안의 `.env`처럼 예전에는 놓치던 것은 막습니다. 효과가 없던 "glob으로 좁히세요" 안내를 뺐고, 문제 기록에 어느 한도에 걸렸는지(`[Grep · 폴더 수 N>200]` 등) 남깁니다.
+- **입력 처리가 느리면 규칙이 꺼지던 구멍 막기** — `/refactor:go` 입력 처리가 30초를 넘겨 끊기면 진행 표시가 안 생겨, 그 턴에는 읽기 전용 단계 울타리와 안전 실행기 규칙이 꺼진 채 진행될 수 있었습니다. 이제 느린 계산 전에 "확인 못 함" 표시를 먼저 써 두므로, 끊겨도 규칙은 켜지고 단계 실행의 코드 수정만 막힌 채 "/refactor:go 를 다시 입력"하라고 안내합니다. 10초 넘게 걸린 입력은 문제 기록에 남습니다.
+- **시험** — 새 시험 107개(가지 삭제 67 · Grep 23 · 입력 훅 17). 안 합쳐진 가지·되돌린 합침·같은 줄을 다르게 고친 합침·태그와 이름이 같은 가지·변수로 준 이름 등이 막히는지, 입력 훅을 느린 자리에서 멈춘 순간의 표시와 판정을 봅니다.
 
 ### 0.2.3 (2026-10-02)
 
