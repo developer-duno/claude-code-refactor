@@ -40,6 +40,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
    - 기준선 작성: 여기에 더해 `tests/baseline/` 아래 새 파일, 승인된 기준선 계획에 적힌 테스트 설정 파일, 승인된 개발용 도구 설치로 바뀌는 패키지 파일, 그리고 껍데기 확인용 한 줄 임시 수정(바로 원복)만.
    - 단계 실행: 승인된 단계 카드의 "건드릴 파일"과 그 단계의 새 테스트(`tests/baseline/` 밖), `docs/refactor/` 기록만.
 3. **돈·메시지·운영 데이터를 건드리지 않는다.** 실제 결제·환불, 알림톡·문자·메일 발송, 운영 DB 접속·쿼리·마이그레이션 적용, 수집 대상 사이트 요청, 배포를 하지 않는다. commit·push·merge는 사람이 한다(커밋 명령 초안만 준다).
+   - **리팩토링 중에는 다른 가지로 옮기지 않는다**(`git switch <가지>`·`git checkout <가지>`) — 리팩토링 기록(`docs/refactor`)이 없는 가지로 가면 안전장치가 통째로 꺼진다. 가지를 옮겨야 하면 멈추고 사람에게 부탁한다. (준비 단계에서 허락받은 작업 가지를 **새로 만드는 것**(`git switch -c refactor/…`)은 `phases/0-setup.md` 지시대로 한다.)
    - **테스트·빌드·개발 서버·스크립트 실행은 항상 안전 실행기로 한다**(운영일 수 있는 DB 주소·키를 가짜 값으로 바꿔 실행한다. `/refactor:go` 중에는 안전장치가 강제한다):
      `bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-safe-run -- <명령>` — `&&`·`;`로 이은 명령마다 각각 붙인다(여러 명령을 한 번에 감싸려면 `… refactor-safe-run -- sh -c "npm test && npm run build"`). 안전장치가 모르는 실행 명령(예: 새 도구)에도 붙인다. 무엇이 바뀌는지(이름만) 보려면 `… refactor-safe-run --check`. **Bash 도구(Git Bash)로만 실행한다** — PowerShell 도구에서 `bash`를 치면 Windows 자체의 WSL bash가 잡혀 실패한다.
    - 개발용 DB가 원격이라 가짜 값으로 바뀌면 DB 테스트를 못 한다 — 사람이 개발용이라고 확인한 값을 `docs/refactor/.allow-env`에 적어야 한다(사람만. 주소 값은 `이름=호스트`, 키 값은 이름만: `! printf 'DATABASE_URL=<개발용 호스트>\n' >> "<프로젝트>/docs/refactor/.allow-env"`). 네가 만들지 않는다.
@@ -138,6 +139,6 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 
 ## 7. 완료(DONE)
 
-- 실행 대기(승인됨·미완료) 단계가 하나도 없고, 남은 단계가 없거나 사용자가 `/refactor:go 마무리`를 입력했을 때 완료 보고를 한다. **STATE를 직접 DONE으로 바꾸지 않는다** — 사용자가 `/refactor:approve 마무리`를 입력해야 DONE이 기록되고 리팩토링 중 안전장치가 꺼진다(네가 STATE만 DONE으로 바꾸면 안전장치는 켜진 채로 남는다).
+- 실행 대기(승인됨·미완료) 단계가 하나도 없고, 남은 단계가 없거나 사용자가 `/refactor:go 마무리`를 입력했을 때 완료 보고를 한다. **STATE를 직접 DONE으로 바꾸지 않는다** — 사용자가 `/refactor:approve 마무리`를 입력해야 DONE이 기록되고 안전장치가 모두 꺼진다(비밀값·되돌릴 수 없는 명령 보호 포함. 네가 STATE만 DONE으로 바꾸면 안전장치는 켜진 채로 남는다).
 - 보고: 전·후 요약(막은 🔴 수, 기준선 테스트 수, 남은 🟠·🟡), 승인하지 않고 남긴 단계 목록(보류), 다음 권장(한두 달 뒤 `/refactor:go 다시 CHECKUP`), 커밋 명령 한 줄.
-- STATE: `gate: ask-user`, next: "/refactor:approve 마무리 로 끝내기". 보고 마지막 줄에 `/refactor:approve 마무리`를 안내하고, 마무리하면 리팩토링 중에만 켜지는 안전장치(push·배포 차단 등)가 꺼진다는 것도 한 줄로 알린다.
+- STATE: `gate: ask-user`, next: "/refactor:approve 마무리 로 끝내기". 보고 마지막 줄에 `/refactor:approve 마무리`를 안내하고, 마무리하면 이 프로젝트의 안전장치가 모두 꺼진다(비밀값·되돌릴 수 없는 명령 보호 포함)는 것도 한 줄로 알린다.

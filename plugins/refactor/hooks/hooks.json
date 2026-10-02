@@ -1,5 +1,5 @@
 {
-  "description": "Vibe Refactor 안전장치: 위험한 명령·비밀값 노출·승인 우회를 막고, 새 대화를 열면 리팩토링 진행 상황을 알려 줍니다.",
+  "description": "Vibe Refactor 안전장치: 리팩토링 중에 위험한 명령·비밀값 노출·승인 우회를 막고, 새 대화를 열면 리팩토링 진행 상황을 알려 줍니다.",
   "hooks": {
     "PreToolUse": [
       {

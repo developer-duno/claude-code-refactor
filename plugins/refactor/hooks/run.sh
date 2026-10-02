@@ -9,6 +9,11 @@ s=${BASH_SOURCE[0]}; s=${s//\\//}; case "$s" in */*) d=${s%/*} ;; *) d=. ;; esac
 n=${1:-}; h=0; case "$n" in guard|turn|post-check|session-start) h=1 ;; esac; f=""; case "$n" in *[!A-Za-z0-9_-]*|"") ;; *) if [ -f "$d/$n.sh" ]; then f="$d/$n.sh"; h=1; elif [ -f "$d/../scripts/$n.sh" ]; then f="$d/../scripts/$n.sh"; fi ;; esac #
 trap 'x=${r:-$?}; w=""; [ -z "$f" ] && w=" (파일 없음)"; case "$n" in *[!A-Za-z0-9_-]*|"") n="?" ;; esac; case "$n:$x$w" in refactor-report:*|refactor-safe-run:*) ;; *:t) bash "$d/run.sh" refactor-report --log run.sh "$n 시간 초과(${T}초) → 차단" </dev/null >/dev/null 2>&1 ;; *:2|*:124|*:127|*" (파일 없음)") bash "$d/run.sh" refactor-report --log run.sh "$n exit $x$w" </dev/null >/dev/null 2>&1 ;; esac' EXIT # 하위 스크립트가 2(문법 오류 등)·124(시간 초과)·127(없음)로 끝나거나 파일이 없으면 문제 기록(problems.log)에 이름·실제 종료 코드만 한 줄 남긴다(guard 감시가 끊었으면 "guard 시간 초과(T초) → 차단". 없는 훅은 exit 1, 없는 스크립트는 exit 127 + "(파일 없음)")
 if [ -z "$f" ]; then printf '[refactor] 스크립트 없음: %s\n' "$n" >&2; [ "$h" = 1 ] && exit 1; exit 127; fi #
+# - guard 빠른 길(0.3.0): 안전장치는 리팩토링 중에만 판정한다. CLAUDE_PROJECT_DIR(훅에 실리는 프로젝트 폴더)가 있는 폴더이고 그 아래에 docs/refactor 폴더가 없으면
+#   표준입력을 읽지 않고 0 으로 끝낸다(감시·guard 를 띄우지 않음 — 평소 호출 = bash 1개). 경로는 guard 와 같이 역슬래시를 / 로 바꾸고 끝의 / 를 뗀다.
+#   Claude Code 가 프로젝트 폴더를 알려 주지 않았거나(환경 변수 없음) 그 폴더를 열 수 없으면(판정 불가 = 켜짐 쪽) 빠른 길을 타지 않고, 기록 폴더가 있을 때와
+#   같이 guard 가 판정한다(STATE·마무리 확인·go 표시). REFACTOR_GUARD_ALWAYS=1(정확히 1)이면 이 길을 건너뛴다(0.2.4 동작).
+if [ "$n" = guard ] && [ "${REFACTOR_GUARD_ALWAYS:-}" != 1 ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then q=${CLAUDE_PROJECT_DIR//\\//}; q=${q%/}; [ -d "$q" ] && [ ! -d "$q/docs/refactor" ] && exit 0; fi #
 # - guard 감시: 시간 초과된 PreToolUse 훅은 도구 호출을 막지 않는다 → guard 가 T초(기본 25, REFACTOR_GUARD_LIMIT 로 1~25 사이로만 줄일 수 있음) 안에
 #   안 끝나면 guard 를 죽이고 2(차단). 감시(>( … ))는 guard 만 쥔 파이프의 끝을 read -t 로 기다린다 — guard 가 끝나면 바로 끝나고(sleep·kill 없음),
 #   T초가 지나면 guard 를 KILL 한다(bash 3.2 는 긴 확장 한 번 중에는 trap 을 못 돌린다). 배경 명령은 표준입력이 비워지므로 3 으로 넘긴다.

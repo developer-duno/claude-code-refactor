@@ -6,7 +6,13 @@
 # 아니면 0으로 통과시킨다. 이 스크립트가 고장 나거나 실행되지 못하면 막지 못하고 통과된다 — 사고를 줄이는 보조 장치이지,
 # 모든 우회를 막는 벽이 아니다.
 #
-# 항상 켜진 규칙 — 플러그인이 켜진 모든 대화:
+# 이 훅은 리팩토링 중에만 판정한다(0.3.0) — 켜짐 = docs/refactor/STATE.md 가 있고 마무리 확인(/refactor:approve 마무리) 전이거나,
+# 이 세션이 /refactor:go 로 시작한 턴(표시 파일 .turn.<세션ID>)일 때. 그 밖의 대화(STATE 없음·마무리 확인됨)는 아무것도 보지 않고 통과한다
+# (run.sh 는 CLAUDE_PROJECT_DIR 아래에 docs/refactor 폴더가 없으면 이 파일을 띄우지도 않는다). Claude Code 가 프로젝트 폴더를 알려 주지 않았거나
+# 그 폴더를 열 수 없으면 빠른 길을 타지 않고 이 훅이 판정한다 — 그 폴더를 열 수 없으면 아래 문도 꺼짐으로 통과시키지 않는다(판정 불가 = 켜짐 쪽).
+# 환경 변수 REFACTOR_GUARD_ALWAYS=1(정확히 1)이면 0.2.4 처럼 플러그인이 켜진 모든 대화에서 판정한다.
+#
+# 켜져 있는 동안 늘 보는 규칙:
 #   1. 비밀값 노출: .env·키 파일 읽기/출력/복사/수정, 환경변수 출력, 원격 주소 속 토큰, git 기록 속 옛 비밀값,
 #      비밀값 파일이 든 범위의 내용 검색(Grep 도구 포함)
 #   2. 되돌릴 수 없는 명령: 강제 push, reset --hard, clean -f, checkout ., rm -rf ~ 류, DB 삭제·초기화
@@ -280,23 +286,6 @@ quote_odd() {
 jget tool_name; tool=$JV
 jget session_id; sid=$JV
 BLOCK_NOTE=""
-
-# 긴 입력 상한: 아주 긴 입력은 판정이 느려지거나 규칙을 비껴갈 수 있어 판정하지 않고 막는다(셸 명령 16KB는 check_shell 에서)
-if [ "${#input}" -gt 32768 ]; then
-  case "$tool" in
-    Grep) block "검색 입력이 너무 깁니다(32KB 초과)." "검색어와 범위를 줄여 주세요." ;;
-    Edit|MultiEdit)
-      jget old_string; [ "${#JV}" -gt 32768 ] && block "바꿀 부분(old_string)이 너무 깁니다(32KB 초과)." "여러 번에 나눠 고치거나 Write 도구로 파일 전체를 쓰세요." ;;
-    Agent|Task)
-      # 하위 에이전트 지시문(prompt+description)이 32KB 를 넘으면 판정(줄마다 코드 조각 검사)이 훅 제한 시간을 넘길 수 있다 — 무거운 판정 전에 길이만 재고 막는다
-      n=$(printf '%s' "$input" | awk 'function rall(s, re, w,   n, i, P, out) { n = split(s, P, re); if (n < 2) return s; out = P[1]; for (i = 2; i <= n; i++) out = out w P[i]; return out }
-        { j = j $0 "\n" } END { j = rall(rall(j, "\\\\\\\\", "\002\002"), "\\\\\"", "\003\003"); t = 0
-          if (match(j, /"prompt"[ \t]*:[ \t]*"[^"]*"/)) { v = substr(j, RSTART, RLENGTH); sub(/^"prompt"[ \t]*:[ \t]*"/, "", v); t += length(v) - 1 }
-          if (match(j, /"description"[ \t]*:[ \t]*"[^"]*"/)) { v = substr(j, RSTART, RLENGTH); sub(/^"description"[ \t]*:[ \t]*"/, "", v); t += length(v) - 1 }
-          print t }' 2>/dev/null)
-      [ "${n:-0}" -gt 32768 ] && block "도구 입력이 너무 깁니다(32KB 초과) — 파일로 저장해 경로를 넘기세요." "지시문을 파일(예: /tmp/지시.md)로 저장하고, 하위 에이전트에게는 그 파일 경로를 읽으라고 짧게 쓰세요." ;;
-  esac
-fi
 proj_raw=${CLAUDE_PROJECT_DIR:-}
 if [ -z "$proj_raw" ]; then jget cwd; unesc_line "$JV"; proj_raw=$UV; fi
 proj=${proj_raw//"$BS"/$SL}
@@ -326,6 +315,39 @@ if [ "$phase" = "DONE" ] && [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$REFACTOR_ROOT/
   rl_done_confirmed "$rdir" && refactor_on=0
 fi
 
+# /refactor:go 로 시작한 턴인가(UserPromptSubmit 훅 turn.sh가 세션마다 .turn.<세션ID> 에 기록: 1줄 "go <세션ID>", 2줄 "ready <실행 대기 단계들>")
+# 옛 버전의 .turn 은 그 안의 세션 ID가 이번 세션과 같을 때만 인정한다(아래 t_sid 비교)
+go_turn=0; t_ready="?"; tfile=""
+case "$sid" in ""|*/*|*"$BS"*|*..*) ;; *) [ -f "$rdir/.turn.$sid" ] && tfile="$rdir/.turn.$sid" ;; esac
+[ -z "$tfile" ] && [ -f "$rdir/.turn" ] && tfile="$rdir/.turn"
+if [ -n "$tfile" ]; then
+  t_kind=""; t_sid=""; t_rk=""; t_rest=""
+  { read -r t_kind t_sid; read -r t_rk t_rest; } < "$tfile"
+  [ "$t_kind" = "go" ] && [ -n "$sid" ] && [ "$t_sid" = "$sid" ] && go_turn=1
+  [ "$t_rk" = "ready" ] && t_ready=$t_rest
+fi
+# 0.3.0: 경비원(이 훅)은 리팩토링 중에만 판정한다 — 켜짐 = (STATE 있음 그리고 마무리 확인 전: refactor_on) 또는 (이 세션의 /refactor:go 표시: go_turn).
+#   그 밖(STATE 없음·마무리 확인됨)은 아무것도 보지 않고 통과(긴 입력 상한보다 먼저 — 꺼짐 경로에서는 외부 프로그램을 띄우지 않는다. DONE 의 마무리 확인만 예외).
+#   REFACTOR_GUARD_ALWAYS=1(정확히 1)이면 이 문을 건너뛰어 0.2.4 처럼 늘 판정한다(run.sh 의 빠른 길도 같은 스위치를 본다).
+#   프로젝트 폴더($proj)가 있는 폴더일 때만 꺼짐으로 통과한다 — 빈 값이거나 이 bash 로 열 수 없는 경로면(판정 불가 = 켜짐 쪽) 0.2.4 처럼 판정한다.
+if [ "${REFACTOR_GUARD_ALWAYS:-}" != 1 ] && [ "$refactor_on" = 0 ] && [ "$go_turn" = 0 ] && [ -d "$proj" ]; then exit 0; fi
+
+# 긴 입력 상한: 아주 긴 입력은 판정이 느려지거나 규칙을 비껴갈 수 있어 판정하지 않고 막는다(셸 명령 16KB는 check_shell 에서)
+if [ "${#input}" -gt 32768 ]; then
+  case "$tool" in
+    Grep) block "검색 입력이 너무 깁니다(32KB 초과)." "검색어와 범위를 줄여 주세요." ;;
+    Edit|MultiEdit)
+      jget old_string; [ "${#JV}" -gt 32768 ] && block "바꿀 부분(old_string)이 너무 깁니다(32KB 초과)." "여러 번에 나눠 고치거나 Write 도구로 파일 전체를 쓰세요." ;;
+    Agent|Task)
+      # 하위 에이전트 지시문(prompt+description)이 32KB 를 넘으면 판정(줄마다 코드 조각 검사)이 훅 제한 시간을 넘길 수 있다 — 무거운 판정 전에 길이만 재고 막는다
+      n=$(printf '%s' "$input" | awk 'function rall(s, re, w,   n, i, P, out) { n = split(s, P, re); if (n < 2) return s; out = P[1]; for (i = 2; i <= n; i++) out = out w P[i]; return out }
+        { j = j $0 "\n" } END { j = rall(rall(j, "\\\\\\\\", "\002\002"), "\\\\\"", "\003\003"); t = 0
+          if (match(j, /"prompt"[ \t]*:[ \t]*"[^"]*"/)) { v = substr(j, RSTART, RLENGTH); sub(/^"prompt"[ \t]*:[ \t]*"/, "", v); t += length(v) - 1 }
+          if (match(j, /"description"[ \t]*:[ \t]*"[^"]*"/)) { v = substr(j, RSTART, RLENGTH); sub(/^"description"[ \t]*:[ \t]*"/, "", v); t += length(v) - 1 }
+          print t }' 2>/dev/null)
+      [ "${n:-0}" -gt 32768 ] && block "도구 입력이 너무 깁니다(32KB 초과) — 파일로 저장해 경로를 넘기세요." "지시문을 파일(예: /tmp/지시.md)로 저장하고, 하위 에이전트에게는 그 파일 경로를 읽으라고 짧게 쓰세요." ;;
+  esac
+fi
 # 기준선 작성 단계는 기준선 계획이 실제로 승인됐을 때만 인정한다(STATE의 phase만 바꿔서 풀 수 없게):
 #   phase가 BASELINE + 승인 기록(APPROVALS.log)의 마지막 BASELINE 기록이 '승인'이고 지금 계획 내용과 지문이 같음
 #   + 아직 계획서(REFACTOR_PLAN.md)가 없음(계획서 단계 뒤에 phase만 되돌려 다시 여는 것을 막는다)
@@ -341,17 +363,6 @@ fi
 allow_baseline=0; [ -f "$rdir/.allow-baseline-edit" ] && allow_baseline=1
 allow_migration=0; [ -f "$rdir/.allow-migration-edit" ] && allow_migration=1
 
-# /refactor:go 로 시작한 턴인가(UserPromptSubmit 훅 turn.sh가 세션마다 .turn.<세션ID> 에 기록: 1줄 "go <세션ID>", 2줄 "ready <실행 대기 단계들>")
-# 옛 버전의 .turn 은 그 안의 세션 ID가 이번 세션과 같을 때만 인정한다(아래 t_sid 비교)
-go_turn=0; t_ready="?"; tfile=""
-case "$sid" in ""|*/*|*"$BS"*|*..*) ;; *) [ -f "$rdir/.turn.$sid" ] && tfile="$rdir/.turn.$sid" ;; esac
-[ -z "$tfile" ] && [ -f "$rdir/.turn" ] && tfile="$rdir/.turn"
-if [ -n "$tfile" ]; then
-  t_kind=""; t_sid=""; t_rk=""; t_rest=""
-  { read -r t_kind t_sid; read -r t_rk t_rest; } < "$tfile"
-  [ "$t_kind" = "go" ] && [ -n "$sid" ] && [ "$t_sid" = "$sid" ] && go_turn=1
-  [ "$t_rk" = "ready" ] && t_ready=$t_rest
-fi
 ro_phase=0
 case "$phase" in SETUP|MAP|CHECKUP|DEEP|VERIFY|BASELINE_PLAN|PLAN) ro_phase=1 ;; esac
 fence=0; fence_why=""; fence_note=""
@@ -609,7 +620,11 @@ glob_hits_secret() {
 glob_targets_secret() { glob_hits_secret "$1" && ! glob_hits_secret "$1" "$PLAIN_SAMPLES"; }
 heavy_dir() { [ -d "$1" ] || return 0; case "${1%/}" in */node_modules|*/.git|*/.next|*/.nuxt|*/.cache|*/.turbo|*/.vercel|*/dist|*/build|*/.venv|*/venv|*/__pycache__|*/vendor|*/target|*/coverage|*/.idea|*/.vscode) return 0 ;; esac; return 1; }
 # 비밀값 파일 이름 꼴 — 훑기(unignored_secret_scan)의 파일 glob 과 git 목록의 pathspec 이 이 한 목록을 같이 쓴다(어긋나지 않게)
-SEC_NAME_GLOBS=(".env*" "*.env" ".dev.vars*" "*.pem" "*.key" "credentials.json" "secrets.*" "*service*account*.json" "*firebase-adminsdk*.json" "client_secret*.json")
+# 후보를 고르는 꼴일 뿐이고 판정은 is_secret_path 가 한다(id_rsa* 로 고른 id_rsa.pub 은 거기서 빠진다). 대소문자는 가리지 않는다(0.3.0 —
+#   pathspec 은 icase, 훑기는 nocaseglob. is_secret_path 는 원래 nocasematch 라 .ENV 도 비밀값으로 본다).
+#   글자 그대로인 이름은 한 글자를 [ ] 로 감싼다 — glob 글자가 없으면 셸이 펼치지 않아 훑기에서 nocaseglob 이 듣지 않는다(.NETRC)
+#   .npmrc 는 저장소에 올려 두는 설정 파일인 경우가 많아 범위 검색을 매번 막게 되므로 넣지 않는다(직접 읽기는 is_secret_path 가 막는다).
+SEC_NAME_GLOBS=(".env*" "*.env" ".dev.vars*" "*.pem" "*.key" "*.p12" "*.pfx" "*.jks" "*.keystore" "id_rsa*" "id_dsa*" "id_ecdsa*" "id_ed25519*" "[c]redentials.json" "secrets.*" ".[s]ecrets" "*service*account*.json" "*firebase-adminsdk*.json" "client_secret*.json" ".[p]gpass" ".[n]etrc" ".[p]ypirc" ".[g]it-credentials")
 MSG_WIDE="범위가 넓어 판정할 수 없습니다 — 폴더를 좁혀 주세요."
 MSG_WIDE2="path로 코드 폴더(예: src)를 지정하거나 type(예: \"js\")으로 파일 종류를 좁히세요."
 SEC_REPOS=0
@@ -623,7 +638,7 @@ unignored_secret_under() { # $1 폴더 $2 (있으면) 이 glob에 맞는 파일�
   SEC_FOUND=""
   [ -d "$root" ] || return 1
   if ! command -v git >/dev/null 2>&1; then unignored_secret_scan "$root" "$g"; return; fi
-  for pat in "${SEC_NAME_GLOBS[@]}"; do pspec+=(":(glob)**/$pat"); done
+  for pat in "${SEC_NAME_GLOBS[@]}"; do pspec+=(":(glob,icase)**/$pat"); done
   # -z 목록은 $( ) 가 NUL 을 버리므로 read -d '' 로 읽는다. 끝에 종료 코드를 "/rc=N" 으로 붙인다(목록 이름은 /로 시작하지 않는다)
   # ":(glob)**/" = 끝이 / 인 항목 = 안 추적 중첩 저장소(git 은 그 안을 보여 주지 않는다)
   while IFS= read -r -d '' p; do
@@ -690,6 +705,7 @@ unignored_secret_scan() { # $1 폴더 $2 (있으면) 이 glob에 맞는 파일�
     done
   done
   n=0
+  shopt -s nocaseglob   # 이름 꼴은 대소문자를 가리지 않는다(.ENV · ID_RSA) — 아래 반복문에서만 켠다
   for d1 in "${dirs[@]}"; do
     for pat in "${SEC_NAME_GLOBS[@]}"; do
       for f in "$d1"/$pat; do
@@ -700,6 +716,7 @@ unignored_secret_scan() { # $1 폴더 $2 (있으면) 이 glob에 맞는 파일�
       done
     done
   done
+  shopt -u nocaseglob
   [ -z "$list" ] && return 1
   # git 저장소면 무시된 파일은 뺀다(Grep 도구가 보지 않음). git이 아니면 모두 보인다고 본다.
   if command -v git >/dev/null 2>&1 && git -c core.fsmonitor=false -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

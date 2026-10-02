@@ -166,6 +166,11 @@ def turn(proj, sess, prompt):
 
 def env_for(proj, project_dir=None):
     env = dict(os.environ, CLAUDE_PROJECT_DIR=project_dir or str(proj), CLAUDE_PLUGIN_DATA=TEST_DATA)
+    # 0.3.0: 안전장치는 리팩토링 중에만 켜진다. STATE 가 없는 프로젝트에서 도는 옛 시험("항상" 규칙)은 스위치를 켜 뜻을 유지하고(헛초록 방지),
+    # STATE 가 있는 프로젝트의 시험은 스위치 없이 진짜 문을 지난다. 문 자체(꺼짐·켜짐·스위치)는 check_gate_030 이 스위치를 직접 정해 시험한다.
+    env.pop("REFACTOR_GUARD_ALWAYS", None)
+    if not (pathlib.Path(str(proj)) / "docs/refactor/STATE.md").is_file():
+        env["REFACTOR_GUARD_ALWAYS"] = "1"
     for pre in (GIT_TOOLS, PATH_PREFIX):   # 나중에 붙인 것이 맨 앞 — PATH_PREFIX 가 가장 앞
         if pre:
             env["PATH"] = pre + os.pathsep + env["PATH"]
@@ -383,7 +388,7 @@ ALLOW_FILES = [  # EXECUTE + 허용 파일 두 개
 DONE_PHASE = [
     (OK, bash("git push origin main")),
     (OK, ("Edit", {"file_path": "tests/baseline/money.test.ts", "old_string": "1", "new_string": "2"})),
-    (B, bash("git push --force")),
+    (OK, bash("git push --force")),   # 0.3.0: 마무리 확인 뒤에는 안전장치 전체가 꺼진다(0.2.4 까지는 "항상" 규칙이 남아 막았다)
 ]
 FENCE = [  # CHECKUP + /refactor:go 턴(.turn의 세션이 일치)
     (B, ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "export const a = 1"})),
@@ -823,6 +828,9 @@ def main():
     check_branch_024(res)
     check_fix_024(res)
     check_turnfix_024(res)
+    check_gate_030(res)
+    check_firstgo_030(res)
+    check_secretnames_030(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -1960,10 +1968,10 @@ def check_grep_024(res):
         res["total"] += 1
         if dt > 5:
             res["fails"].append(("0.2.4 B T17 시간", "5초 안", f"{dt:.2f}s", "Grep", "", ""))
-        # T18: 대문자 이름 .ENV(무시 안 됨) — 지금 방식과 같은 판정(이름 꼴은 대소문자를 가린다 → 통과)
+        # T18: 대문자 이름 .ENV(무시 안 됨) → 막음. 0.3.0 B1 에서 뒤집음: 이름 꼴이 대소문자를 가리지 않게 됐다(Read 도구·is_secret_path 와 같은 수준)
         p = proj_(gitignore="/" + sec + "\n")
         put(p, "src/" + sec.upper())
-        case("T18 대문자 .ENV", OK, p, G())
+        case("T18 대문자 .ENV", B, p, G())
     finally:
         for p in made:
             rmtree_rw(p) if p.exists() else None
@@ -2785,6 +2793,292 @@ def check_turnfix_024(res):
             lf(release, "")
         except OSError:
             pass
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
+
+
+def check_gate_030(res):
+    """0.3.0 A: 안전장치는 리팩토링 중에만 켜진다 — 켜짐 = (STATE 있음 그리고 마무리 확인 전) 또는 (이 세션의 go 표시).
+    꺼짐이면 run.sh 빠른 길(CLAUDE_PROJECT_DIR 아래에 docs/refactor 폴더가 없음 → 입력을 읽지 않고 0) 또는 guard 의 문(32KB 길이
+    차단보다 먼저 0)으로 통과한다. REFACTOR_GUARD_ALWAYS 가 정확히 1 이면 0.2.4 처럼 늘 판정한다.
+    env_for 는 STATE 없는 프로젝트에 스위치를 켜 주므로, 여기서는 그 스위치를 떼고 묶음마다 직접 정한다."""
+    run_sh = (HOOKS / "run.sh").as_posix()
+    sec = "." + "env"
+    log = pathlib.Path(TEST_DATA) / "problems.log"
+    made = []
+
+    def fail(title, want, got, err=""):
+        res["fails"].append(("0.3.0 문 · " + title, want, got, "", "", err.strip()[:200]))
+
+    def bare(folder=False):
+        """STATE 없는 프로젝트(git 아님). folder=True 면 빈 기록 폴더(docs/refactor)만 만든다."""
+        p = pathlib.Path(tempfile.mkdtemp(prefix="gate030-"))
+        made.append(p)
+        (p / "src").mkdir()
+        lf(p / "src/app.ts", "export {}\n")
+        lf(p / sec, "SECRET=do-not-read\n")
+        if folder:
+            (p / "docs/refactor").mkdir(parents=True)
+        return p
+
+    def risky(p):
+        """0.2.4 에서 "항상" 규칙이 막던 입력 11종(스위치 1 묶음이 11종 모두 지금도 막히는지 확인한다 — 헛초록 방지).
+        11번(Agent 40KB)은 32KB 길이 차단에 걸리는 입력 — 꺼짐 묶음에서 문이 길이 차단보다 먼저인지 본다."""
+        return [
+            ("1 셸로 비밀 파일 읽기", "Bash", {"command": r"cat .env", "description": "t"}),
+            ("2 강제 push", "Bash", {"command": r"git push --force origin main", "description": "t"}),
+            ("3 reset --hard", "Bash", {"command": r"git reset --hard", "description": "t"}),
+            ("4 Read 로 비밀 파일 읽기", "Read", {"file_path": str(p / sec)}),
+            ("5 Grep 패턴 40KB", "Grep", {"pattern": "a" * 40000}),
+            ("6 Agent 지시문 3,000줄", "Agent", {"description": "t", "prompt": "줄\n" * 3000}),
+            ("7 승인 기록 쓰기", "Write", {"file_path": str(p / "docs/refactor/APPROVALS.log"), "content": "x"}),
+            ("8 승인 스크립트를 훅 인자와 함께", "Bash", {"command": r"bash /x/hooks/run.sh refactor-approve . --from-hook", "description": "t"}),
+            ("9 MCP DROP TABLE", "mcp__Supabase__execute_sql", {"project_id": "x", "query": r"DROP TABLE users"}),
+            ("10 20KB 명령", "Bash", {"command": "echo " + "word " * 4000, "description": "t"}),
+            ("11 Agent 40KB", "Agent", {"description": "t", "prompt": "src/app.ts 를 정리해 줘.\n" * 1400}),
+        ]
+
+    def env_(p, switch=None, projdir=True):
+        e = env_for(p)
+        e.pop("REFACTOR_GUARD_ALWAYS", None)
+        if switch is not None:
+            e["REFACTOR_GUARD_ALWAYS"] = switch
+        if not projdir:
+            e.pop("CLAUDE_PROJECT_DIR", None)   # 입력의 cwd 만 — run.sh 빠른 길은 건너뛰고 guard 가 판정한다
+        elif isinstance(projdir, str):
+            e["CLAUDE_PROJECT_DIR"] = projdir   # 지정한 값(이 bash 로 열 수 없는 경로 등)
+        return e
+
+    def call(p, tool, tin, cwd=None, **kw):
+        pl = {"session_id": "t", "transcript_path": "/tmp/t.jsonl", "cwd": cwd or str(p), "permission_mode": "default",
+              "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tin, "tool_use_id": "toolu_1"}
+        r = run_hook([BASH, run_sh, "guard"], input=json.dumps(pl, ensure_ascii=False).encode("utf-8"), capture_output=True, env=env_(p, **kw))
+        return r.returncode, r.stderr.decode("utf-8", "replace")
+
+    def group(title, p, want, picks=None, **kw):
+        """want=OK 이면 종료 코드 0 에 더해 표준오류도 비어 있어야 한다."""
+        for i, (label, tool, tin) in enumerate(risky(p), 1):
+            if picks and i not in picks:
+                continue
+            code, err = call(p, tool, tin, **kw)
+            res["total"] += 1
+            if code != want or (want == OK and err.strip()):
+                fail(f"{title} · {label}", want, code, err)
+
+    def log_lines():
+        return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
+
+    def open_only(title, p):
+        """표준입력을 열어 두기만 하고(닫지도 않고) 10초 안에 0·빈 표준오류로 끝나는지 — 입력을 읽는다면 끝나지 않는다."""
+        pr = subprocess.Popen([BASH, run_sh, "guard"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env_(p))
+        try:
+            code = pr.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            code = "10초 안에 안 끝남(입력을 기다림)"
+        finally:
+            pr.stdin.close()
+            try:
+                pr.wait(timeout=40)
+            except subprocess.TimeoutExpired:
+                pr.kill()
+                pr.wait()
+            err = pr.stderr.read().decode("utf-8", "replace")
+            pr.stdout.close()
+            pr.stderr.close()
+        res["total"] += 1
+        if code != OK or err.strip():
+            fail(title, OK, code, err)
+
+    P3 = (1, 2, 4)
+    try:
+        done = make_project(phase="DONE", done_confirmed=True)
+        made.append(done)
+        n0 = log_lines()
+
+        # 꺼짐-빠른 길: 스위치 없음 · CLAUDE_PROJECT_DIR 있음 · 기록 폴더 없음 → run.sh 가 guard 를 띄우지 않고 0
+        p = bare()
+        group("꺼짐-빠른 길", p, OK)
+        # 꺼짐-빠른 길-입력 없음: 표준입력을 열어 두기만 하고 아무것도 보내지 않는다(닫지도 않는다) — 입력을 읽는다면 끝나지 않는다
+        open_only("꺼짐-빠른 길-입력 없음(열어 두기만)", p)
+        # 기록 폴더 자리(docs/refactor)가 폴더가 아니라 파일인 프로젝트도 빠른 길(입력을 읽지 않고 바로 0)
+        pf = bare()
+        (pf / "docs").mkdir()
+        lf(pf / "docs/refactor", "x\n")
+        open_only("꺼짐-빠른 길-기록 폴더 자리가 파일(열어 두기만)", pf)
+        r = run_hook([BASH, run_sh, "guard"], input=b"", capture_output=True, env=env_(p))
+        res["total"] += 1
+        if r.returncode != OK or r.stderr.strip():
+            fail("꺼짐-빠른 길-입력 없음(빈 입력)", OK, r.returncode, r.stderr.decode("utf-8", "replace"))
+
+        # 꺼짐-guard 문: CLAUDE_PROJECT_DIR 없음(입력의 cwd 만) · 기록 폴더 없음 → guard 가 길이 차단보다 먼저 0
+        group("꺼짐-guard 문", bare(), OK, projdir=False)
+        # 꺼짐-폴더만: 기록 폴더는 있는데 STATE·표시 없음
+        group("꺼짐-폴더만", bare(folder=True), OK)
+        # 꺼짐-남의 표시: 청소 표시·이 세션의 dirty 표시·다른 세션의 go 표시·옛 .turn(다른 세션)은 켜지 않는다
+        p = bare(folder=True)
+        lf(p / "docs/refactor/.turn-sweep", "2026-10-02\n")
+        lf(p / "docs/refactor/.turn-dirty.t", "")
+        lf(p / "docs/refactor/.turn.other", "go other\nready ?\n")
+        lf(p / "docs/refactor/.turn", "go other\nready ?\n")
+        group("꺼짐-남의 표시", p, OK, picks=P3)
+        # 꺼짐-마무리 확인: STATE 단계 DONE + 사용자의 마무리 확인 기록
+        group("꺼짐-마무리 확인", done, OK, picks=P3)
+
+        # 기록: 꺼짐 묶음은 문제 기록(problems.log)에 줄을 남기지 않는다
+        n1 = log_lines()
+        res["total"] += 1
+        if n1 != n0:
+            fail("기록: 꺼짐 묶음 뒤 문제 기록 줄 수", n0, n1)
+
+        # 켜짐-STATE: 스위치 없이 STATE 만으로 켜진다
+        for ph in ("SETUP", "CHECKUP", "EXECUTE"):
+            p = make_project(phase=ph)
+            made.append(p)
+            group(f"켜짐-STATE({ph})", p, B, picks=P3)
+        # 켜짐-DONE 미확인: STATE 만 DONE 으로 바뀌고 마무리 기록이 없음
+        p = make_project(phase="DONE")
+        made.append(p)
+        group("켜짐-DONE 미확인", p, B, picks=P3)
+        # 켜짐-go 표시만: STATE 없음 + 이 세션의 go 표시(turn.sh 가 쓰는 두 줄 꼴) — 첫 /refactor:go 턴
+        p = bare(folder=True)
+        lf(p / "docs/refactor/.turn.t", "go t\nready ?\n")
+        group("켜짐-go 표시만", p, B, picks=P3)
+
+        # 스위치: 정확히 1 일 때만 0.2.4 동작(run.sh 빠른 길·guard 의 문 둘 다 건너뜀). 그 밖의 값은 꺼진 것
+        p = bare()
+        group("스위치 1(기록 폴더 없음)", p, B, switch="1")
+        for v in ("", "0", "true", " 1"):
+            group(f"스위치 {v!r}(기록 폴더 없음)", p, OK, picks=P3, switch=v)
+        p = bare(folder=True)
+        group("스위치 1(폴더만)", p, B, picks=P3, switch="1")
+        group("스위치 'true'(폴더만)", p, OK, picks=P3, switch="true")
+        for v in ("0", " 1"):   # 빠른 길이 아니라 guard 의 문이 스위치 값을 글자 그대로 비교하는지
+            group(f"스위치 {v!r}(폴더만)", p, OK, picks=P3, switch=v)
+
+        # 판정 불가 = 켜짐 쪽: 스위치 없음 + 프로젝트 폴더를 이 bash 로 열 수 없음 → 빠른 길·guard 의 문 둘 다 꺼짐으로 통과시키지 않는다
+        p = bare()
+        gone = str(p / "없는폴더")
+        group("열 수 없는 프로젝트 폴더(없는 경로)", p, B, picks=P3, projdir=gone)
+        group("열 수 없는 프로젝트 폴더(C:\\Users\\me\\proj 꼴)", p, B, picks=P3, projdir="C:\\Users\\me\\proj")
+        group("환경 변수 없음 · 입력 cwd 가 없는 경로", p, B, picks=P3, projdir=False, cwd=gone)
+
+        # 시험 하네스: env_for 는 STATE 있는 프로젝트엔 스위치 칸을 넣지 않고, 없는 프로젝트엔 "1" 을 넣는다
+        st = make_project(phase="EXECUTE")
+        made.append(st)
+        res["total"] += 1
+        if "REFACTOR_GUARD_ALWAYS" in env_for(st):
+            fail("하네스: env_for(STATE 있음) 스위치 칸", "없음", env_for(st)["REFACTOR_GUARD_ALWAYS"])
+        res["total"] += 1
+        if env_for(p).get("REFACTOR_GUARD_ALWAYS") != "1":
+            fail("하네스: env_for(STATE 없음) 스위치 값", "1", env_for(p).get("REFACTOR_GUARD_ALWAYS"))
+    finally:
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
+
+
+def check_firstgo_030(res):
+    """0.3.0 끝-끝: 기록 폴더 없는 새 git 프로젝트에서 진짜 입력 훅(turn.sh)에 /refactor:go → guard 가 켜지는지.
+    표시를 손으로 써 넣지 않는다. 스위치는 떼고 본다(env_for 는 STATE 없는 프로젝트에 스위치를 켜 주므로)."""
+    sec = "." + "env"
+    run_sh = (HOOKS / "run.sh").as_posix()
+    p = pathlib.Path(tempfile.mkdtemp(prefix="firstgo030-"))
+
+    def guard(sess):
+        pl = {"session_id": sess, "transcript_path": "/tmp/t.jsonl", "cwd": str(p), "permission_mode": "default",
+              "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "cat " + sec, "description": "t"},
+              "tool_use_id": "toolu_1"}
+        e = env_for(p)
+        e.pop("REFACTOR_GUARD_ALWAYS", None)
+        r = run_hook([BASH, run_sh, "guard"], input=json.dumps(pl, ensure_ascii=False).encode("utf-8"), capture_output=True, env=e)
+        return r.returncode, r.stderr.decode("utf-8", "replace")
+
+    def expect(title, want, sess):
+        code, err = guard(sess)
+        res["total"] += 1
+        if code != want:
+            res["fails"].append(("0.3.0 첫 go 끝-끝 · " + title, want, code, "Bash", "cat " + sec, err.strip()[:200]))
+
+    try:
+        (p / "src").mkdir()
+        lf(p / "src/app.ts", "export {}\n")
+        lf(p / sec, "SECRET=do-not-read\n")
+        lf(p / ".gitignore", sec + "\n")
+        git(p, "init", "-q")
+        git(p, "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A")
+        git(p, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init")
+        expect("시작 전(기록 폴더 없음)", OK, "s1")
+        turn(p, "s1", "/refactor:go")
+        res["total"] += 1
+        if not (p / "docs/refactor/.turn.s1").is_file():
+            res["fails"].append(("0.3.0 첫 go 끝-끝 · 입력 훅이 go 표시를 씀", "있음", "없음", "", "", ""))
+        expect("첫 /refactor:go 뒤 같은 세션", B, "s1")
+        expect("첫 /refactor:go 뒤 다른 세션", OK, "s2")
+        # 알려진 동작: STATE 가 없을 때 같은 세션에 평범한 문장이 오면 입력 훅이 go 표시를 지워 꺼진다(turn.sh 는 고치지 않음)
+        # — 그래서 0-setup 이 자체 시험 (1) 직후(자동 감지 전)에 STATE 를 만든다
+        turn(p, "s1", "파일 목록 좀 보여 줘")
+        expect("STATE 없이 평범한 문장 뒤 같은 세션(알려진 동작)", OK, "s1")
+        # 0-setup 순서: /refactor:go → 자체 시험 (1) → STATE(phase SETUP, gate none) 만들기 → 평범한 문장이 와도 켜진 채
+        turn(p, "s1", "/refactor:go")
+        lf(p / "docs/refactor/STATE.md", "---\nrefactor_state: 1\nproject: \"t\"\nphase: SETUP\ngate: none\nnext: \"준비: 자동 감지 중\"\n---\n")
+        turn(p, "s1", "파일 목록 좀 보여 줘")
+        expect("STATE(SETUP) 뒤 평범한 문장 · 같은 세션", B, "s1")
+        expect("STATE(SETUP) 뒤 평범한 문장 · 다른 세션", B, "s2")
+        # 위 두 줄은 STATE 만으로도 막힌다 — 준비 단계(SETUP)에서 입력 훅이 go 표시를 남기는지는 표시 파일로 직접 본다
+        res["total"] += 1
+        if not (p / "docs/refactor/.turn.s1").is_file():
+            res["fails"].append(("0.3.0 첫 go 끝-끝 · STATE(SETUP) 뒤 평범한 문장에도 go 표시가 남음", "있음", "없음", "", "", ""))
+    finally:
+        rmtree_rw(p) if p.exists() else None
+
+
+def check_secretnames_030(res):
+    """0.3.0 B1: Grep 내용 검색의 비밀 파일 이름 꼴을 is_secret_path 수준으로 — 대소문자 무시 + 키 저장소·자격 파일 이름.
+    리팩토링 중(STATE 있음, 스위치 없음)인 프로젝트에서 본다. 이름 꼴은 후보만 고르고 판정은 is_secret_path 가 한다(id_rsa.pub 은 통과)."""
+    sec = "." + "env"
+    G = {"pattern": "KEY", "output_mode": "content"}
+    made = []
+
+    def proj_(nogit=False):
+        p = make_project(phase="EXECUTE")
+        made.append(p)
+        lf(p / ".gitignore", "/" + sec + "\n")   # 맨 위 .env 만 무시(대소문자를 안 가리는 파일 시스템에서도 아래 폴더의 이름은 무시되지 않게)
+        if nogit:
+            rmtree_rw(p / ".git")
+            (p / sec).unlink()
+        (p / "cfg").mkdir()
+        return p
+
+    def case(title, want, p, need=None):
+        code, err = run(p, "Grep", G)
+        res["total"] += 1
+        if code != want or (need is not None and need not in err):
+            res["fails"].append(("0.3.0 B1 " + title, want, code, "Grep", "", err.strip()[:200]))
+
+    try:
+        for name in (sec.upper(), "id_rsa", "cert.p12", "id_dsa", "id_ecdsa", "id_ed25519", ".secrets"):
+            p = proj_()
+            lf(p / "cfg" / name, "KEY=1\n")
+            case(f"git 저장소 · cfg/{name}", B, p, need=f"({name})")
+        # .npmrc 는 저장소에 올려 두는 설정 파일인 경우가 많아 이름 목록에서 뺐다 — 범위 검색은 통과(직접 읽기는 is_secret_path 가 막는다)
+        p = proj_()
+        lf(p / "cfg/.npmrc", "KEY=1\n")
+        case("git 저장소 · cfg/.npmrc(목록에서 뺌)", OK, p)
+        case("git 저장소 · 평범한 폴더", OK, proj_())
+        p = proj_()
+        lf(p / "cfg" / (sec + ".example"), "KEY=\n")
+        case("git 저장소 · 본보기 파일만", OK, p)
+        p = proj_()
+        lf(p / "cfg/id_rsa.pub", "ssh-rsa AAAA\n")
+        case("git 저장소 · id_rsa.pub 만", OK, p)
+        # git 밖(훑기): 글자 그대로인 이름도 대소문자를 가리지 않는다
+        p = proj_(nogit=True)
+        lf(p / "cfg/.NETRC", "KEY=1\n")
+        case("git 아님 · cfg/.NETRC", B, p, need="(.NETRC)")
+        p = proj_(nogit=True)
+        lf(p / "cfg/KEYS.P12", "x\n")
+        case("git 아님 · cfg/KEYS.P12", B, p, need="(KEYS.P12)")
+        case("git 아님 · 평범한 폴더", OK, proj_(nogit=True))
+    finally:
         for p in made:
             rmtree_rw(p) if p.exists() else None
 

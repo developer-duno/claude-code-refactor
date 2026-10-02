@@ -74,8 +74,8 @@ if [ -n "$root" ] && [ -f "$lib" ]; then
   fi
   ph_now=$(sed -n -E 's/^phase:[[:space:]]*"?([A-Za-z_]+).*/\1/p' "$state" | head -n 1)
   if [ "$ph_now" = "DONE" ]; then
-    if rl_done_confirmed "$dir"; then echo; echo "== 마무리됨(DONE, 사용자 확인) — 리팩토링 중에만 켜지는 안전장치는 꺼져 있음 =="
-    else echo; echo "⚠️ STATE는 DONE이지만 사용자의 마무리 확인(/refactor:approve 마무리)이 없어 리팩토링 중 안전장치가 켜져 있습니다. 끝내려면 사용자가 /refactor:approve 마무리"; fi
+    if rl_done_confirmed "$dir"; then echo; echo "== 마무리됨(DONE, 사용자 확인) — 안전장치는 꺼져 있음 =="
+    else echo; echo "⚠️ STATE는 DONE이지만 사용자의 마무리 확인(/refactor:approve 마무리)이 없어 안전장치가 켜져 있습니다. 끝내려면 사용자가 /refactor:approve 마무리"; fi
   fi
   if [ -f "$base" ]; then
     echo
