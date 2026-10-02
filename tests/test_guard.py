@@ -819,6 +819,7 @@ def main():
     check_awkfail_023(res)
     check_fsmon_023(res)
     check_grep_024(res)
+    check_turn_024(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -1961,6 +1962,240 @@ def check_grep_024(res):
         put(p, "src/" + sec.upper())
         case("T18 대문자 .ENV", OK, p, G())
     finally:
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
+
+
+def check_turn_024(res):
+    """0.2.4 C: 입력 훅(turn.sh)이 느린 계산 도중 끊겨도 규칙이 꺼지지 않는다 — 느린 계산(승인 재설정·실행 대기 계산·snapshot)
+    전에 닫힌 표시(ready ?)를 먼저 쓰고, 표시 파일은 늘 임시 파일 → mv 로 쓴다. 끊김은 사본 플러그인의 느린 자리에서 멈춘 순간의
+    상태로 본다(멈춘 동안 표시 파일·guard 판정을 보고, 그다음 훅을 끊는다). 시간은 상한으로만 쓴다(멈춤 지점에 못 닿으면 실패)."""
+    import re
+    import signal
+    edit_src = ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "x"})
+    why_q = "입력 처리가 늦어 실행 대기 단계를 확인하지 못해"
+    note_q = "사용자에게 /refactor:go 를 다시 입력해 달라고 하세요."
+    made = []
+    plug = pathlib.Path(tempfile.mkdtemp(prefix="turn024-"))
+    made.append(plug)
+    shutil.copytree(ROOT / "plugins/refactor", plug / "refactor")
+    ctl = plug / "ctl"
+    ctl.mkdir()
+    reached, release = ctl / "reached", ctl / "release"
+    wait_loop = (f": > '{reached.as_posix()}'; __i=0; while [ ! -f '{release.as_posix()}' ] && [ $__i -lt 300 ]; "
+                 "do sleep 0.1; __i=$((__i + 1)); done")
+    # 사본 라이브러리: 카드 목록 함수(rl_cards — 승인 재설정·실행 대기 계산이 부른다)가 TURN024_PAUSE 면 멈추고, TURN024_SLEEP 이면 잔다
+    lib = plug / "refactor/scripts/refactor-lib.sh"
+    lib.write_bytes(lib.read_bytes() + (
+        "\n__f=$(declare -f rl_cards); eval \"__real_rl_cards${__f#rl_cards}\"\n"
+        "rl_cards() { if [ -n \"${TURN024_PAUSE:-}\" ]; then " + wait_loop + "; fi; "
+        "[ -n \"${TURN024_SLEEP:-}\" ] && sleep \"$TURN024_SLEEP\"; __real_rl_cards \"$@\"; }\n").encode())
+    # 가짜 git: 상태 조회(status)에서 멈춘다(snapshot 의 git) — 그 밖은 진짜 git
+    fake = plug / "fakegit"
+    fake.mkdir()
+    lf(fake / "git", "#!/usr/bin/env bash\ncase \" $* \" in *' status '*) " + wait_loop + " ;; esac\nPATH=${PATH#*:}; exec git \"$@\"\n")
+    os.chmod(fake / "git", 0o755)
+    run_sh = (plug / "refactor/hooks/run.sh").as_posix()
+
+    def fail(title, want, got, detail="", err=""):
+        res["fails"].append(("0.2.4 C " + title, want, got, "UserPromptSubmit", detail, err))
+
+    def proj_(phase="EXECUTE", gate=None, mark=None, approve_id="P1-1"):
+        p = make_project(phase="EXECUTE")
+        made.append(p)
+        if approve_id:
+            approve(p, approve_id)
+        if phase != "EXECUTE" or gate:
+            lf(p / "docs/refactor/STATE.md", f"---\nphase: {phase}\ngate: {gate or 'none'}\n---\n")
+        if mark is not None:
+            lf(p / "docs/refactor/.turn.t", mark)
+        return p
+
+    def payload(p, prompt):
+        return json.dumps({"session_id": "t", "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(p)},
+                          ensure_ascii=False).encode("utf-8")
+
+    def env_(p, extra=None, fakegit=False):
+        env = env_for(p)
+        env.update(extra or {})
+        if fakegit:
+            env["PATH"] = str(fake) + os.pathsep + env["PATH"]
+        return env
+
+    def start(p, prompt, extra=None, fakegit=False):
+        """사본 플러그인으로 입력 훅을 띄우고 멈춤 지점에 닿을 때까지(최대 20초) 기다린다 → (프로세스, 닿았나)"""
+        for f in (reached, release):
+            if f.exists():
+                f.unlink()
+        kw = {"start_new_session": True} if os.name != "nt" else {}
+        pr = subprocess.Popen([BASH, run_sh, "turn"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, env=env_(p, extra, fakegit), **kw)
+        pr.stdin.write(payload(p, prompt))
+        pr.stdin.close()
+        t0 = time.monotonic()
+        while not reached.exists() and pr.poll() is None and time.monotonic() - t0 < 20:
+            time.sleep(0.05)
+        return pr, reached.exists()
+
+    def cut(pr):
+        """훅을 끊는다(Claude Code 의 시간 초과처럼). POSIX 는 프로세스 묶음째 KILL, Windows 는 풀어 주고 끝나기를 기다린다."""
+        if os.name != "nt":
+            try:
+                os.killpg(pr.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        lf(release, "")
+        try:
+            pr.wait(timeout=40)
+        except subprocess.TimeoutExpired:
+            pr.kill()
+            pr.wait()
+
+    def mark_lines(p):
+        f = p / "docs/refactor/.turn.t"
+        return f.read_text(encoding="utf-8").splitlines() if f.exists() else None
+
+    def names(p):
+        return {x.name for x in (p / "docs/refactor").iterdir()}
+
+    def leftovers_ok(p, before):
+        """끊긴 뒤 새로 생긴 이름이 모두 .turn 으로 시작하는가(.gitignore 의 .turn* · 하루 청소의 -name '.turn*' 대상).
+        go 턴이 맨 먼저 만드는 기록 폴더의 .gitignore 는 제외"""
+        res["total"] += 1
+        if os.name == "nt":
+            return
+        bad = sorted(n for n in names(p) - before if not n.startswith(".turn") and n != ".gitignore")
+        if bad:
+            fail("T9 끊긴 뒤 남은 파일 이름", ".turn*", bad)
+
+    try:
+        # T1: 보통 /refactor:go (EXECUTE, 승인된 단계 하나) → go t / ready P1-1
+        p = proj_()
+        turn(p, "t", "/refactor:go")
+        res["total"] += 1
+        if mark_lines(p) != ["go t", "ready P1-1"]:
+            fail("T1 보통 go", ["go t", "ready P1-1"], mark_lines(p))
+
+        # T2: go + 느린 실행 대기 계산 → 멈춘 동안 표시 = go t / ready ? · Edit 막힘 + 새 문구 · npm test 는 안전 실행기 요구
+        p = proj_()
+        before = names(p)
+        pr, ok = start(p, "/refactor:go", {"TURN024_PAUSE": "1"})
+        try:
+            res["total"] += 1
+            if not ok or mark_lines(p) != ["go t", "ready ?"]:
+                fail("T2 go 느린 계산 중 표시", ["go t", "ready ?"], mark_lines(p), f"멈춤 지점 {'닿음' if ok else '못 닿음'}")
+            code, err = run(p, *edit_src)
+            res["total"] += 1
+            if code != B or why_q not in err or note_q not in err:
+                fail("T2 Edit 막힘 + 새 문구 두 글귀", B, code, "Edit src/app.ts", err.strip()[:300])
+            code, err = run(p, *bash("npm test"))
+            res["total"] += 1
+            if code != B or "안전 실행기로만" not in err:
+                fail("T2 npm test 안전 실행기 요구", B, code, "npm test", err.strip()[:200])
+        finally:
+            cut(pr)
+        leftovers_ok(p, before)
+
+        # T3: 읽기 전용 단계(CHECKUP) + 같은 끊김 → 코드 파일 Edit 막힘
+        p = proj_(phase="CHECKUP")
+        before = names(p)
+        pr, ok = start(p, "/refactor:go", {"TURN024_PAUSE": "1"})
+        try:
+            code, err = run(p, *edit_src)
+            res["total"] += 1
+            if not ok or code != B:
+                fail("T3 CHECKUP 끊김 중 Edit 막힘", B, code, f"멈춤 지점 {'닿음' if ok else '못 닿음'}", err.strip()[:200])
+        finally:
+            cut(pr)
+        leftovers_ok(p, before)
+
+        # T4: 질문 대기(ask-user) + 앞 턴 표시 ready P1-2 + 일반 문장 + 느린 계산 → 2줄이 ready ?(낡은 P1-2 아님)
+        p = proj_(gate="ask-user", mark="go t\nready P1-2\n")
+        pr, ok = start(p, "네, 그렇게 해 주세요", {"TURN024_PAUSE": "1"})
+        try:
+            res["total"] += 1
+            if not ok or mark_lines(p) != ["go t", "ready ?"]:
+                fail("T4 질문 대기 중 낡은 목록", ["go t", "ready ?"], mark_lines(p), f"멈춤 지점 {'닿음' if ok else '못 닿음'}")
+        finally:
+            cut(pr)
+        # 끊기지 않으면 진짜 목록으로 다시 쓴다(지금과 같음)
+        turn(p, "t", "네, 그렇게 해 주세요")
+        res["total"] += 1
+        if mark_lines(p) != ["go t", "ready P1-1"]:
+            fail("T4 질문 대기(끊기지 않음) 진짜 목록", ["go t", "ready P1-1"], mark_lines(p))
+
+        # T5: 대기 아님 + 앞 턴 표시 + 일반 문장 + 느린 git(상태 조회에서 멈춤) → 멈춘 시점에 표시가 이미 없다
+        p = proj_(mark="go t\nready P1-1\n")
+        pr, ok = start(p, "그냥 질문인데요", fakegit=True)
+        try:
+            res["total"] += 1
+            if not ok or mark_lines(p) is not None:
+                fail("T5 느린 git 중 표시 지움", None, mark_lines(p), f"멈춤 지점 {'닿음' if ok else '못 닿음'}")
+        finally:
+            cut(pr)
+
+        # T6: /refactor:go 다시 P1-1 + 느린 재설정(재설정 안의 카드 목록에서 멈춤) → 재설정 도중에 닫힌 표시가 이미 있다
+        p = proj_()
+        pr, ok = start(p, "/refactor:go 다시 P1-1", {"TURN024_PAUSE": "1"})
+        try:
+            log = (p / "docs/refactor/APPROVALS.log").read_text(encoding="utf-8")
+            res["total"] += 1
+            if not ok or "재설정" not in log or mark_lines(p) != ["go t", "ready ?"]:
+                fail("T6 다시 + 느린 재설정 중 표시", ["go t", "ready ?"], mark_lines(p),
+                     f"멈춤 지점 {'닿음' if ok else '못 닿음'} · 재설정 줄 {'있음' if '재설정' in log else '없음'}")
+        finally:
+            cut(pr)
+
+        # T7: 기준선 작성 단계(BASELINE, 승인 유효) + 표시 ready ? → 고치기 전과 같은 판정(코드 수정 허용 · npm test 는 안전 실행기 요구)
+        p = make_project(phase="BASELINE", baseline_approved=True)
+        made.append(p)
+        lf(p / "docs/refactor/.turn.t", "go t\nready ?\n")
+        for want, tin, need in [(OK, edit_src, None), (B, bash("npm test"), "안전 실행기로만")]:
+            code, err = run(p, *tin)
+            res["total"] += 1
+            if code != want or (need and need not in err):
+                fail("T7 BASELINE + ready ?", want, code, tin[0], err.strip()[:200])
+
+        # T8: turn.sh 가 표시 파일("$T")에 > 로 직접 쓰는 줄 0
+        src = (ROOT / "plugins/refactor/hooks/turn.sh").read_text(encoding="utf-8")
+        direct = [ln.strip() for ln in src.splitlines() if re.search(r'>>?\s*"\$T"', ln)]
+        res["total"] += 1
+        if direct:
+            fail("T8 표시 파일 직접 쓰기 줄", 0, len(direct), "", " / ".join(direct)[:200])
+
+        # T9: 표시 파일로 옮기는 임시 파일 이름이 "$T." 로 시작(= .turn.<세션>.… — .turn* 무시·청소 대상)
+        mvs = [ln.strip() for ln in src.splitlines() if re.search(r'\bmv\b[^;|&]*"\$T"', ln)]
+        res["total"] += 1
+        if not mvs or any(not re.search(r'\bmv\s+(-f\s+)?"\$T\.', ln) for ln in mvs):
+            fail("T9 임시 파일 이름 .turn*", "mv \"$T.…\" \"$T\"", mvs or "mv 없음")
+
+        # T10: 입력 훅이 10초 넘게 걸려 끝나면 문제 기록에 turn 느림 한 줄(명령·경로·입력 글 없음) · 빨리 끝나면 0줄
+        plog = pathlib.Path(TEST_DATA) / "problems.log"
+
+        def slow_lines():
+            if not plog.exists():
+                return []
+            return [ln for ln in plog.read_text(encoding="utf-8").splitlines() if "| turn |" in ln and "느림" in ln]
+
+        p = proj_()
+        n0 = len(slow_lines())
+        run_hook([BASH, run_sh, "turn"], input=payload(p, "/refactor:go"), capture_output=True, env=env_(p))
+        n1 = len(slow_lines())
+        res["total"] += 1
+        if n1 != n0:
+            fail("T10 빨리 끝난 턴은 기록 없음", 0, n1 - n0)
+        t0 = time.perf_counter()
+        run_hook([BASH, run_sh, "turn"], input=payload(p, "/refactor:go"), capture_output=True, env=env_(p, {"TURN024_SLEEP": "11"}))
+        dt = time.perf_counter() - t0
+        got = slow_lines()[n1:]
+        res["total"] += 1
+        if len(got) != 1 or not re.search(r"\| turn \| 느림 1\d초$", got[0]) or mark_lines(p) != ["go t", "ready P1-1"]:
+            fail("T10 10초 넘은 턴 기록 한 줄", "… | turn | 느림 1N초", got, f"{dt:.1f}s · 표시 {mark_lines(p)}")
+    finally:
+        try:
+            lf(release, "")
+        except OSError:
+            pass
         for p in made:
             rmtree_rw(p) if p.exists() else None
 

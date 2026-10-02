@@ -36,6 +36,7 @@ block() {
   { F=${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/refactor}; F=${F//"$BS"/$SL}; [ -d "$F" ] || mkdir -p "$F"; F=$F/problems.log; LC_ALL=C.UTF-8; m=${1%%"$NL"*}; w=${m%% *}; case "$w" in *[./"$BS"~]*) m="<파일>${m#"$w"}" ;; esac; case "$m" in *'('*')'*) m="${m%%(*}(<파일>)${m##*)}" ;; esac; t=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && TZ=KST-9 printf -v t '%(%Y-%m-%d %H:%M)T' -1; [ -n "$t" ] || t=$(TZ=KST-9 date '+%Y-%m-%d %H:%M'); printf '%s | guard | 차단: %s\n' "$t" "${m:0:60}" >> "$F"; (( RANDOM % 64 )) || { s=$(wc -c < "$F"); [ "${s//[!0-9]/}" -gt 204800 ] && tail -c 102400 "$F" | tail -n +2 > "$F.tmp" && mv -f "$F.tmp" "$F"; }; } 2>/dev/null   # 문제 기록(problems.log)에 규칙 설명 첫 줄 앞 60자와 시각만 남긴다 — 첫 ( 부터 마지막 ) 까지와 맨 앞의 파일 이름은 <파일>로 바꾸고 명령·값은 적지 않는다(공개 신고에 붙을 수 있음). 실패는 무시, 가끔 200KB 넘으면 최근 절반만. %(…)T 는 bash 4.2+ 에서만(3.2 는 date) — 프로그램을 거의 띄우지 않아 차단이 늦어지지 않는다
   printf '[refactor 안전장치] %s\n' "$1" >&2
   if [ -n "${2:-}" ]; then printf '  → %s\n' "$2" >&2; fi
+  if [ -n "${fence_note:-}" ] && [ "${1#"$fence_why "}" != "$1" ]; then printf '  → %s\n' "$fence_note" >&2; fi   # 울타리 차단("$fence_why …")에만
   if [ -n "${BLOCK_NOTE:-}" ]; then printf '  %s\n' "$BLOCK_NOTE" >&2; fi
   printf '  (같은 결과를 내는 다른 명령으로 우회하지 말고, 무엇이 막혔는지 사용자에게 보고하세요. → 로 안내된 방법은 써도 됩니다.)\n' >&2
   exit 42
@@ -353,15 +354,19 @@ if [ -n "$tfile" ]; then
 fi
 ro_phase=0
 case "$phase" in SETUP|MAP|CHECKUP|DEEP|VERIFY|BASELINE_PLAN|PLAN) ro_phase=1 ;; esac
-fence=0; fence_why=""
+fence=0; fence_why=""; fence_note=""
 if [ "$go_turn" = 1 ] && [ "$ro_phase" = 1 ]; then fence=1; fence_why="지금은 /refactor:go 의 읽기 전용 단계($phase)라"; fi
 # /refactor:go 중 docs/refactor 밖 수정은 허락된 경우에만: 단계 실행(EXECUTE)+실행 대기 있음, 또는 기준선 작성(BASELINE)+승인 유효.
 # 그 밖의 단계 이름(마무리 확인 없는 DONE, 목록에 없는 이름 등)은 모두 막는다.
 if [ "$go_turn" = 1 ] && [ "$fence" = 0 ] && [ "$phase" != "EXECUTE" ] && [ "$phase" != "BASELINE" ]; then fence=1; fence_why="지금 단계($phase)에서는 코드를 고치지 않아(단계 실행은 승인된 실행 대기 단계가 있을 때만)"; fi
 # 기준선 작성(BASELINE)인데 기준선 계획 승인이 유효하지 않으면(승인 없음·계획 바뀜·계획서가 이미 있음) 코드를 고치지 않는다
 if [ "$go_turn" = 1 ] && [ "$phase" = "BASELINE" ] && [ "$in_baseline_phase" = 0 ]; then fence=1; fence_why="기준선 계획 승인이 유효하지 않아(승인 없음·승인 뒤 계획 바뀜·계획서가 이미 있음)"; fi
-# 단계 실행(EXECUTE)인데 이번 /refactor:go 를 시작할 때 실행 대기(승인됨) 단계가 하나도 없었으면 코드를 고치지 않는다
-if [ "$go_turn" = 1 ] && [ "$phase" = "EXECUTE" ] && { [ -z "$t_ready" ] || [ "$t_ready" = "?" ]; }; then fence=1; fence_why="승인된 실행 대기 단계가 없어(지금 상태의 ▶ 실행 대기가 비어 있음)"; fi
+# 단계 실행(EXECUTE)인데 이번 /refactor:go 를 시작할 때 실행 대기(승인됨) 단계가 하나도 없었으면 코드를 고치지 않는다.
+# "?" = 입력 훅(turn.sh)이 실행 대기를 다 계산하기 전에 끊김(닫힌 표시만 남음) → 원인과 재입력 안내를 따로 보여 준다(울타리 차단 문구에만)
+if [ "$go_turn" = 1 ] && [ "$phase" = "EXECUTE" ] && { [ -z "$t_ready" ] || [ "$t_ready" = "?" ]; }; then
+  fence=1; fence_why="승인된 실행 대기 단계가 없어(지금 상태의 ▶ 실행 대기가 비어 있음)"
+  [ "$t_ready" = "?" ] && { fence_why="입력 처리가 늦어 실행 대기 단계를 확인하지 못해"; fence_note="사용자에게 /refactor:go 를 다시 입력해 달라고 하세요."; }
+fi
 
 has_env_file=0
 for f in "$proj"/.env*; do

@@ -28,6 +28,9 @@
 
 LC_ALL=C
 export LC_ALL
+# 이 훅이 10초 넘게 걸려 끝났으면 문제 기록(problems.log)에 "turn | 느림 N초" 한 줄만 남긴다(명령·경로·입력 글 없이).
+# 10초 안이면 아무 프로그램도 띄우지 않는다. if 로 감싸 종료 코드를 바꾸지 않는다
+trap 'if [ "$SECONDS" -gt 10 ] && [ -n "${REFACTOR_ROOT:-}" ]; then bash "$REFACTOR_ROOT/hooks/run.sh" refactor-report --log turn "느림 ${SECONDS}초" </dev/null >/dev/null 2>&1; fi' EXIT
 
 proj=${CLAUDE_PROJECT_DIR:-$PWD}
 proj=${proj//"\\"//}
@@ -174,6 +177,10 @@ RST
   [ -n "$ids" ] && rl_rewrite_plan "$rdir/REFACTOR_PLAN.md" o "$ids"
   return 0
 }
+mark() { # go 표시(1줄 "go <세션ID>", 2줄 "ready$1")를 임시 파일 "$T.<번호>"(.turn* — 무시·하루 청소 대상)에 쓰고 mv 로 바꿔 넣는다
+  # (> 로 바로 쓰면 잘라 놓은 빈 파일을 guard 가 읽어 표시가 없는 것처럼 볼 수 있다). $1 = " <단계들>" 또는 " ?"(아직 모름)
+  printf 'go %s\nready%s\n' "$sid" "$1" > "$T.$$" 2>/dev/null && mv -f "$T.$$" "$T" 2>/dev/null || rm -f "$T.$$"
+}
 
 re_go='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt]|$)'
 re_again='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+다시(([[:space:]]|\\[nrt])+([A-Za-z_]+))?'
@@ -187,15 +194,51 @@ if [[ $prompt =~ $re_go ]]; then
   else
     printf '.allow-*\n.turn*\n*.tmp.*\n' > "$rdir/.gitignore"
   fi
+  # 느린 계산(승인 재설정·실행 대기 계산·snapshot) 전에 닫힌 표시(ready ? = 실행 대기를 아직 모름)를 먼저 둔다 — 계산 도중
+  # Claude Code 가 시간 초과로 이 훅을 끊어도 표시가 남아 읽기 전용 울타리·안전 실행기 규칙은 켜지고, 단계 실행(EXECUTE)의
+  # 코드 수정은 막힌다(guard 가 "입력 처리가 늦어…"와 /refactor:go 재입력을 안내). 계산이 끝나면 진짜 목록으로 바꿔 쓴다
+  mark " ?"
   if [[ $prompt =~ $re_again ]]; then
     step=${BASH_REMATCH[4]}
     step=$(printf '%s' "${step:--}" | tr '[:lower:]' '[:upper:]')
     reset_approvals "$step"
   fi
   ready_ids
-  printf 'go %s\nready%s\n' "$sid" "$READY" > "$T"
+  mark "$READY"
   snapshot
   exit 0
+fi
+
+# 표시 처리를 snapshot(git 을 부른다)보다 먼저 한다 — snapshot 이 느려 도중에 끊겨도 지울 표시는 이미 지워져 있고
+# 낡은 실행 대기 목록이 남지 않는다. snapshot 은 지금처럼 표시와 상관없이 맨 끝에서 돈다
+if [ -f "$T" ]; then
+  t_kind=""; t_sid=""
+  read -r t_kind t_sid < "$T"
+  if [ "$t_sid" = "$sid" ]; then          # 다른 세션의 표시는 그대로 둔다
+    # 다른 슬래시 명령(/refactor:approve 포함), 또는 go 가 아닌 옛 표시(이전 버전의 승인 표 등)는 지운다
+    if [[ $prompt =~ $re_slash ]] || [ "$t_kind" != go ]; then
+      rm -f "$T"
+    else
+      # 일반 문장: 질문에 답하는 중이면 유지
+      waiting=0
+      if [ -f "$rdir/STATE.md" ]; then
+        re_gate='^gate:[[:space:]]*"?(ask-user|G3-step)'
+        while IFS= read -r line || [ -n "$line" ]; do
+          if [[ $line =~ $re_gate ]]; then waiting=1; break; fi
+        done < "$rdir/STATE.md"
+      fi
+      [ "$phase" = "SETUP" ] && waiting=1
+      if [ "$waiting" = 1 ]; then
+        # 표시는 유지하되, 실행해도 되는 단계 목록은 지금 기준으로 다시 적는다(그사이 완료된 단계로 코드를 계속 고치지 않게).
+        # 다시 계산하는 도중 끊기면 낡은 목록 대신 "아직 모름"이 남게 먼저 닫아 둔다
+        mark " ?"
+        ready_ids
+        mark "$READY"
+      else
+        rm -f "$T"
+      fi
+    fi
+  fi
 fi
 
 case "$phase" in
@@ -203,32 +246,4 @@ case "$phase" in
   DONE) load_lib && ! rl_done_confirmed "$rdir" && snapshot ;;   # 사람이 마무리를 확인하기 전의 DONE은 아직 진행 중
   *) snapshot ;;
 esac
-
-[ -f "$T" ] || exit 0
-t_kind=""; t_sid=""
-read -r t_kind t_sid < "$T"
-[ "$t_sid" = "$sid" ] || exit 0          # 다른 세션의 표시는 그대로 둔다
-
-# 다른 슬래시 명령(/refactor:approve 포함), 또는 go 가 아닌 옛 표시(이전 버전의 승인 표 등)는 지운다
-if [[ $prompt =~ $re_slash ]] || [ "$t_kind" != go ]; then
-  rm -f "$T"
-  exit 0
-fi
-
-# 일반 문장: 질문에 답하는 중이면 유지
-waiting=0
-if [ -f "$rdir/STATE.md" ]; then
-  re_gate='^gate:[[:space:]]*"?(ask-user|G3-step)'
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [[ $line =~ $re_gate ]]; then waiting=1; break; fi
-  done < "$rdir/STATE.md"
-fi
-[ "$phase" = "SETUP" ] && waiting=1
-if [ "$waiting" = 1 ]; then
-  # 표시는 유지하되, 실행해도 되는 단계 목록은 지금 기준으로 다시 적는다(그사이 완료된 단계로 코드를 계속 고치지 않게)
-  ready_ids
-  printf 'go %s\nready%s\n' "$sid" "$READY" > "$T"
-else
-  rm -f "$T"
-fi
 exit 0
