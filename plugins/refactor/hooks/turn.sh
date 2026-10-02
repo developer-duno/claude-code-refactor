@@ -67,7 +67,14 @@ re_sys='^([[:space:]]|\\[nrt])*<(task-notification|system-reminder|agent-message
 [[ $prompt =~ $re_sys ]] && exit 0
 
 T="$rdir/.turn.$sid"
-[ -d "$rdir" ] && {
+# 정리(하루 지난 표시 파일·0.2.0 의 세션 공용 .turn)는 외부 프로그램(find·date·rm)을 띄우므로 표시 처리(go 턴의 닫힌 표시 쓰기,
+# 그 밖 입력의 지움·유지·ready ?)를 끝낸 뒤에 한 번만 한다 — 정리 도중 끊겨도 표시는 이미 이번 입력에 맞다.
+# 대상 폴더는 이 입력이 들어온 때 이미 있던 기록 폴더만(지금과 같음)
+had_rdir=0; [ -d "$rdir" ] && had_rdir=1
+swept_once=0
+sweep() {
+  [ "$swept_once" = 0 ] && [ "$had_rdir" = 1 ] || return 0
+  swept_once=1
   # 하루 지난 표시 파일 정리는 하루에 한 번만(오늘 날짜를 .turn-sweep 에 적어 두고 날짜가 바뀌었을 때만 find)
   today=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && printf -v today '%(%Y%m%d)T' -1   # %(…)T 는 bash 4.2+ 에서만
   [ -n "$today" ] || today=$(date +%Y%m%d)
@@ -79,6 +86,7 @@ T="$rdir/.turn.$sid"
   fi
   # 0.2.0 이 남긴 세션 공용 .turn 이 이 세션 것이면 지운다(이제 .turn.<세션ID> 를 쓴다)
   if [ -f "$rdir/.turn" ]; then o_kind=""; o_sid=""; read -r o_kind o_sid < "$rdir/.turn"; [ "$o_sid" = "$sid" ] && rm -f "$rdir/.turn"; fi
+  return 0
 }
 
 # /refactor:approve [인자] — 승인 처리는 이 훅이 한다(스킬의 ! 명령이 훅보다 먼저 돌기 때문). 결과는 stdout(이번 턴 컨텍스트)으로.
@@ -187,6 +195,10 @@ re_again='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+다시(([[:space:]]|\\[
 re_slash='^[[:space:]]*/'
 if [[ $prompt =~ $re_go ]]; then
   [ -d "$rdir" ] || mkdir -p "$rdir" 2>/dev/null || exit 0
+  # 느린 계산(승인 재설정·실행 대기 계산·snapshot)과 정리 전에 닫힌 표시(ready ? = 실행 대기를 아직 모름)를 먼저 둔다 — 그 뒤
+  # Claude Code 가 시간 초과로 이 훅을 끊어도 표시가 남아 읽기 전용 울타리·안전 실행기 규칙은 켜지고, 단계 실행(EXECUTE)의
+  # 코드 수정은 막힌다(guard 가 "입력 처리가 늦어…"와 /refactor:go 재입력을 안내). 계산이 끝나면 진짜 목록으로 바꿔 쓴다
+  mark " ?"
   if [ -f "$rdir/.gitignore" ]; then
     has_turn=0
     while IFS= read -r line || [ -n "$line" ]; do [ "${line%$'\r'}" = ".turn*" ] && has_turn=1; done < "$rdir/.gitignore"
@@ -194,10 +206,7 @@ if [[ $prompt =~ $re_go ]]; then
   else
     printf '.allow-*\n.turn*\n*.tmp.*\n' > "$rdir/.gitignore"
   fi
-  # 느린 계산(승인 재설정·실행 대기 계산·snapshot) 전에 닫힌 표시(ready ? = 실행 대기를 아직 모름)를 먼저 둔다 — 계산 도중
-  # Claude Code 가 시간 초과로 이 훅을 끊어도 표시가 남아 읽기 전용 울타리·안전 실행기 규칙은 켜지고, 단계 실행(EXECUTE)의
-  # 코드 수정은 막힌다(guard 가 "입력 처리가 늦어…"와 /refactor:go 재입력을 안내). 계산이 끝나면 진짜 목록으로 바꿔 쓴다
-  mark " ?"
+  sweep
   if [[ $prompt =~ $re_again ]]; then
     step=${BASH_REMATCH[4]}
     step=$(printf '%s' "${step:--}" | tr '[:lower:]' '[:upper:]')
@@ -232,6 +241,7 @@ if [ -f "$T" ]; then
         # 표시는 유지하되, 실행해도 되는 단계 목록은 지금 기준으로 다시 적는다(그사이 완료된 단계로 코드를 계속 고치지 않게).
         # 다시 계산하는 도중 끊기면 낡은 목록 대신 "아직 모름"이 남게 먼저 닫아 둔다
         mark " ?"
+        sweep
         ready_ids
         mark "$READY"
       else
@@ -240,6 +250,7 @@ if [ -f "$T" ]; then
     fi
   fi
 fi
+sweep
 
 case "$phase" in
   "") ;;
