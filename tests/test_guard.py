@@ -820,6 +820,7 @@ def main():
     check_fsmon_023(res)
     check_grep_024(res)
     check_turn_024(res)
+    check_branch_024(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -2196,6 +2197,194 @@ def check_turn_024(res):
             lf(release, "")
         except OSError:
             pass
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
+
+
+def check_branch_024(res):
+    """0.2.4 A: 가지 강제 삭제 — 강제 삭제의 모든 철자(-D · -d/-f 묶음 · 긴 옵션 줄임)를 같은 것으로 보고,
+    Bash 도구의 한 줄 명령([cd <경로> && ]git [-C <경로> ]branch <옵션> <이름…>)일 때만 그 저장소에서 판정한다:
+    기본 가지(origin/HEAD → origin/main → origin/master, origin 원격이 없을 때만 로컬 main → master)의 조상이거나
+    merge-tree 결과가 기본 가지 트리와 같으면(스쿼시 합침) 통과, 아니면 막는다. 저장소는 버리는 임시 저장소(명령은 실행하지 않는다)."""
+    global PATH_PREFIX
+    made = []
+    not_merged = "합치지 않은 가지는 지우지 않습니다("
+    cant = "가지 삭제를 판정할 수 없어 막았습니다("
+    forms = ["-df", "-fd", "-d -f", "-f -d", "-d --force", "--delete -f", "--force -d", "--delete -q --force", "--dele --forc"]
+
+    def g(d, *args):
+        r = subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+                            "-c", "core.autocrlf=false", "-C", str(d), *args], capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)}: {r.stderr.decode('utf-8', 'replace')}")
+        return r.stdout.decode("utf-8", "replace").strip()
+
+    def put(d, name, text, msg="c"):
+        p = pathlib.Path(d) / name
+        if text is None:
+            p.unlink()
+            g(d, "rm", "-q", "--cached", "--ignore-unmatch", name)
+        else:
+            lf(p, text)
+            g(d, "add", name)
+        g(d, "commit", "-qm", msg)
+
+    def tmpdir(prefix):
+        d = pathlib.Path(tempfile.mkdtemp(prefix=prefix))
+        made.append(d)
+        return d
+
+    def repo(main="main", origin=True, track=True):
+        d = tmpdir("br024-")
+        g(d, "init", "-q")
+        g(d, "symbolic-ref", "HEAD", "refs/heads/" + main)
+        put(d, "base.txt", "base\n", "init")
+        if origin:
+            g(d, "remote", "add", "origin", str(tmpdir("br024o-")))
+        return d
+
+    def branch(d, name, files, main="main"):
+        """main 에서 가지를 만들고 files(이름 → 내용, None = 지움) 를 차례로 커밋한 뒤 main 으로 돌아온다"""
+        g(d, "checkout", "-q", "-b", name, main)
+        for f, t in files:
+            put(d, f, t)
+        g(d, "checkout", "-q", main)
+
+    def squash(d, name, main="main"):
+        """가지 name 의 파일 name.txt 를 main 에 한 커밋으로 넣는다(스쿼시 합침)"""
+        put(d, name + ".txt", name + "\n", "squash " + name)
+
+    def track(d, main="main"):
+        g(d, "update-ref", "refs/remotes/origin/" + main, "refs/heads/" + main)
+
+    def case(title, want, d, cmd, need=None, tool="Bash", cwd=None):
+        tin = {"command": cmd, "description": "t"} if tool in ("Bash", "PowerShell") else cmd
+        t0 = time.perf_counter()
+        code, err = run(d, tool, tin, extra={"cwd": str(cwd or d)})
+        dt = time.perf_counter() - t0
+        res["total"] += 1
+        if code != want or (need is not None and need not in err):
+            res["fails"].append(("0.2.4 A " + title, want, code, tool, json.dumps(tin, ensure_ascii=False)[:150], err.strip()[:300]))
+        return dt
+
+    try:
+        # 기본 저장소: origin 원격 + origin/HEAD → origin/main(= main)
+        r = repo()
+        names = ["sq1", "sq2", "sq3", "un", "pr", "rev", "cfl"] + [f"m{i}" for i in range(11)]
+        for n in names:
+            branch(r, n, [(n + ".txt", n + "\n")])
+        for n in ["sq1", "sq2", "sq3", "rev", "cfl"] + [f"m{i}" for i in range(11)]:
+            squash(r, n)
+        put(r, "rev.txt", None, "revert rev")                 # 합친 뒤 되돌림
+        put(r, "cfl.txt", "other\n", "change cfl")            # 합친 뒤 같은 줄을 다르게
+        branch(r, "anc", [("anc.txt", "anc\n")])
+        g(r, "merge", "-q", "--no-ff", "-m", "merge anc", "anc")   # 보통 합침(조상)
+        branch(r, "zero", [("z.txt", "z\n"), ("z.txt", None)])     # 가지 안에서 만들고 지움(순변화 0)
+        branch(r, "tg", [("tg.txt", "tg\n")])
+        g(r, "tag", "tg", "main")                             # 태그 tg 는 main, 가지 tg 는 안 합친 커밋
+        put(r, "after.txt", "after\n", "unrelated")           # 합친 뒤 main 에 무관한 커밋 1개 더
+        track(r)
+        g(r, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        other = tmpdir("br024cwd-")                           # 저장소가 아닌 다른 폴더(도구 cwd)
+
+        case("A-1 스쿼시 합침", OK, r, "git branch -D sq1")
+        case("A-2 보통 합침(조상)", OK, r, "git branch -D anc")
+        case("A-3 안 합침", B, r, "git branch -D un",
+             need="[refactor 안전장치] " + not_merged + "un: 기본 가지 origin/main 에 없는 내용이 있음).\n"
+                  "  → 사람이 직접 결정합니다. 사용자에게 git branch -D un 명령을 드려 직접 실행하게 하세요. "
+                  "방금 GitHub 에서 합쳤다면 git fetch origin 을 먼저 실행한 뒤 다시 시도하세요.")
+        case("A-4 합친 뒤 main 이 되돌림", B, r, "git branch -D rev", need=not_merged)
+        case("A-5 합친 뒤 main 이 같은 줄을 다르게", B, r, "git branch -D cfl", need=not_merged)
+        case("A-6 합친 둘", OK, r, "git branch -D sq1 sq2")
+        case("A-6 합친 하나 + 안 합친 하나", B, r, "git branch -D sq1 un",
+             need=not_merged + "un: 기본 가지 origin/main 에 없는 내용이 있음).")
+        case("A-7 같은 명령 안 변수", B, r, "b=sq1; git branch -D $b")
+        case("A-7 정의 안 된 변수", B, r, "git branch -D $b", need=cant + "이름이 변수·명령 결과)")
+        case("A-7 명령 결과", B, r, "git branch -D $(git branch --merged)", need=cant + "이름이 변수·명령 결과)")
+        case("A-7 xargs", B, r, "git branch --merged | xargs git branch -D")
+        case("A-8 cd && (다른 cwd)", OK, r, f"cd {r.as_posix()} && git branch -D sq1", cwd=other)
+        case("A-8 cd ; (다른 cwd)", B, r, f"cd {r.as_posix()}; git branch -D sq1", cwd=other, need=cant + "한 줄 삭제 명령이 아님)")
+        case("A-8 git -C (다른 cwd)", OK, r, f"git -C {r.as_posix()} branch -D sq1", cwd=other)
+        case("A-8 --git-dir", B, r, f"git --git-dir={r.as_posix()}/.git branch -D sq1", cwd=other)
+        case("A-8 GIT_DIR=", B, r, f"GIT_DIR={r.as_posix()}/.git git branch -D sq1", cwd=other)
+        case("A-8 cwd 가 저장소 아님", B, r, "git branch -D sq1", cwd=other, need=cant + "저장소 위치를 알 수 없음)")
+        case("A-2 두 줄(합친 가지 둘)", B, r, "git branch -D sq1\ngit branch -D sq2", need=cant + "한 줄 삭제 명령이 아님)")
+        for f in forms:
+            case("A-9 안 합친 가지 " + f, B, r, f"git branch {f} un")
+        for f in forms:
+            case("A-10 합친 가지 " + f, OK, r, f"git branch {f} sq1")
+        case("A-12 기본 가지 자신", B, r, "git branch -D main", need=cant + "기본 가지 자신)")
+        case("A-13 없는 가지", B, r, "git branch -D nosuch", need=cant + "가지 없음)")
+        case("A-14 bash -c", B, r, 'bash -c "git branch -D sq1"')
+        case("A-14 eval", B, r, 'eval "git branch -D sq1"')
+        case("A-16 태그와 같은 이름(가지는 안 합침)", B, r, "git branch -D tg", need=not_merged)
+        case("A-17 Agent 지시문 코드 블록", B, r, ("Agent", {"description": "t", "prompt": "정리:\n```bash\ngit branch -D sq1\n```\n"})[1],
+             tool="Agent")
+        ten = " ".join(f"m{i}" for i in range(10))
+        dt = case("A-18 합친 가지 10개", OK, r, "git branch -D " + ten)
+        print(f"  0.2.4 · A-18 합친 가지 10개 판정: {dt*1000:.0f}ms")
+        res["total"] += 1
+        if dt > 10:
+            res["fails"].append(("0.2.4 A A-18 시간", "10초 안", f"{dt:.2f}s", "Bash", "", ""))
+        case("A-18 11개", B, r, "git branch -D " + ten + " m10", need=cant + "가지가 10개 넘음)")
+        case("A-19 원격 추적 가지", B, r, "git branch -r -D origin/main")
+        case("A-20 -C 작은따옴표", OK, r, f"git -C '{r.as_posix()}' branch -D sq1", cwd=other)
+        case("A-20 -C 큰따옴표", OK, r, f'git -C "{r.as_posix()}" branch -D sq1', cwd=other)
+        for n in ["sq1", "sq2", "sq3"]:
+            case("A-21 미분양 꼴 스쿼시 " + n, OK, r, "git branch -D " + n)
+        case("A-21 미분양 꼴 열린 PR 가지", B, r, "git branch -D pr", need=not_merged)
+        case("A-22 한계: 가지 안에서 만들고 지움(순변화 0)", OK, r, "git branch -D zero")
+        case("A-23 update-ref 로 기준 옮기기", B, r, "git update-ref refs/remotes/origin/main refs/heads/un",
+             need="git 기록을 다시 쓰거나 지우는 명령입니다.")
+        case("A-23 update-ref -d 기준", B, r, "git update-ref -d refs/remotes/origin/main")
+        case("A-25 PowerShell", B, r, "git branch -D sq1", tool="PowerShell")
+        case("A-26 허용 꼴 + reset --hard", B, r, f"git -C {r.as_posix()} branch -D sq1 && git reset --hard")
+        case("A-28 -d(강제 아님)", OK, r, "git branch -d un")
+        case("A-28 -f(삭제 아님)", OK, r, "git branch -f un HEAD~1")
+        case("A-28 -m", OK, r, "git branch -m un un2")
+
+        # A-15: merge-tree 만 129 로 끝나는 가짜 git(PATH 맨 앞) + 스쿼시 합친 가지 → 막음(git 2.38 미만)
+        fake = tmpdir("br024git-")
+        lf(fake / "git", "#!/usr/bin/env bash\ncase \" $* \" in *' merge-tree '*) exit 129 ;; esac\nPATH=${PATH#*:}; exec git \"$@\"\n")
+        os.chmod(fake / "git", 0o755)
+        keep = PATH_PREFIX
+        PATH_PREFIX = str(fake)
+        try:
+            case("A-15 git 2.38 미만(가짜 git)", B, r, "git branch -D sq1", need=cant + "git 2.38 미만)")
+        finally:
+            PATH_PREFIX = keep
+
+        # A-11: 기준 가지 찾기
+        r2 = repo()
+        branch(r2, "sq", [("sq.txt", "sq\n")])
+        squash(r2, "sq")
+        track(r2)                                             # origin/HEAD 없음 + origin/main
+        case("A-11 origin/HEAD 없음 + origin/main", OK, r2, "git branch -D sq")
+        r3 = repo(origin=False)
+        branch(r3, "sq", [("sq.txt", "sq\n")])
+        squash(r3, "sq")                                      # origin 원격 없음 + 로컬 main
+        case("A-11 origin 없음 + 로컬 main", OK, r3, "git branch -D sq")
+        r4 = repo()
+        branch(r4, "sq", [("sq.txt", "sq\n")])
+        squash(r4, "sq")                                      # origin 원격 있지만 참조 없음(로컬 main 은 있음)
+        case("A-11 origin 참조 없음", B, r4, "git branch -D sq", need=cant + "기본 가지를 못 찾음)")
+        r5 = repo(main="trunk", origin=False)
+        branch(r5, "sq", [("sq.txt", "sq\n")], main="trunk")
+        squash(r5, "sq")                                      # main·master 둘 다 없음
+        case("A-11 main·master 없음", B, r5, "git branch -D sq", need=cant + "기본 가지를 못 찾음)")
+
+        # A-24: origin/HEAD 가 origin 밖(refs/heads/feat)을 가리킴 + 안 합친 feat → origin/main 으로 판정 → 막음
+        r6 = repo()
+        branch(r6, "feat", [("feat.txt", "feat\n")])
+        track(r6)
+        g(r6, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/feat")
+        case("A-24 origin/HEAD 가 origin 밖", B, r6, "git branch -D feat",
+             need=not_merged + "feat: 기본 가지 origin/main 에 없는 내용이 있음).")
+
+        # A-27: 지금 체크아웃된 합친 가지 → guard 는 통과(git 이 거절하는 것은 따로 확인)
+        g(r, "checkout", "-q", "sq3")
+        case("A-27 체크아웃된 합친 가지", OK, r, "git branch -D sq3")
+    finally:
         for p in made:
             rmtree_rw(p) if p.exists() else None
 

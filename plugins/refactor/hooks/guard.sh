@@ -1275,6 +1275,212 @@ hv_human() {
   fi
   return 0
 }
+# 가지 강제 삭제가 보이는가 → 0. git branch 명령(; & | 앞까지) 안에 옵션 묶음 속 D(-D·-vD), 또는 삭제(-d·--delete 와 그 줄임 --d…)와
+#   강제(-f·--force 와 그 줄임 --f…)가 함께(-df·-fd·-d -f·--delete -q --force·--dele --forc). 옵션 글자는 대소문자를 가린다(-d 와 -D).
+#   낱말 앞뒤의 따옴표·괄호·백틱은 떼고 본다(bash -c 'git branch -df x')
+br_force_del() {
+  local rest=$1 seg w o del force IFS=$' \t' re_gb='git[[:space:]]+branch([^;&|]*)'
+  while [[ $rest =~ $re_gb ]]; do
+    seg=${BASH_REMATCH[1]}; rest=${rest#*"${BASH_REMATCH[0]}"}
+    del=0; force=0
+    shopt -u nocasematch
+    set -f
+    for w in $seg; do
+      while :; do case "$w" in [\"\'\(\`]*) w=${w#?} ;; *) break ;; esac; done
+      while :; do case "$w" in *[\"\'\)\`]) w=${w%?} ;; *) break ;; esac; done
+      case "$w" in
+        --?*) o=${w#--}; o=${o%%=*}
+              [ -n "$o" ] && { case delete in "$o"*) del=1 ;; esac; case force in "$o"*) force=1 ;; esac; } ;;
+        -?*) o=${w#-}
+             case "$o" in *D*) del=1; force=1 ;; esac
+             case "$o" in *d*) del=1 ;; esac
+             case "$o" in *f*) force=1 ;; esac ;;
+      esac
+    done
+    set +f
+    shopt -s nocasematch
+    [ "$del" = 1 ] && [ "$force" = 1 ] && return 0
+  done
+  return 1
+}
+# 가지 이름·경로 낱말 하나 → BW(따옴표 벗긴 값). 판정할 수 없는 글자가 있으면 1:
+#   $ ` * ? [ { ~ ; & | < > 따옴표 · 따옴표 없는 \ ( ) # · Windows 가 아닐 때의 \ · 큰따옴표 안의 \\ (셸이 바꿔 읽음) · 빈 값
+br_word() {
+  local w=$1 q=""
+  case "$w" in \"*\") w=${w:1:${#w}-2}; q=d ;; \'*\') w=${w:1:${#w}-2}; q=s ;; esac
+  [ -n "$w" ] || return 1
+  case "$w" in *[\$\`\*\?\[\{\~\;\&\|\<\>\"\']*) return 1 ;; esac
+  case "$w" in *"$BS"*) { [ "$WINPATH" = 1 ] && [ -n "$q" ]; } || return 1 ;; esac
+  case "$q" in
+    "") case "$w" in *[\(\)\#]*) return 1 ;; esac ;;
+    d) case "$w" in *"$BS$BS"*) return 1 ;; esac ;;
+  esac
+  BW=$w
+}
+# 가지 강제 삭제의 허용 판정(check_shell 한 번에 한 번) → BRV=ok(허용) 또는 no + BRM1·BRM2(막을 때의 문구).
+#   허용 = Bash 도구의 맨 위 명령(BRTOP=1)이 정확히 [cd <경로> && ]git [-C <경로> ]branch <강제 삭제 옵션들> <가지 1~10개> 이고(원래 명령 cmd0 로 본다),
+#   그 저장소에서 가지마다: 기본 가지(origin 원격이 있으면 origin/HEAD(refs/remotes/origin/ 아래일 때만) → origin/main → origin/master,
+#   없으면 로컬 main → master)의 조상이거나, merge-tree --write-tree 결과가 기본 가지 트리와 같음(스쿼시 합침). 하나라도 아니면 통째로 막는다.
+#   git 호출: 저장소마다 2번(참조 목록·origin 설정) + 조상 목록 1번 + 조상이 아닌 가지마다 merge-tree 1번. 판정 15초 넘으면 막음
+br_judge() {
+  shopt -u nocasematch
+  br_judge_in
+  shopt -s nocasematch
+}
+br_judge_in() {
+  BRV=no
+  local why="한 줄 삭제 명령이 아님" s=${cmd0:-} rest k=0 i=0 cdp="" cp="" w o del=0 force=0 names="" pats="" n nn=0 loc out out2 rc
+  local bref="" boid="" btree="" bshort="" bname="" origin=0 noid line anc bad="" bad1="" t0=$SECONDS IFS=$' \t'
+  local re_tok="^(\"[^\"]*\"|'[^']*'|[^[:space:]\"']+)([[:space:]]+|$)"
+  local -a T
+  BRM2="지울 가지 이름을 그대로 적어 git branch -D <가지> 한 줄로 실행하세요(다른 저장소면 git -C <경로> 하나만)."
+  case "$s" in *'$'*|*'`'*) why="이름이 변수·명령 결과" ;; esac
+  BRM1="가지 삭제를 판정할 수 없어 막았습니다($why)."
+  [ "${BRTOP:-0}" = 1 ] && [ "$why" = "한 줄 삭제 명령이 아님" ] && [ "${#s}" -le 2048 ] || return 0
+  # 줄바꿈·CR 이 남아 있으면 판정하지 않는다(낱말 나누기가 공백처럼 다뤄 다음 줄을 가지 이름으로 읽지 않게)
+  case "$s" in *"$NL"*|*$'\r'*) return 0 ;; esac
+  # JSON 의 \u 이스케이프는 풀지 않으므로(unesc_short) 그런 명령은 판정하지 않는다
+  rest=${rawcmd:-}; rest=${rest//"$P_BS2"/}; case "$rest" in *"$BS"u*) return 0 ;; esac
+  # 낱말로 나누기(따옴표 하나로 감싼 낱말 또는 따옴표 없는 낱말, 사이는 공백). 그 밖의 꼴은 판정하지 않는다
+  while :; do case "$s" in [[:space:]]*) s=${s#?} ;; *) break ;; esac; done
+  while :; do case "$s" in *[[:space:]]) s=${s%?} ;; *) break ;; esac; done
+  while [ -n "$s" ]; do
+    [[ $s =~ $re_tok ]] || return 0
+    T[k]=${BASH_REMATCH[1]}; k=$((k + 1)); s=${s:${#BASH_REMATCH[0]}}
+    [ "$k" -gt 40 ] && return 0
+  done
+  if [ "${T[0]:-}" = cd ]; then
+    [ "$k" -gt 3 ] && br_word "${T[1]}" && [ "${T[2]}" = "&&" ] || return 0
+    case "$BW" in -*) return 0 ;; esac
+    cdp=$BW; i=3
+  fi
+  [ "${T[i]:-}" = git ] || return 0; i=$((i + 1))
+  if [ "${T[i]:-}" = -C ]; then
+    br_word "${T[i+1]:-}" || return 0
+    case "$BW" in -*) return 0 ;; esac
+    cp=$BW; i=$((i + 2))
+  fi
+  [ "${T[i]:-}" = branch ] || return 0; i=$((i + 1))
+  # 옵션: 강제 삭제에 쓰는 것만(-d -D -f -q 묶음 · --delete --force --quiet 와 그 줄임)
+  while [ "$i" -lt "$k" ]; do
+    w=${T[i]}
+    case "$w" in
+      --?*) o=${w#--}
+            case "$o" in *[!a-z]*) return 0 ;; esac
+            case delete in "$o"*) del=1; i=$((i + 1)); continue ;; esac
+            case force in "$o"*) force=1; i=$((i + 1)); continue ;; esac
+            case quiet in "$o"*) i=$((i + 1)); continue ;; esac
+            return 0 ;;
+      -?*) o=${w#-}
+           case "$o" in *[!dDfq]*) return 0 ;; esac
+           case "$o" in *D*) del=1; force=1 ;; esac
+           case "$o" in *d*) del=1 ;; esac
+           case "$o" in *f*) force=1 ;; esac
+           i=$((i + 1)) ;;
+      *) break ;;
+    esac
+  done
+  [ "$del" = 1 ] && [ "$force" = 1 ] || return 0
+  # 가지 이름(1~10개, - 로 시작하지 않음)
+  while [ "$i" -lt "$k" ]; do
+    br_word "${T[i]}" || return 0
+    case "$BW" in -*|*[[:space:]]*) return 0 ;; esac
+    names="$names $BW"; pats="$pats refs/heads/$BW"; nn=$((nn + 1)); i=$((i + 1))
+  done
+  [ "$nn" -ge 1 ] || return 0
+  [ "$nn" -gt 10 ] && { BRM1="가지 삭제를 판정할 수 없어 막았습니다(가지가 10개 넘음)."; return 0; }
+  for n in $names; do
+    case "$n" in main|master) BRM1="가지 삭제를 판정할 수 없어 막았습니다(기본 가지 자신)."; return 0 ;; esac
+  done
+  # 저장소 위치: -C 경로, 아니면 cd 경로, 아니면 도구 입력의 작업 폴더(상대경로는 그 앞 기준)
+  loc=${BRCWD:-$cwd}
+  [ -n "$cdp" ] && { normpath "$cdp" "$loc"; loc=$NP; }
+  [ -n "$cp" ] && { normpath "$cp" "$loc"; loc=$NP; }
+  BRM1="가지 삭제를 판정할 수 없어 막았습니다(저장소 위치를 알 수 없음)."
+  [ -d "$loc" ] || return 0
+  # 1) 참조 목록(기본 가지 후보 + 지울 가지들) — 저장소가 아니면 여기서 끝
+  set -f
+  out=$(git -c core.fsmonitor=false -C "$loc" for-each-ref --format='%(refname) %(objectname) %(tree) %(symref)' \
+        refs/remotes/origin/HEAD refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master $pats 2>&1); rc=$?
+  set +f
+  if [ "$rc" != 0 ]; then
+    case "$out" in *"not a git repository"*) ;; *) BRM1="가지 삭제를 판정할 수 없어 막았습니다(git 오류)." ;; esac
+    return 0
+  fi
+  out="$NL$out$NL"
+  # 2) origin 원격이 설정돼 있나(0 있음 · 1 없음 · 그 밖 = 오류)
+  git -c core.fsmonitor=false -C "$loc" config --get-regexp '^remote[.]origin[.]' >/dev/null 2>&1; rc=$?
+  BRM1="가지 삭제를 판정할 수 없어 막았습니다(git 오류)."
+  case "$rc" in 0) origin=1 ;; 1) origin=0 ;; *) return 0 ;; esac
+  BRM1="가지 삭제를 판정할 수 없어 막았습니다(시간 초과)."
+  [ $((SECONDS - t0)) -gt 15 ] && return 0
+  # 기본 가지: 줄 꼴 = "<참조> <커밋> <트리> <가리키는 참조(심볼릭일 때)>"
+  if [ "$origin" = 1 ]; then
+    case "$out" in
+      *"${NL}refs/remotes/origin/HEAD "*)
+        line=${out#*"${NL}refs/remotes/origin/HEAD "}; line=${line%%"$NL"*}
+        case "${line##* }" in refs/remotes/origin/HEAD) ;; refs/remotes/origin/?*) bref=${line##* }; boid=${line%% *}; line=${line#* }; btree=${line%% *} ;; esac ;;
+    esac
+    for o in main master; do
+      [ -n "$bref" ] && break
+      case "$out" in
+        *"${NL}refs/remotes/origin/$o "*)
+          line=${out#*"${NL}refs/remotes/origin/$o "}; line=${line%%"$NL"*}
+          bref=refs/remotes/origin/$o; boid=${line%% *}; line=${line#* }; btree=${line%% *} ;;
+      esac
+    done
+    bshort=${bref#refs/remotes/}; bname=${bref#refs/remotes/origin/}
+  else
+    for o in main master; do
+      [ -n "$bref" ] && break
+      case "$out" in
+        *"${NL}refs/heads/$o "*)
+          line=${out#*"${NL}refs/heads/$o "}; line=${line%%"$NL"*}
+          bref=refs/heads/$o; boid=${line%% *}; line=${line#* }; btree=${line%% *} ;;
+      esac
+    done
+    bshort=${bref#refs/heads/}; bname=$bshort
+  fi
+  BRM1="가지 삭제를 판정할 수 없어 막았습니다(기본 가지를 못 찾음)."
+  [ -n "$bref" ] && [ -n "$boid" ] && [ -n "$btree" ] || return 0
+  for n in $names; do
+    [ "$n" = "$bname" ] && { BRM1="가지 삭제를 판정할 수 없어 막았습니다(기본 가지 자신)."; return 0; }
+    case "$out" in *"${NL}refs/heads/$n "*) ;; *) BRM1="가지 삭제를 판정할 수 없어 막았습니다(가지 없음)."; return 0 ;; esac
+  done
+  # 3) 기본 가지의 조상인 가지(보통 합침) 목록
+  set -f
+  anc=$(git -c core.fsmonitor=false -C "$loc" for-each-ref --merged="$boid" --format='%(refname)' $pats 2>/dev/null); rc=$?
+  set +f
+  BRM1="가지 삭제를 판정할 수 없어 막았습니다(git 오류)."
+  [ "$rc" = 0 ] || return 0
+  anc="$NL$anc$NL"
+  # 4) 조상이 아닌 가지: merge-tree 결과 트리 == 기본 가지 트리(스쿼시 합침)
+  for n in $names; do
+    case "$anc" in *"${NL}refs/heads/$n$NL"*) continue ;; esac
+    BRM1="가지 삭제를 판정할 수 없어 막았습니다(시간 초과)."
+    [ $((SECONDS - t0)) -gt 15 ] && return 0
+    noid=${out#*"${NL}refs/heads/$n "}; noid=${noid%% *}
+    out2=$(git -c core.fsmonitor=false -C "$loc" merge-tree --write-tree "$boid" "$noid" 2>&1); rc=$?
+    case "$rc" in
+      0) [ "${out2%%"$NL"*}" = "$btree" ] && continue ;;
+      1) ;;
+      # 2.38 미만: --write-tree 가 없다(사용법 오류 129, 또는 옛 꼴이 --write-tree 를 커밋 이름으로 읽어 실패 — 추정)
+      129) BRM1="가지 삭제를 판정할 수 없어 막았습니다(git 2.38 미만)."; return 0 ;;
+      *) BRM1="가지 삭제를 판정할 수 없어 막았습니다(git 오류)."
+         case "$out2" in *--write-tree*) BRM1="가지 삭제를 판정할 수 없어 막았습니다(git 2.38 미만)." ;; esac; return 0 ;;
+    esac
+    [ -z "$bad1" ] && bad1=$n
+    bad="$bad $n"
+  done
+  BRM1="가지 삭제를 판정할 수 없어 막았습니다(시간 초과)."
+  [ $((SECONDS - t0)) -gt 15 ] && return 0
+  if [ -n "$bad" ]; then
+    BRM1="합치지 않은 가지는 지우지 않습니다($bad1: 기본 가지 $bshort 에 없는 내용이 있음)."
+    BRM2="사람이 직접 결정합니다. 사용자에게 git branch -D${bad} 명령을 드려 직접 실행하게 하세요. 방금 GitHub 에서 합쳤다면 git fetch origin 을 먼저 실행한 뒤 다시 시도하세요."
+    return 0
+  fi
+  BRV=ok
+}
 # 고가치 규칙(되돌릴 수 없는 git 명령). 끝 경계에 따옴표·괄호도 넣는다(bash -c 'git reset --hard' · (git push -f))
 hv_git() {
   local t=$1
@@ -1292,13 +1498,19 @@ hv_git() {
   if has "$t" "git[[:space:]]+push[^;&|]*([[:space:]](--force[^[:space:]\"')]*|--mirror|--delete|-d)([[:space:]\"')]|$)|[[:space:]]-[a-z]*f[a-z]*([[:space:]\"')]|$)|[[:space:]]\\+[^[:space:]]+|[[:space:]]:[^[:space:]]+)"; then
     block "강제 push·원격 브랜치 삭제는 원격 저장소의 기록을 덮어씁니다." "push는 사람이 직접 합니다."
   fi
-  shopt -u nocasematch
-  if has "$t" "git[[:space:]]+branch[^;&|]*[[:space:]](-[a-zA-Z]*D[a-zA-Z]*|--delete[[:space:]]+--force|--force[[:space:]]+--delete)([[:space:]\"')]|$)"; then
-    shopt -s nocasematch
-    block "git branch -D 는 합치지 않은 브랜치를 영구 삭제합니다." "사람이 직접 결정합니다. 스쿼시 머지된 가지는 \`git branch -d\` 로 안 지워집니다(git 이 미합침으로 봄) — 그때는 사용자에게 \`git branch -D <가지>\` 명령을 드려 직접 실행하게 하세요."
+  # 가지 강제 삭제(모든 철자): 판정은 check_shell 한 번에 한 번만(br_judge — 4벌 판정 문자열 어느 쪽에서 보여도 같은 결론)
+  if br_force_del "$t"; then
+    [ -z "${BRV:-}" ] && br_judge
+    [ "$BRV" = ok ] || block "$BRM1" "$BRM2"
   fi
-  shopt -s nocasematch
   has "$t" 'git[[:space:]]+(filter-branch|filter-repo|update-ref[[:space:]]+-d)|git[[:space:]]+reflog[[:space:]]+(expire|delete)|git[[:space:]]+gc[^;&|]*--prune=now' && block "git 기록을 다시 쓰거나 지우는 명령입니다." "사람이 직접 결정합니다."
+  # 원격 추적 참조(refs/remotes/…)를 직접 쓰는 update-ref — 가지 삭제의 기준(origin/main 등)을 지울 가지 쪽으로 옮기는 길
+  #   (첫 인자 = 바꿀 참조. -m <메시지> 는 값을 건너뛴다. git update-ref refs/heads/x refs/remotes/origin/main 처럼 값으로만 쓰는 것은 통과).
+  #   --stdin 은 바꿀 참조를 명령 밖(파이프·파일)에서 받아 판정할 수 없으므로 늘 막는다
+  if has "$t" "git[[:space:]]+update-ref([[:space:]]+(-m[[:space:]]*(\"[^\"]*\"|'[^']*'|[^[:space:]]+)|-[^[:space:]]+))*[[:space:]]+[\"']?refs/remotes/" \
+    || has "$t" "git[[:space:]]+update-ref[^;&|]*[[:space:]]--stdin([[:space:]\"')]|$)"; then
+    block "git 기록을 다시 쓰거나 지우는 명령입니다." "사람이 직접 결정합니다."
+  fi
   # 원격 가지·저장소 삭제: gh api 의 DELETE 요청이 …/git/refs/(가지·태그) 나 repos/<주인>/<저장소>(저장소 통째)를 겨냥 · gh repo delete
   local gseg grest=$t re_gha="gh[[:space:]]+api([[:space:]][^;&|]*)?"
   while [[ $grest =~ $re_gha ]]; do
@@ -2478,6 +2690,9 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # 명령이 실행되는 폴더(Bash 도구의 현재 폴더) — 와일드카드 파일 이름을 실제로 펼쳐 볼 때 쓴다
   jget cwd; unesc_line "$JV"; cwd=${UV//"$BS"/$SL}; cwd=${cwd%/}; [ -z "$cwd" ] && cwd=$proj
   normpath "$cwd" /; cwd=$NP
+  # 가지 강제 삭제 허용 판정(br_judge)의 결과·문구 — 이 호출에서 한 번만. 허용은 Bash 도구의 맨 위 명령(인자 없이 부른 check_shell)일 때만
+  local BRV="" BRM1="" BRM2="" BRTOP=0 BRCWD=$cwd
+  [ "$#" -eq 0 ] && [ "$tool" = Bash ] && BRTOP=1
 
   # 판정용 모양(mk_views): 정규화한 명령(cmd) · lr · lx. 비밀값 판정용 사본(cmds, heredoc 본문을 줄 단위로 거른 것)이 다르면 그것으로도 lx 를 만든다
   local lxs="" cmd0=$cmd
