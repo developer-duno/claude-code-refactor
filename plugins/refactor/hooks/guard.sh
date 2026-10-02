@@ -36,6 +36,7 @@ block() {
   { F=${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/refactor}; F=${F//"$BS"/$SL}; [ -d "$F" ] || mkdir -p "$F"; F=$F/problems.log; LC_ALL=C.UTF-8; m=${1%%"$NL"*}; w=${m%% *}; case "$w" in *[./"$BS"~]*) m="<파일>${m#"$w"}" ;; esac; case "$m" in *'('*')'*) m="${m%%(*}(<파일>)${m##*)}" ;; esac; t=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && TZ=KST-9 printf -v t '%(%Y-%m-%d %H:%M)T' -1; [ -n "$t" ] || t=$(TZ=KST-9 date '+%Y-%m-%d %H:%M'); printf '%s | guard | 차단: %s\n' "$t" "${m:0:60}" >> "$F"; (( RANDOM % 64 )) || { s=$(wc -c < "$F"); [ "${s//[!0-9]/}" -gt 204800 ] && tail -c 102400 "$F" | tail -n +2 > "$F.tmp" && mv -f "$F.tmp" "$F"; }; } 2>/dev/null   # 문제 기록(problems.log)에 규칙 설명 첫 줄 앞 60자와 시각만 남긴다 — 첫 ( 부터 마지막 ) 까지와 맨 앞의 파일 이름은 <파일>로 바꾸고 명령·값은 적지 않는다(공개 신고에 붙을 수 있음). 실패는 무시, 가끔 200KB 넘으면 최근 절반만. %(…)T 는 bash 4.2+ 에서만(3.2 는 date) — 프로그램을 거의 띄우지 않아 차단이 늦어지지 않는다
   printf '[refactor 안전장치] %s\n' "$1" >&2
   if [ -n "${2:-}" ]; then printf '  → %s\n' "$2" >&2; fi
+  if [ -n "${fence_note:-}" ] && [ "${1#"$fence_why "}" != "$1" ]; then printf '  → %s\n' "$fence_note" >&2; fi   # 울타리 차단("$fence_why …")에만
   if [ -n "${BLOCK_NOTE:-}" ]; then printf '  %s\n' "$BLOCK_NOTE" >&2; fi
   printf '  (같은 결과를 내는 다른 명령으로 우회하지 말고, 무엇이 막혔는지 사용자에게 보고하세요. → 로 안내된 방법은 써도 됩니다.)\n' >&2
   exit 42
@@ -353,15 +354,19 @@ if [ -n "$tfile" ]; then
 fi
 ro_phase=0
 case "$phase" in SETUP|MAP|CHECKUP|DEEP|VERIFY|BASELINE_PLAN|PLAN) ro_phase=1 ;; esac
-fence=0; fence_why=""
+fence=0; fence_why=""; fence_note=""
 if [ "$go_turn" = 1 ] && [ "$ro_phase" = 1 ]; then fence=1; fence_why="지금은 /refactor:go 의 읽기 전용 단계($phase)라"; fi
 # /refactor:go 중 docs/refactor 밖 수정은 허락된 경우에만: 단계 실행(EXECUTE)+실행 대기 있음, 또는 기준선 작성(BASELINE)+승인 유효.
 # 그 밖의 단계 이름(마무리 확인 없는 DONE, 목록에 없는 이름 등)은 모두 막는다.
 if [ "$go_turn" = 1 ] && [ "$fence" = 0 ] && [ "$phase" != "EXECUTE" ] && [ "$phase" != "BASELINE" ]; then fence=1; fence_why="지금 단계($phase)에서는 코드를 고치지 않아(단계 실행은 승인된 실행 대기 단계가 있을 때만)"; fi
 # 기준선 작성(BASELINE)인데 기준선 계획 승인이 유효하지 않으면(승인 없음·계획 바뀜·계획서가 이미 있음) 코드를 고치지 않는다
 if [ "$go_turn" = 1 ] && [ "$phase" = "BASELINE" ] && [ "$in_baseline_phase" = 0 ]; then fence=1; fence_why="기준선 계획 승인이 유효하지 않아(승인 없음·승인 뒤 계획 바뀜·계획서가 이미 있음)"; fi
-# 단계 실행(EXECUTE)인데 이번 /refactor:go 를 시작할 때 실행 대기(승인됨) 단계가 하나도 없었으면 코드를 고치지 않는다
-if [ "$go_turn" = 1 ] && [ "$phase" = "EXECUTE" ] && { [ -z "$t_ready" ] || [ "$t_ready" = "?" ]; }; then fence=1; fence_why="승인된 실행 대기 단계가 없어(지금 상태의 ▶ 실행 대기가 비어 있음)"; fi
+# 단계 실행(EXECUTE)인데 이번 /refactor:go 를 시작할 때 실행 대기(승인됨) 단계가 하나도 없었으면 코드를 고치지 않는다.
+# "?" = 입력 훅(turn.sh)이 실행 대기를 다 계산하기 전에 끊김(닫힌 표시만 남음) → 원인과 재입력 안내를 따로 보여 준다(울타리 차단 문구에만)
+if [ "$go_turn" = 1 ] && [ "$phase" = "EXECUTE" ] && { [ -z "$t_ready" ] || [ "$t_ready" = "?" ]; }; then
+  fence=1; fence_why="승인된 실행 대기 단계가 없어(지금 상태의 ▶ 실행 대기가 비어 있음)"
+  [ "$t_ready" = "?" ] && { fence_why="입력 처리가 늦어 실행 대기 단계를 확인하지 못해"; fence_note="사용자에게 /refactor:go 를 다시 입력해 달라고 하세요."; }
+fi
 
 has_env_file=0
 for f in "$proj"/.env*; do
@@ -603,37 +608,96 @@ glob_hits_secret() {
 # 비밀값 파일을 겨냥한 glob인가(.env* 처럼) — 평범한 파일(package.json 등)에도 맞는 넓은 glob은 아니다
 glob_targets_secret() { glob_hits_secret "$1" && ! glob_hits_secret "$1" "$PLAIN_SAMPLES"; }
 heavy_dir() { [ -d "$1" ] || return 0; case "${1%/}" in */node_modules|*/.git|*/.next|*/.nuxt|*/.cache|*/.turbo|*/.vercel|*/dist|*/build|*/.venv|*/venv|*/__pycache__|*/vendor|*/target|*/coverage|*/.idea|*/.vscode) return 0 ;; esac; return 1; }
-# 이 폴더(세 단계 아래까지)에 git이 무시하지 않는 비밀값 파일이 있나 → SEC_FOUND(첫 파일 이름)
+# 비밀값 파일 이름 꼴 — 훑기(unignored_secret_scan)의 파일 glob 과 git 목록의 pathspec 이 이 한 목록을 같이 쓴다(어긋나지 않게)
+SEC_NAME_GLOBS=(".env*" "*.env" ".dev.vars*" "*.pem" "*.key" "credentials.json" "secrets.*" "*service*account*.json" "*firebase-adminsdk*.json" "client_secret*.json")
+MSG_WIDE="범위가 넓어 판정할 수 없습니다 — 폴더를 좁혀 주세요."
+MSG_WIDE2="path로 코드 폴더(예: src)를 지정하거나 type(예: \"js\")으로 파일 종류를 좁히세요."
+SEC_REPOS=0
+# 이 폴더 아래에 git이 무시하지 않는 비밀값 파일이 있나 → SEC_FOUND(첫 파일 이름)
+# git 저장소(작업 트리) 안이면 폴더를 훑지 않고 git 이 아는 파일 목록(추적 + 안 추적, 무시된 것 제외)에서 이름 꼴로 찾는다 —
+#   깊이·폴더 수 제한이 없고 숨김·vendor 같은 폴더도 본다. 목록이 안을 보여 주지 않는 안 추적 중첩 저장소("폴더/" 한 줄)와
+#   서브모듈(gitlink)은 그 폴더를 다시 판정한다. git 이 없거나 목록 명령이 실패하면(git 밖 포함) 지금 방식(훑기)으로 내려간다.
+#   git 호출: 범위당 2번(목록 1 + gitlink 찾기 1, 비밀값을 찾으면 1번) + 중첩 저장소·서브모듈마다 같은 수
 unignored_secret_under() { # $1 폴더 $2 (있으면) 이 glob에 맞는 파일만
-  local root=$1 f d1 d2 list="" ign n=0 g=${2:-}
+  local root=$1 g=${2:-} p f rc="" out pat pspec=() subs=() s
+  SEC_FOUND=""
+  [ -d "$root" ] || return 1
+  if ! command -v git >/dev/null 2>&1; then unignored_secret_scan "$root" "$g"; return; fi
+  for pat in "${SEC_NAME_GLOBS[@]}"; do pspec+=(":(glob)**/$pat"); done
+  # -z 목록은 $( ) 가 NUL 을 버리므로 read -d '' 로 읽는다. 끝에 종료 코드를 "/rc=N" 으로 붙인다(목록 이름은 /로 시작하지 않는다)
+  # ":(glob)**/" = 끝이 / 인 항목 = 안 추적 중첩 저장소(git 은 그 안을 보여 주지 않는다)
+  while IFS= read -r -d '' p; do
+    case "$p" in
+      /rc=*) rc=${p#/rc=}; continue ;;
+      */) subs+=("${p%/}"); continue ;;
+    esac
+    f=$root/$p
+    [ -f "$f" ] || continue
+    is_secret_path "$f" || continue
+    if [ -n "$g" ]; then glob_hits_secret "$g" "${f##*/}" || continue; fi
+    SEC_FOUND=$f; return 0
+  done < <(git -c core.fsmonitor=false -c core.quotePath=false -C "$root" ls-files -z -co --exclude-standard -- "${pspec[@]}" ':(glob)**/' 2>/dev/null; printf '/rc=%s\0' "$?")
+  if [ "$rc" != 0 ]; then unignored_secret_scan "$root" "$g"; return; fi
+  # 서브모듈(gitlink, 모드 160000): 목록에 그 안의 파일이 나오지 않는다
+  out=$(git -c core.fsmonitor=false -c core.quotePath=false -C "$root" ls-files -c -s 2>/dev/null | grep '^160000 '; echo "/rc=${PIPESTATUS[0]}")
+  rc=""
+  while IFS= read -r p; do
+    case "$p" in
+      /rc=*) rc=${p#/rc=} ;;
+      *"$TAB"'"'*) block "$MSG_WIDE [Grep · 하위 저장소 이름]" "$MSG_WIDE2" ;;   # 이름이 인용됨(특수 글자) — 폴더를 찾을 수 없으니 막는다
+      *"$TAB"*) subs+=("${p#*"$TAB"}") ;;
+    esac
+  done <<EOF
+$out
+EOF
+  if [ "$rc" != 0 ]; then unignored_secret_scan "$root" "$g"; return; fi
+  for s in "${subs[@]}"; do
+    [ -d "$root/$s" ] || continue
+    SEC_REPOS=$((SEC_REPOS + 1))
+    [ "$SEC_REPOS" -gt 20 ] && block "$MSG_WIDE [Grep · 저장소 수 $SEC_REPOS>20]" "$MSG_WIDE2"
+    if [ -e "$root/$s/.git" ]; then
+      unignored_secret_under "$root/$s" "$g" && return 0
+    else
+      unignored_secret_scan "$root/$s" "$g" && return 0   # 저장소가 아닌 gitlink 폴더(초기화 안 된 서브모듈 등)
+    fi
+  done
+  SEC_FOUND=""
+  return 1
+}
+# 지금 방식(git 밖·git 실패): 세 단계 아래까지 훑어 비밀값 이름 꼴 파일을 찾고, git 저장소면 무시된 것을 뺀다 → SEC_FOUND
+unignored_secret_scan() { # $1 폴더 $2 (있으면) 이 glob에 맞는 파일만
+  local root=$1 f d1 d2 list="" ign n=0 g=${2:-} pat t0=$SECONDS
   SEC_FOUND=""
   [ -d "$root" ] || return 1
   # 세 단계 아래까지(숨김 폴더 포함) 훑되, node_modules 같은 큰 폴더에는 들어가지 않는다
-  # 폴더가 너무 많거나(200개) 오래 걸리면(5초) 판정할 수 없으니 통과시키지 않고 막는다
-  local dirs=("$root") d3 MSG_WIDE="범위가 넓어 판정할 수 없습니다 — 폴더를 좁혀 주세요." MSG_WIDE2="path로 코드 폴더(예: src)를 지정하거나 glob(예: \"*.ts\")·type(예: \"js\")으로 파일 종류를 좁히세요."
+  # 폴더가 너무 많거나(200개) 오래 걸리면(이 함수 시작부터 5초) 판정할 수 없으니 통과시키지 않고 막는다
+  local dirs=("$root") d3
   # 하위 폴더 목록을 먼저 펼쳐 개수를 보고, 넘으면 더 들어가지 않고 바로 막는다(맞지 않은 glob 글자 2개 몫은 여유)
   local l1=("$root"/*/ "$root"/.[!.]*/) l2 l3
-  [ "${#l1[@]}" -gt 202 ] && block "$MSG_WIDE" "$MSG_WIDE2"
+  [ "${#l1[@]}" -gt 202 ] && block "$MSG_WIDE [Grep · 폴더 수 ${#l1[@]}>200]" "$MSG_WIDE2"
   for d1 in "${l1[@]}"; do
     heavy_dir "$d1" && continue
     dirs+=("${d1%/}")
     l2=("$d1"*/ "$d1".[!.]*/)
-    [ $((${#dirs[@]} + ${#l2[@]})) -gt 202 ] && block "$MSG_WIDE" "$MSG_WIDE2"
+    n=$((${#dirs[@]} + ${#l2[@]})); [ "$n" -gt 202 ] && block "$MSG_WIDE [Grep · 폴더 수 $n>200]" "$MSG_WIDE2"
     for d2 in "${l2[@]}"; do
       heavy_dir "$d2" && continue
       dirs+=("${d2%/}")
       l3=("$d2"*/)
-      [ $((${#dirs[@]} + ${#l3[@]})) -gt 201 ] && block "$MSG_WIDE" "$MSG_WIDE2"
+      n=$((${#dirs[@]} + ${#l3[@]})); [ "$n" -gt 201 ] && block "$MSG_WIDE [Grep · 폴더 수 $n>200]" "$MSG_WIDE2"
       for d3 in "${l3[@]}"; do heavy_dir "$d3" && continue; dirs+=("${d3%/}"); done
-      [ "$SECONDS" -ge 5 ] && block "$MSG_WIDE" "$MSG_WIDE2"
+      [ $((SECONDS - t0)) -ge 5 ] && block "$MSG_WIDE [Grep · 시간 5초]" "$MSG_WIDE2"
     done
   done
+  n=0
   for d1 in "${dirs[@]}"; do
-    for f in "$d1"/.env* "$d1"/*.env "$d1"/.dev.vars* "$d1"/*.pem "$d1"/*.key "$d1"/credentials.json "$d1"/secrets.* "$d1"/*service*account*.json "$d1"/*firebase-adminsdk*.json "$d1"/client_secret*.json; do
-      [ -f "$f" ] || continue
-      is_secret_path "$f" || continue
-      if [ -n "$g" ]; then glob_hits_secret "$g" "${f##*/}" || continue; fi
-      list="$list$f$NL"; n=$((n + 1)); [ "$n" -ge 40 ] && break 2
+    for pat in "${SEC_NAME_GLOBS[@]}"; do
+      for f in "$d1"/$pat; do
+        [ -f "$f" ] || continue
+        is_secret_path "$f" || continue
+        if [ -n "$g" ]; then glob_hits_secret "$g" "${f##*/}" || continue; fi
+        list="$list$f$NL"; n=$((n + 1)); [ "$n" -ge 40 ] && break 3
+      done
     done
   done
   [ -z "$list" ] && return 1
@@ -1211,6 +1275,243 @@ hv_human() {
   fi
   return 0
 }
+# 가지 강제 삭제가 보이는가 → 0. git branch 명령(; & | 앞까지) 안에 옵션 묶음 속 D(-D·-vD), 또는 삭제(-d·--delete 와 그 줄임 --d…)와
+#   강제(-f·--force 와 그 줄임 --f…)가 함께(-df·-fd·-d -f·--delete -q --force·--dele --forc). 옵션 글자는 대소문자를 가린다(-d 와 -D).
+#   낱말 앞뒤의 따옴표·괄호·백틱은 떼고 본다(bash -c 'git branch -df x')
+br_force_del() {
+  local rest=$1 seg w o del force IFS=$' \t' re_gb='git[[:space:]]+branch([^;&|]*)'
+  while [[ $rest =~ $re_gb ]]; do
+    seg=${BASH_REMATCH[1]}; rest=${rest#*"${BASH_REMATCH[0]}"}
+    del=0; force=0
+    shopt -u nocasematch
+    set -f
+    for w in $seg; do
+      while :; do case "$w" in [\"\'\(\`]*) w=${w#?} ;; *) break ;; esac; done
+      while :; do case "$w" in *[\"\'\)\`]) w=${w%?} ;; *) break ;; esac; done
+      case "$w" in
+        --?*) o=${w#--}; o=${o%%=*}
+              [ -n "$o" ] && { case delete in "$o"*) del=1 ;; esac; case force in "$o"*) force=1 ;; esac; } ;;
+        -?*) o=${w#-}
+             case "$o" in *D*) del=1; force=1 ;; esac
+             case "$o" in *d*) del=1 ;; esac
+             case "$o" in *f*) force=1 ;; esac ;;
+      esac
+    done
+    set +f
+    shopt -s nocasematch
+    [ "$del" = 1 ] && [ "$force" = 1 ] && return 0
+  done
+  return 1
+}
+# 가지 이름·경로 낱말 하나 → BW(따옴표 벗긴 값). 판정할 수 없는 글자가 있으면 1:
+#   $ ` * ? [ { ; & | < > 따옴표 · 맨 앞의 ~ 와 =~ · :~(bash 가 홈 폴더로 바꿈 — 그 밖의 가운데 ~ 는 Windows 짧은 이름 RUNNER~1 꼴이라 허용) ·
+#   따옴표 없는 \ ( ) # · Windows 가 아닐 때의 \ · 큰따옴표 안의 \\ (셸이 바꿔 읽음) · 빈 값
+br_word() {
+  local w=$1 q=""
+  case "$w" in \"*\") w=${w:1:${#w}-2}; q=d ;; \'*\') w=${w:1:${#w}-2}; q=s ;; esac
+  [ -n "$w" ] || return 1
+  case "$w" in \~*|*=\~*|*:\~*|*[\$\`\*\?\[\{\;\&\|\<\>\"\']*) return 1 ;; esac
+  case "$w" in *"$BS"*) { [ "$WINPATH" = 1 ] && [ -n "$q" ]; } || return 1 ;; esac
+  case "$q" in
+    "") case "$w" in *[\(\)\#]*) return 1 ;; esac ;;
+    d) case "$w" in *"$BS$BS"*) return 1 ;; esac ;;
+  esac
+  BW=$w
+}
+# 가지 강제 삭제의 허용 판정(check_shell 한 번에 한 번) → BRV=ok(허용) 또는 no + BRM1·BRM2(막을 때의 문구).
+#   허용 = Bash 도구의 맨 위 명령(BRTOP=1)이 정확히 [cd <경로> && ]git [-C <경로> ]branch <강제 삭제 옵션들> <가지 1~10개> 이고(원래 명령 cmd0 로 본다),
+#   그 저장소에서 가지마다: 기본 가지(origin 원격이 있으면 origin/HEAD(refs/remotes/origin/ 아래일 때만) → origin/main → origin/master,
+#   없으면 로컬 main → master. 기준으로 쓰려는 origin 참조가 그 자체로 심볼릭이면 건너뜀)의 조상이거나, merge-tree --write-tree 결과가
+#   기본 가지 트리와 같음(스쿼시 합침). 하나라도 아니면 통째로 막는다. 저장소 위치는 도구 입력의 작업 폴더(cwd) 기준 — cwd 가 없거나,
+#   cd 경로가 절대경로·./ 꼴이 아니거나(CDPATH), 경로에 .. 조각이 있으면(링크를 따라 올라감) 판정하지 않는다.
+#   합치기 드라이버(merge.<이름>.driver) 설정이 있으면 조상이 아닌 가지는 merge-tree 를 부르지 않고 막는다.
+#   git 호출(모두 replace 참조 무시): 저장소마다 2번(참조 목록·origin/드라이버 설정) + 조상 목록 1번 + 조상이 아닌 가지마다 merge-tree 1번.
+#   판정 15초 넘으면 막음
+br_judge() {
+  shopt -u nocasematch
+  br_judge_in
+  shopt -s nocasematch
+}
+# 판정 불가 첫 줄 — 이유 낱말을 괄호 안과 끝의 기록 칸에 같이 둔다(문제 기록은 첫 ( ~ 마지막 ) 를 <파일> 로 가리므로 기록 칸은 괄호 밖·괄호 없이)
+br_cant() { BRM1="가지 삭제를 판정할 수 없어 막았습니다($1). [가지 삭제 · $1]"; }
+# 참조 목록($out, 줄 꼴 "<참조> <커밋> <트리> <가리키는 참조>")에서 $1 의 줄 → BR_O(커밋)·BR_T(트리)·BR_S(심볼릭이면 가리키는 참조, 아니면 빈 값). 없으면 1
+br_ref() {
+  local l
+  case "$out" in *"${NL}$1 "*) ;; *) return 1 ;; esac
+  l=${out#*"${NL}$1 "}; l=${l%%"$NL"*}
+  BR_O=${l%% *}; l=${l#* }; BR_T=${l%% *}; BR_S=${l#* }
+  [ "$BR_S" = "$BR_T" ] && BR_S=""
+  return 0
+}
+br_judge_in() {
+  BRV=no
+  local why="한 줄 삭제 명령이 아님" s=${cmd0:-} rest k=0 i=0 cdp="" cp="" w o del=0 force=0 names="" pats="" n nn=0 loc out out2 rc
+  local bref="" boid="" btree="" bshort="" bname="" origin=0 drv=0 noid anc bad="" bad1="" t0=$SECONDS IFS=$' \t'
+  local re_tok="^(\"[^\"]*\"|'[^']*'|[^[:space:]\"']+)([[:space:]]+|$)"
+  local -a T
+  BRM2="지울 가지 이름을 그대로 적어 git branch -D <가지> 한 줄로 실행하세요(2>&1·파이프 같은 덧붙임 없이, 다른 저장소면 git -C <절대경로> 하나만)."
+  case "$s" in *'$'*|*'`'*) why="이름이 변수·명령 결과" ;; esac
+  br_cant "$why"
+  [ "${BRTOP:-0}" = 1 ] && [ "$why" = "한 줄 삭제 명령이 아님" ] && [ "${#s}" -le 2048 ] || return 0
+  # 줄바꿈·CR 이 남아 있으면 판정하지 않는다(낱말 나누기가 공백처럼 다뤄 다음 줄을 가지 이름으로 읽지 않게)
+  case "$s" in *"$NL"*|*$'\r'*) return 0 ;; esac
+  # JSON 의 \u 이스케이프는 풀지 않으므로(unesc_short) 그런 명령은 판정하지 않는다
+  rest=${rawcmd:-}; rest=${rest//"$P_BS2"/}; case "$rest" in *"$BS"u*) return 0 ;; esac
+  # 낱말로 나누기(따옴표 하나로 감싼 낱말 또는 따옴표 없는 낱말, 사이는 공백). 그 밖의 꼴은 판정하지 않는다
+  while :; do case "$s" in [[:space:]]*) s=${s#?} ;; *) break ;; esac; done
+  while :; do case "$s" in *[[:space:]]) s=${s%?} ;; *) break ;; esac; done
+  while [ -n "$s" ]; do
+    [[ $s =~ $re_tok ]] || return 0
+    T[k]=${BASH_REMATCH[1]}; k=$((k + 1)); s=${s:${#BASH_REMATCH[0]}}
+    [ "$k" -gt 40 ] && return 0
+  done
+  if [ "${T[0]:-}" = cd ]; then
+    [ "$k" -gt 3 ] && br_word "${T[1]}" && [ "${T[2]}" = "&&" ] || return 0
+    case "$BW" in -*) return 0 ;; esac
+    cdp=$BW; i=3
+  fi
+  [ "${T[i]:-}" = git ] || return 0; i=$((i + 1))
+  if [ "${T[i]:-}" = -C ]; then
+    br_word "${T[i+1]:-}" || return 0
+    case "$BW" in -*) return 0 ;; esac
+    cp=$BW; i=$((i + 2))
+  fi
+  [ "${T[i]:-}" = branch ] || return 0; i=$((i + 1))
+  # 옵션: 강제 삭제에 쓰는 것만(-d -D -f -q 묶음 · --delete --force --quiet 와 그 줄임)
+  while [ "$i" -lt "$k" ]; do
+    w=${T[i]}
+    case "$w" in
+      --?*) o=${w#--}
+            case "$o" in *[!a-z]*) return 0 ;; esac
+            case delete in "$o"*) del=1; i=$((i + 1)); continue ;; esac
+            case force in "$o"*) force=1; i=$((i + 1)); continue ;; esac
+            case quiet in "$o"*) i=$((i + 1)); continue ;; esac
+            return 0 ;;
+      -?*) o=${w#-}
+           case "$o" in *[!dDfq]*) return 0 ;; esac
+           case "$o" in *D*) del=1; force=1 ;; esac
+           case "$o" in *d*) del=1 ;; esac
+           case "$o" in *f*) force=1 ;; esac
+           i=$((i + 1)) ;;
+      *) break ;;
+    esac
+  done
+  [ "$del" = 1 ] && [ "$force" = 1 ] || return 0
+  # 가지 이름(1~10개, - 로 시작하지 않음)
+  while [ "$i" -lt "$k" ]; do
+    br_word "${T[i]}" || return 0
+    case "$BW" in -*|*[[:space:]]*) return 0 ;; esac
+    names="$names $BW"; pats="$pats refs/heads/$BW"; nn=$((nn + 1)); i=$((i + 1))
+  done
+  [ "$nn" -ge 1 ] || return 0
+  [ "$nn" -gt 10 ] && { br_cant "가지가 10개 넘음"; return 0; }
+  for n in $names; do
+    case "$n" in main|master) br_cant "기본 가지 자신"; return 0 ;; esac
+  done
+  # 저장소 위치: -C 경로, 아니면 cd 경로, 아니면 도구 입력의 작업 폴더(상대경로는 그 앞 기준)
+  br_cant "저장소 위치를 알 수 없음"
+  [ -n "${BRCWD:-}" ] || return 0
+  # cd 경로는 절대경로이거나 . ./ 로 시작할 때만 — 그 밖의 상대경로는 셸의 CDPATH 에 따라 다른 폴더로 갈 수 있다
+  if [ -n "$cdp" ]; then
+    case "$cdp" in /*|[A-Za-z]:/*|[A-Za-z]:"$BS"*|.|./*) ;; *) return 0 ;; esac
+  fi
+  # 경로 조각이 정확히 .. 이면 판정하지 않는다 — guard 는 글자로 정리하지만 셸·git 은 링크를 따라간 실제 폴더에서 올라간다
+  for o in "$cdp" "$cp"; do
+    o=${o//"$BS"/$SL}
+    case "/$o/" in */../*) return 0 ;; esac
+  done
+  loc=$BRCWD
+  [ -n "$cdp" ] && { normpath "$cdp" "$loc"; loc=$NP; }
+  [ -n "$cp" ] && { normpath "$cp" "$loc"; loc=$NP; }
+  [ -d "$loc" ] || return 0
+  # 1) 참조 목록(기본 가지 후보 + 지울 가지들) — 저장소가 아니면 여기서 끝
+  set -f
+  out=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" for-each-ref --format='%(refname) %(objectname) %(tree) %(symref)' \
+        refs/remotes/origin/HEAD refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master $pats 2>&1); rc=$?
+  set +f
+  if [ "$rc" != 0 ]; then
+    case "$out" in *"not a git repository"*) ;; *) br_cant "git 오류" ;; esac
+    return 0
+  fi
+  out="$NL$out$NL"
+  # 2) origin 원격·합치기 드라이버 설정(지역·전역·시스템, 이름만): 0 하나라도 있음 · 1 둘 다 없음 · 그 밖 = 오류
+  out2=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" config --name-only --get-regexp '^(remote[.]origin[.]|merge[.].+[.]driver$)' 2>/dev/null); rc=$?
+  br_cant "git 오류"
+  case "$rc" in 0) ;; 1) out2="" ;; *) return 0 ;; esac
+  case "$NL$out2" in *"${NL}remote.origin."*) origin=1 ;; esac
+  case "$NL$out2" in *"${NL}merge."*) drv=1 ;; esac
+  br_cant "시간 초과"
+  [ $((SECONDS - t0)) -gt 15 ] && return 0
+  # 기본 가지
+  if [ "$origin" = 1 ]; then
+    # origin/HEAD 의 %(symref) 는 심볼릭을 끝까지 따라간 대상이다(origin/HEAD → origin/develop → refs/heads/x 면 refs/heads/x) —
+    #   그 대상이 origin 아래가 아니면 기준으로 쓰지 않는다. 그래서 대상 자체가 심볼릭인 경우는 따로 볼 필요가 없다(git 호출을 늘리지 않음)
+    if br_ref refs/remotes/origin/HEAD; then
+      case "$BR_S" in refs/remotes/origin/HEAD) ;; refs/remotes/origin/?*) bref=$BR_S; boid=$BR_O; btree=$BR_T ;; esac
+    fi
+    for o in main master; do
+      [ -n "$bref" ] && break
+      br_ref refs/remotes/origin/$o || continue
+      [ -n "$BR_S" ] && continue                      # 그 자체로 심볼릭(git symbolic-ref refs/remotes/origin/main refs/heads/x) — 기준이 아니다
+      bref=refs/remotes/origin/$o; boid=$BR_O; btree=$BR_T
+    done
+    bshort=${bref#refs/remotes/}; bname=${bref#refs/remotes/origin/}
+  else
+    for o in main master; do
+      [ -n "$bref" ] && break
+      br_ref refs/heads/$o || continue
+      [ -n "$BR_S" ] && continue                      # 그 자체로 심볼릭(git symbolic-ref refs/heads/main refs/heads/x) — 기준이 아니다
+      bref=refs/heads/$o; boid=$BR_O; btree=$BR_T
+    done
+    bshort=${bref#refs/heads/}; bname=$bshort
+  fi
+  br_cant "기본 가지를 못 찾음"
+  [ -n "$bref" ] && [ -n "$boid" ] && [ -n "$btree" ] || return 0
+  for n in $names; do
+    [ "$n" = "$bname" ] && { br_cant "기본 가지 자신"; return 0; }
+    case "$out" in *"${NL}refs/heads/$n "*) ;; *) br_cant "가지 없음"; return 0 ;; esac
+  done
+  # 3) 기본 가지의 조상인 가지(보통 합침) 목록
+  set -f
+  anc=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" for-each-ref --merged="$boid" --format='%(refname)' $pats 2>/dev/null); rc=$?
+  set +f
+  br_cant "git 오류"
+  [ "$rc" = 0 ] || return 0
+  anc="$NL$anc$NL"
+  # 4) 조상이 아닌 가지: merge-tree 결과 트리 == 기본 가지 트리(스쿼시 합침). 합치기 드라이버 설정이 있으면 merge-tree 를 부르지 않는다
+  #    (드라이버 프로그램이 이 안에서 실행되고, 늘 "우리 쪽"을 남기는 드라이버면 안 합친 가지도 합친 것처럼 보인다)
+  for n in $names; do
+    case "$anc" in *"${NL}refs/heads/$n$NL"*) continue ;; esac
+    [ "$drv" = 1 ] && { bad="$bad $n"; continue; }
+    br_cant "시간 초과"
+    [ $((SECONDS - t0)) -gt 15 ] && return 0
+    noid=${out#*"${NL}refs/heads/$n "}; noid=${noid%% *}
+    out2=$(git --no-replace-objects -c core.fsmonitor=false -c merge.renormalize=false -C "$loc" merge-tree --write-tree "$boid" "$noid" 2>&1); rc=$?
+    case "$rc" in
+      0) [ "${out2%%"$NL"*}" = "$btree" ] && continue ;;
+      1) ;;
+      # 2.38 미만: --write-tree 가 없다(사용법 오류 129, 또는 옛 꼴이 --write-tree 를 커밋 이름으로 읽어 실패 — 추정)
+      129) br_cant "git 2.38 미만"; return 0 ;;
+      *) br_cant "git 오류"
+         case "$out2" in *--write-tree*) br_cant "git 2.38 미만" ;; esac; return 0 ;;
+    esac
+    [ -z "$bad1" ] && bad1=$n
+    bad="$bad $n"
+  done
+  if [ "$drv" = 1 ] && [ -n "$bad" ]; then
+    br_cant "합치기 드라이버 설정"
+    BRM2="이 저장소에는 합칠 때 쓰는 프로그램 설정이 있어 스쿼시 합침을 확인할 수 없습니다. 사용자에게 git branch -D${bad} 명령을 드려 직접 실행하게 하세요."
+    return 0
+  fi
+  br_cant "시간 초과"
+  [ $((SECONDS - t0)) -gt 15 ] && return 0
+  if [ -n "$bad" ]; then
+    BRM1="합치지 않은 가지는 지우지 않습니다($bad1: 기본 가지 $bshort 에 없는 내용이 있음). [가지 삭제 · 안 합쳐짐]"
+    BRM2="사람이 직접 결정합니다. 사용자에게 git branch -D${bad} 명령을 드려 직접 실행하게 하세요. 방금 GitHub 에서 합쳤다면 git fetch origin 을 먼저 실행한 뒤 다시 시도하세요."
+    return 0
+  fi
+  BRV=ok
+}
 # 고가치 규칙(되돌릴 수 없는 git 명령). 끝 경계에 따옴표·괄호도 넣는다(bash -c 'git reset --hard' · (git push -f))
 hv_git() {
   local t=$1
@@ -1228,13 +1529,19 @@ hv_git() {
   if has "$t" "git[[:space:]]+push[^;&|]*([[:space:]](--force[^[:space:]\"')]*|--mirror|--delete|-d)([[:space:]\"')]|$)|[[:space:]]-[a-z]*f[a-z]*([[:space:]\"')]|$)|[[:space:]]\\+[^[:space:]]+|[[:space:]]:[^[:space:]]+)"; then
     block "강제 push·원격 브랜치 삭제는 원격 저장소의 기록을 덮어씁니다." "push는 사람이 직접 합니다."
   fi
-  shopt -u nocasematch
-  if has "$t" "git[[:space:]]+branch[^;&|]*[[:space:]](-[a-zA-Z]*D[a-zA-Z]*|--delete[[:space:]]+--force|--force[[:space:]]+--delete)([[:space:]\"')]|$)"; then
-    shopt -s nocasematch
-    block "git branch -D 는 합치지 않은 브랜치를 영구 삭제합니다." "사람이 직접 결정합니다. 스쿼시 머지된 가지는 \`git branch -d\` 로 안 지워집니다(git 이 미합침으로 봄) — 그때는 사용자에게 \`git branch -D <가지>\` 명령을 드려 직접 실행하게 하세요."
+  # 가지 강제 삭제(모든 철자): 판정은 check_shell 한 번에 한 번만(br_judge — 4벌 판정 문자열 어느 쪽에서 보여도 같은 결론)
+  if br_force_del "$t"; then
+    [ -z "${BRV:-}" ] && br_judge
+    [ "$BRV" = ok ] || block "$BRM1" "$BRM2"
   fi
-  shopt -s nocasematch
   has "$t" 'git[[:space:]]+(filter-branch|filter-repo|update-ref[[:space:]]+-d)|git[[:space:]]+reflog[[:space:]]+(expire|delete)|git[[:space:]]+gc[^;&|]*--prune=now' && block "git 기록을 다시 쓰거나 지우는 명령입니다." "사람이 직접 결정합니다."
+  # 원격 추적 참조(refs/remotes/…)를 직접 쓰는 update-ref — 가지 삭제의 기준(origin/main 등)을 지울 가지 쪽으로 옮기는 길
+  #   (첫 인자 = 바꿀 참조. -m <메시지> 는 값을 건너뛴다. git update-ref refs/heads/x refs/remotes/origin/main 처럼 값으로만 쓰는 것은 통과).
+  #   --stdin 은 바꿀 참조를 명령 밖(파이프·파일)에서 받아 판정할 수 없으므로 늘 막는다
+  if has "$t" "git[[:space:]]+update-ref([[:space:]]+(-m[[:space:]]*(\"[^\"]*\"|'[^']*'|[^[:space:]]+)|-[^[:space:]]+))*[[:space:]]+[\"']?refs/remotes/" \
+    || has "$t" "git[[:space:]]+update-ref[^;&|]*[[:space:]]--stdin([[:space:]\"')]|$)"; then
+    block "git 기록을 다시 쓰거나 지우는 명령입니다." "사람이 직접 결정합니다."
+  fi
   # 원격 가지·저장소 삭제: gh api 의 DELETE 요청이 …/git/refs/(가지·태그) 나 repos/<주인>/<저장소>(저장소 통째)를 겨냥 · gh repo delete
   local gseg grest=$t re_gha="gh[[:space:]]+api([[:space:]][^;&|]*)?"
   while [[ $grest =~ $re_gha ]]; do
@@ -2258,6 +2565,29 @@ md_exec() {
   done
   return 1
 }
+# 낱말 끝의 .exe(대소문자 무관 · 앞에 경로가 붙은 꼴 · 따옴표로 감싼 꼴)를 뗀다 → XN: <이름>.exe 로 쓴 명령은 <이름> 으로 쓴 것과 같은 판정.
+#   규칙 대부분이 명령 이름 바로 뒤 공백을 요구해서 .exe 를 붙이면 놓쳤다(Windows Git Bash·WSL 에서는 .exe 가 그대로 실행된다:
+#   git.exe reset --hard · cat.exe .env · supabase.exe db reset …). 명령 자리(맨 앞·; & | ( ` { 뒤)의 공백 없는 경로는 함께 뗀다
+#   (/usr/bin/cat.exe .env → cat .env). 그 밖 자리의 경로 앞부분은 그대로 둔다(인자 자리의 경로 — rm -rf docs/refactor/x.exe — 를
+#   지우지 않는다). 이름은 글자·숫자·_ 로 시작해야 뗀다(.exe · ..exe · *.exe 는 그대로).
+#   파일 이름 자리의 a.exe 도 a 가 되지만 그런 낱말만으로 걸리는 규칙은 없다(평범한 명령 차등 시험이 지킨다).
+#   20번 떼고도 남아 있으면 판정할 수 없으니 막는다. 가지 강제 삭제의 허용 판정은 원래 명령(cmd0)을 보므로 git.exe 로 쓴 삭제는 막는다
+exe_norm() {
+  local s=$1 m0 k=0
+  local rp="(^|[;&|(\`{][[:space:]]*)([\"']?)[^[:space:]\"';&|()\`]*[/\\\\]([[:alnum:]_][[:alnum:]_.+-]*)[.]exe([\"']?([[:space:];&|)\`]|$))"
+  local re="(^|[[:space:];&|(\`{\"'/\\\\])([[:alnum:]_][[:alnum:]_.+-]*)[.]exe([\"']?([[:space:];&|)\`]|$))"
+  while [[ $s =~ $rp ]]; do
+    [ "$k" -ge 20 ] && block "명령에 .exe 낱말이 너무 많아(20개 넘음) 판정할 수 없어 막았습니다." "명령을 나눠 실행하세요."
+    k=$((k + 1)); m0=${BASH_REMATCH[0]}
+    s=${s/"$m0"/"${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"}
+  done
+  while [[ $s =~ $re ]]; do
+    [ "$k" -ge 20 ] && block "명령에 .exe 낱말이 너무 많아(20개 넘음) 판정할 수 없어 막았습니다." "명령을 나눠 실행하세요."
+    k=$((k + 1)); m0=${BASH_REMATCH[0]}
+    s=${s/"$m0"/"${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}"}
+  done
+  XN=$s
+}
 # 판정용 모양 만들기 — $1 = 풀어 놓은 명령 → NC(정규화한 명령) · LR(무해한 리다이렉트·git 전역 옵션 정리, 따옴표 그대로) · LX(비밀값 판정용)
 # check_shell 이 원형으로 한 번, heredoc 본문을 거른 비밀값 판정용 사본(UVS)이 다르면 그것으로 한 번 더 부른다
 mk_views() {
@@ -2268,6 +2598,7 @@ mk_views() {
   rm_empty_quotes "$c"; c=$EQ
   expand_vars "$c"; c=$EV
   strip_call_opt "$c"; c=$SC
+  case "$c" in *.exe*) exe_norm "$c"; c=$XN ;; esac
   NC=$c
   # 안전 이름만 찾는 환경변수 검색(env | grep PATH)은 덤프가 아니다 — 판정용 문자열에서 env 를 true 로 바꾼다(-v 는 제외)
   local re_egs="(^|[;&|({[:space:]])(env|printenv)[[:space:]]*[|][[:space:]]*(grep|egrep|findstr|select-string|sls)(([[:space:]]+-[a-uw-zA-UW-Z]+)*)[[:space:]]+[\"']?\^?([A-Za-z_][A-Za-z0-9_]*)=?[\"']?([[:space:];&|)]|$)"
@@ -2412,8 +2743,14 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ -z "$cmd" ] && return 0
   local m0 m4 pre rest seg SQLRAW=""
   # 명령이 실행되는 폴더(Bash 도구의 현재 폴더) — 와일드카드 파일 이름을 실제로 펼쳐 볼 때 쓴다
-  jget cwd; unesc_line "$JV"; cwd=${UV//"$BS"/$SL}; cwd=${cwd%/}; [ -z "$cwd" ] && cwd=$proj
+  jget cwd; unesc_line "$JV"; cwd=${UV//"$BS"/$SL}; cwd=${cwd%/}
+  # 가지 강제 삭제 허용 판정(br_judge)의 결과·문구 — 이 호출에서 한 번만. 허용은 Bash 도구의 맨 위 명령(인자 없이 부른 check_shell)일 때만.
+  #   도구 입력에 작업 폴더(cwd)가 없거나 비었으면 BRCWD 를 비워 둔다(프로젝트 폴더로 짐작해 판정하지 않는다)
+  local BRV="" BRM1="" BRM2="" BRTOP=0 BRCWD=""
+  if [ -z "$cwd" ]; then cwd=$proj; else BRCWD=1; fi
   normpath "$cwd" /; cwd=$NP
+  [ -n "$BRCWD" ] && BRCWD=$cwd
+  [ "$#" -eq 0 ] && [ "$tool" = Bash ] && BRTOP=1
 
   # 판정용 모양(mk_views): 정규화한 명령(cmd) · lr · lx. 비밀값 판정용 사본(cmds, heredoc 본문을 줄 단위로 거른 것)이 다르면 그것으로도 lx 를 만든다
   local lxs="" cmd0=$cmd

@@ -818,6 +818,11 @@ def main():
     check_subst_023(res)
     check_awkfail_023(res)
     check_fsmon_023(res)
+    check_grep_024(res)
+    check_turn_024(res)
+    check_branch_024(res)
+    check_fix_024(res)
+    check_turnfix_024(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -1828,6 +1833,960 @@ def check_awkfail_023(res):
         PATH_PREFIX = keep
         shutil.rmtree(proj, ignore_errors=True)
         shutil.rmtree(d, ignore_errors=True)
+
+
+def check_grep_024(res):
+    """0.2.4 B: Grep 도구 내용 검색 — 범위가 git 저장소 안이면 폴더를 훑지 않고 git 파일 목록(추적 + 안 추적, 무시된 것 제외)으로
+    판정한다(폴더 수·깊이 제한 없음 · 숨김·무거운 폴더도 봄 · 안 추적 중첩 저장소·서브모듈 안도 봄). git 밖은 지금 방식(훑기)."""
+    global PATH_PREFIX
+    sec = "." + "env"
+    G = lambda **kw: ("Grep", dict({"pattern": "KEY", "output_mode": "content"}, **kw))
+    wide2 = 'path로 코드 폴더(예: src)를 지정하거나 type(예: "js")으로 파일 종류를 좁히세요.'
+    made = []
+
+    def proj_(gitignore=None, folders=0, nogit=False):
+        p = make_project()
+        made.append(p)
+        if gitignore is not None:
+            lf(p / ".gitignore", gitignore)
+        for i in range(folders):
+            (p / "pkg" / f"d{i:04d}").mkdir(parents=True)
+        if nogit:
+            rmtree_rw(p / ".git")
+        return p
+
+    def put(p, rel, commit=False):
+        (p / rel).parent.mkdir(parents=True, exist_ok=True)
+        lf(p / rel, "KEY=1\n")
+        if commit:
+            git(p, "add", "-f", rel)
+            git(p, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "c")
+
+    def case(title, want, p, tin, need=None):
+        t0 = time.perf_counter()
+        code, err = run(p, *tin)
+        dt = time.perf_counter() - t0
+        res["total"] += 1
+        bad = code != want or (need is not None and need not in err)
+        if bad:
+            res["fails"].append(("0.2.4 B " + title, want, code, tin[0], json.dumps(tin[1], ensure_ascii=False)[:120], err.strip()[:200]))
+        return dt
+
+    try:
+        # T1·T2: git 저장소, 폴더 250개, 비밀값은 무시된 .env 뿐 → 통과 / 무시된 .env 가 4단계 아래 → 통과
+        p = proj_(folders=250)
+        case("T1 폴더 250개·무시된 .env 만", OK, p, G())
+        put(p, "a/b/c/d/" + sec)
+        case("T2 무시된 .env 4단계 아래", OK, p, G())
+        # T3·T4·T5: 지금 방식이 놓치던 곳(4단계 아래 · 3단계 숨김 폴더 · 커밋된 vendor)의 무시 안 된 .env → 막음
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "a/b/c/d/" + sec)
+        case("T3 무시 안 된 .env 4단계 아래", B, p, G())
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "a/b/.cfg/" + sec)
+        case("T4 무시 안 된 .env 3단계 숨김 폴더", B, p, G())
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "vendor/" + sec, commit=True)
+        case("T5 커밋된 vendor/.env", B, p, G())
+        # T6: .gitignore 에 있지만 이미 커밋된 .env → 막음 / T7: .env.example 만 → 통과
+        p = proj_()
+        git(p, "add", "-f", sec)
+        git(p, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "c")
+        case("T6 무시 목록에 있지만 커밋된 .env", B, p, G())
+        p = proj_(gitignore="node_modules\n")
+        (p / sec).unlink()
+        put(p, sec + ".example")
+        case("T7 .env.example 만", OK, p, G())
+        # T8: glob 이 실제로 좁힌다(폴더 250개에서도) — *.ts + 무시 안 된 .env.ts → 막음 / *.ts + 무시 안 된 .env 만 → 통과
+        p = proj_(folders=250)
+        put(p, "src/" + sec + ".ts")
+        case("T8 glob *.ts + .env.ts", B, p, G(glob="*.ts"))
+        (p / "src" / (sec + ".ts")).unlink()
+        lf(p / ".gitignore", "node_modules\n")
+        case("T8 glob *.ts + 무시 안 된 .env 만", OK, p, G(glob="*.ts"))
+        # T14: 내용 검색이 아니거나 type 이 있으면 그대로 통과(무시 안 된 .env 가 있어도)
+        case("T14 files_with_matches", OK, p, ("Grep", {"pattern": "KEY", "output_mode": "files_with_matches"}))
+        case("T14 type js", OK, p, G(type="js"))
+        # T9·T15: git 아닌 폴더 250개 → 막음(지금처럼) + 새 안내 문구 + 기록 줄에 한도 종류·숫자(60자 안)
+        p = proj_(folders=250, nogit=True)
+        case("T9 git 아닌 폴더 250개", B, p, G(), need=wide2)
+        log = pathlib.Path(TEST_DATA) / "problems.log"
+        last = log.read_text(encoding="utf-8").splitlines()[-1] if log.exists() else ""
+        res["total"] += 1
+        if "[Grep · 폴더 수 " not in last:
+            res["fails"].append(("0.2.4 B T15 기록 줄에 [Grep · 폴더 수", "있음", "없음", "Grep", "", last[-120:]))
+        # T10: git 아닌 작은 폴더 + .env → 막음
+        p = proj_(nogit=True)
+        case("T10 git 아닌 작은 폴더 + .env", B, p, G())
+        # T11: 범위가 저장소의 하위 폴더 — 그 밖에만 무시 안 된 .env → 통과 / 그 안에 있음 → 막음
+        p = proj_(gitignore="node_modules\n")
+        case("T11 하위 폴더 범위(밖에만 .env)", OK, p, G(path="src"))
+        put(p, "src/" + sec)
+        case("T11 하위 폴더 범위(안에 .env)", B, p, G(path="src"))
+        # T12: 안 추적 중첩 저장소 안의 무시 안 된 .env → 막음 / 서브모듈(추적된 gitlink) 안 → 막음
+        p = proj_(gitignore="/" + sec + "\n")
+        (p / "nested").mkdir()
+        git(p / "nested", "init", "-q")
+        put(p, "nested/" + sec)
+        case("T12 안 추적 중첩 저장소 안 .env", B, p, G())
+        p = proj_(gitignore="/" + sec + "\n")
+        (p / "sub").mkdir()
+        git(p / "sub", "init", "-q")
+        put(p / "sub", "s.txt", commit=True)
+        git(p, "add", "sub")
+        git(p, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "gitlink")
+        put(p, "sub/deep/" + sec)
+        case("T12 gitlink(서브모듈) 안 .env", B, p, G())
+        # T13: 한글 이름 폴더 안의 무시 안 된 .env → 막음
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "설정/비밀/" + sec)
+        case("T13 한글 폴더 안 .env", B, p, G())
+        # T16: 목록 명령(ls-files)만 실패하는 가짜 git(PATH 맨 앞) + 무시 안 된 .env → 통과시키지 않는다
+        p = proj_(gitignore="node_modules\n")
+        fake = pathlib.Path(tempfile.mkdtemp(prefix="fakegit-"))
+        made.append(fake)
+        lf(fake / "git", "#!/usr/bin/env bash\ncase \" $* \" in *' ls-files '*) exit 1 ;; esac\nPATH=${PATH#*:}; exec git \"$@\"\n")
+        os.chmod(fake / "git", 0o755)
+        keep = PATH_PREFIX
+        PATH_PREFIX = str(fake)
+        try:
+            case("T16 가짜 git(목록 실패) + 무시 안 된 .env", B, p, G())
+        finally:
+            PATH_PREFIX = keep
+        # T17: 폴더 1,500개 git 저장소 + 무시된 .env 만 → 통과, 5초 안
+        p = proj_(folders=1500)
+        dt = case("T17 폴더 1,500개·무시된 .env 만", OK, p, G())
+        print(f"  0.2.4 · T17 폴더 1,500개 git 목록 판정: {dt*1000:.0f}ms")
+        res["total"] += 1
+        if dt > 5:
+            res["fails"].append(("0.2.4 B T17 시간", "5초 안", f"{dt:.2f}s", "Grep", "", ""))
+        # T18: 대문자 이름 .ENV(무시 안 됨) — 지금 방식과 같은 판정(이름 꼴은 대소문자를 가린다 → 통과)
+        p = proj_(gitignore="/" + sec + "\n")
+        put(p, "src/" + sec.upper())
+        case("T18 대문자 .ENV", OK, p, G())
+    finally:
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
+
+
+def check_turn_024(res):
+    """0.2.4 C: 입력 훅(turn.sh)이 느린 계산 도중 끊겨도 규칙이 꺼지지 않는다 — 느린 계산(승인 재설정·실행 대기 계산·snapshot)
+    전에 닫힌 표시(ready ?)를 먼저 쓰고, 표시 파일은 늘 임시 파일 → mv 로 쓴다. 끊김은 사본 플러그인의 느린 자리에서 멈춘 순간의
+    상태로 본다(멈춘 동안 표시 파일·guard 판정을 보고, 그다음 훅을 끊는다). 시간은 상한으로만 쓴다(멈춤 지점에 못 닿으면 실패)."""
+    import re
+    import signal
+    edit_src = ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "x"})
+    why_q = "입력 처리가 늦어 실행 대기 단계를 확인하지 못해"
+    note_q = "사용자에게 /refactor:go 를 다시 입력해 달라고 하세요."
+    made = []
+    plug = pathlib.Path(tempfile.mkdtemp(prefix="turn024-"))
+    made.append(plug)
+    shutil.copytree(ROOT / "plugins/refactor", plug / "refactor")
+    ctl = plug / "ctl"
+    ctl.mkdir()
+    reached, release = ctl / "reached", ctl / "release"
+    wait_loop = (f": > '{reached.as_posix()}'; __i=0; while [ ! -f '{release.as_posix()}' ] && [ $__i -lt 300 ]; "
+                 "do sleep 0.1; __i=$((__i + 1)); done")
+    # 사본 라이브러리: 카드 목록 함수(rl_cards — 승인 재설정·실행 대기 계산이 부른다)가 TURN024_PAUSE 면 멈추고, TURN024_SLEEP 이면 잔다
+    lib = plug / "refactor/scripts/refactor-lib.sh"
+    lib.write_bytes(lib.read_bytes() + (
+        "\n__f=$(declare -f rl_cards); eval \"__real_rl_cards${__f#rl_cards}\"\n"
+        "rl_cards() { if [ -n \"${TURN024_PAUSE:-}\" ]; then " + wait_loop + "; fi; "
+        "[ -n \"${TURN024_SLEEP:-}\" ] && sleep \"$TURN024_SLEEP\"; __real_rl_cards \"$@\"; }\n").encode())
+    # 가짜 git: 상태 조회(status)에서 멈춘다(snapshot 의 git) — 그 밖은 진짜 git
+    fake = plug / "fakegit"
+    fake.mkdir()
+    lf(fake / "git", "#!/usr/bin/env bash\ncase \" $* \" in *' status '*) " + wait_loop + " ;; esac\nPATH=${PATH#*:}; exec git \"$@\"\n")
+    os.chmod(fake / "git", 0o755)
+    run_sh = (plug / "refactor/hooks/run.sh").as_posix()
+
+    def fail(title, want, got, detail="", err=""):
+        res["fails"].append(("0.2.4 C " + title, want, got, "UserPromptSubmit", detail, err))
+
+    def proj_(phase="EXECUTE", gate=None, mark=None, approve_id="P1-1"):
+        p = make_project(phase="EXECUTE")
+        made.append(p)
+        if approve_id:
+            approve(p, approve_id)
+        if phase != "EXECUTE" or gate:
+            lf(p / "docs/refactor/STATE.md", f"---\nphase: {phase}\ngate: {gate or 'none'}\n---\n")
+        if mark is not None:
+            lf(p / "docs/refactor/.turn.t", mark)
+        return p
+
+    def payload(p, prompt):
+        return json.dumps({"session_id": "t", "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(p)},
+                          ensure_ascii=False).encode("utf-8")
+
+    def env_(p, extra=None, fakegit=False):
+        env = env_for(p)
+        env.update(extra or {})
+        if fakegit:
+            env["PATH"] = str(fake) + os.pathsep + env["PATH"]
+        return env
+
+    def start(p, prompt, extra=None, fakegit=False):
+        """사본 플러그인으로 입력 훅을 띄우고 멈춤 지점에 닿을 때까지(최대 20초) 기다린다 → (프로세스, 닿았나)"""
+        for f in (reached, release):
+            if f.exists():
+                f.unlink()
+        kw = {"start_new_session": True} if os.name != "nt" else {}
+        pr = subprocess.Popen([BASH, run_sh, "turn"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, env=env_(p, extra, fakegit), **kw)
+        pr.stdin.write(payload(p, prompt))
+        pr.stdin.close()
+        t0 = time.monotonic()
+        while not reached.exists() and pr.poll() is None and time.monotonic() - t0 < 20:
+            time.sleep(0.05)
+        return pr, reached.exists()
+
+    def cut(pr):
+        """훅을 끊는다(Claude Code 의 시간 초과처럼). POSIX 는 프로세스 묶음째 KILL, Windows 는 풀어 주고 끝나기를 기다린다."""
+        if os.name != "nt":
+            try:
+                os.killpg(pr.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        lf(release, "")
+        try:
+            pr.wait(timeout=40)
+        except subprocess.TimeoutExpired:
+            pr.kill()
+            pr.wait()
+
+    def mark_lines(p):
+        f = p / "docs/refactor/.turn.t"
+        return f.read_text(encoding="utf-8").splitlines() if f.exists() else None
+
+    def names(p):
+        return {x.name for x in (p / "docs/refactor").iterdir()}
+
+    def leftovers_ok(p, before):
+        """끊긴 뒤 새로 생긴 이름이 모두 .turn 으로 시작하는가(.gitignore 의 .turn* · 하루 청소의 -name '.turn*' 대상).
+        go 턴이 맨 먼저 만드는 기록 폴더의 .gitignore 는 제외"""
+        res["total"] += 1
+        if os.name == "nt":
+            return
+        bad = sorted(n for n in names(p) - before if not n.startswith(".turn") and n != ".gitignore")
+        if bad:
+            fail("T9 끊긴 뒤 남은 파일 이름", ".turn*", bad)
+
+    try:
+        # T1: 보통 /refactor:go (EXECUTE, 승인된 단계 하나) → go t / ready P1-1
+        p = proj_()
+        turn(p, "t", "/refactor:go")
+        res["total"] += 1
+        if mark_lines(p) != ["go t", "ready P1-1"]:
+            fail("T1 보통 go", ["go t", "ready P1-1"], mark_lines(p))
+
+        # T2: go + 느린 실행 대기 계산 → 멈춘 동안 표시 = go t / ready ? · Edit 막힘 + 새 문구 · npm test 는 안전 실행기 요구
+        p = proj_()
+        before = names(p)
+        pr, ok = start(p, "/refactor:go", {"TURN024_PAUSE": "1"})
+        try:
+            res["total"] += 1
+            if not ok or mark_lines(p) != ["go t", "ready ?"]:
+                fail("T2 go 느린 계산 중 표시", ["go t", "ready ?"], mark_lines(p), f"멈춤 지점 {'닿음' if ok else '못 닿음'}")
+            code, err = run(p, *edit_src)
+            res["total"] += 1
+            if code != B or why_q not in err or note_q not in err:
+                fail("T2 Edit 막힘 + 새 문구 두 글귀", B, code, "Edit src/app.ts", err.strip()[:300])
+            code, err = run(p, *bash("npm test"))
+            res["total"] += 1
+            if code != B or "안전 실행기로만" not in err:
+                fail("T2 npm test 안전 실행기 요구", B, code, "npm test", err.strip()[:200])
+        finally:
+            cut(pr)
+        leftovers_ok(p, before)
+
+        # T3: 읽기 전용 단계(CHECKUP) + 같은 끊김 → 코드 파일 Edit 막힘
+        p = proj_(phase="CHECKUP")
+        before = names(p)
+        pr, ok = start(p, "/refactor:go", {"TURN024_PAUSE": "1"})
+        try:
+            code, err = run(p, *edit_src)
+            res["total"] += 1
+            if not ok or code != B:
+                fail("T3 CHECKUP 끊김 중 Edit 막힘", B, code, f"멈춤 지점 {'닿음' if ok else '못 닿음'}", err.strip()[:200])
+        finally:
+            cut(pr)
+        leftovers_ok(p, before)
+
+        # T4: 질문 대기(ask-user) + 앞 턴 표시 ready P1-2 + 일반 문장 + 느린 계산 → 2줄이 ready ?(낡은 P1-2 아님)
+        p = proj_(gate="ask-user", mark="go t\nready P1-2\n")
+        pr, ok = start(p, "네, 그렇게 해 주세요", {"TURN024_PAUSE": "1"})
+        try:
+            res["total"] += 1
+            if not ok or mark_lines(p) != ["go t", "ready ?"]:
+                fail("T4 질문 대기 중 낡은 목록", ["go t", "ready ?"], mark_lines(p), f"멈춤 지점 {'닿음' if ok else '못 닿음'}")
+        finally:
+            cut(pr)
+        # 끊기지 않으면 진짜 목록으로 다시 쓴다(지금과 같음)
+        turn(p, "t", "네, 그렇게 해 주세요")
+        res["total"] += 1
+        if mark_lines(p) != ["go t", "ready P1-1"]:
+            fail("T4 질문 대기(끊기지 않음) 진짜 목록", ["go t", "ready P1-1"], mark_lines(p))
+
+        # T5: 대기 아님 + 앞 턴 표시 + 일반 문장 + 느린 git(상태 조회에서 멈춤) → 멈춘 시점에 표시가 이미 없다
+        p = proj_(mark="go t\nready P1-1\n")
+        pr, ok = start(p, "그냥 질문인데요", fakegit=True)
+        try:
+            res["total"] += 1
+            if not ok or mark_lines(p) is not None:
+                fail("T5 느린 git 중 표시 지움", None, mark_lines(p), f"멈춤 지점 {'닿음' if ok else '못 닿음'}")
+        finally:
+            cut(pr)
+
+        # T6: /refactor:go 다시 P1-1 + 느린 재설정(재설정 안의 카드 목록에서 멈춤) → 재설정 도중에 닫힌 표시가 이미 있다
+        p = proj_()
+        pr, ok = start(p, "/refactor:go 다시 P1-1", {"TURN024_PAUSE": "1"})
+        try:
+            log = (p / "docs/refactor/APPROVALS.log").read_text(encoding="utf-8")
+            res["total"] += 1
+            if not ok or "재설정" not in log or mark_lines(p) != ["go t", "ready ?"]:
+                fail("T6 다시 + 느린 재설정 중 표시", ["go t", "ready ?"], mark_lines(p),
+                     f"멈춤 지점 {'닿음' if ok else '못 닿음'} · 재설정 줄 {'있음' if '재설정' in log else '없음'}")
+        finally:
+            cut(pr)
+
+        # T7: 기준선 작성 단계(BASELINE, 승인 유효) + 표시 ready ? → 고치기 전과 같은 판정(코드 수정 허용 · npm test 는 안전 실행기 요구)
+        p = make_project(phase="BASELINE", baseline_approved=True)
+        made.append(p)
+        lf(p / "docs/refactor/.turn.t", "go t\nready ?\n")
+        for want, tin, need in [(OK, edit_src, None), (B, bash("npm test"), "안전 실행기로만")]:
+            code, err = run(p, *tin)
+            res["total"] += 1
+            if code != want or (need and need not in err):
+                fail("T7 BASELINE + ready ?", want, code, tin[0], err.strip()[:200])
+
+        # T8: turn.sh 가 표시 파일("$T")에 > 로 직접 쓰는 줄 0
+        src = (ROOT / "plugins/refactor/hooks/turn.sh").read_text(encoding="utf-8")
+        direct = [ln.strip() for ln in src.splitlines() if re.search(r'>>?\s*"\$T"', ln)]
+        res["total"] += 1
+        if direct:
+            fail("T8 표시 파일 직접 쓰기 줄", 0, len(direct), "", " / ".join(direct)[:200])
+
+        # T9: 표시 파일로 옮기는 임시 파일 이름이 "$T." 로 시작(= .turn.<세션>.… — .turn* 무시·청소 대상)
+        mvs = [ln.strip() for ln in src.splitlines() if re.search(r'\bmv\b[^;|&]*"\$T"', ln)]
+        res["total"] += 1
+        if not mvs or any(not re.search(r'\bmv\s+(-f\s+)?"\$T\.', ln) for ln in mvs):
+            fail("T9 임시 파일 이름 .turn*", "mv \"$T.…\" \"$T\"", mvs or "mv 없음")
+
+        # T10: 입력 훅이 10초 넘게 걸려 끝나면 문제 기록에 turn 느림 한 줄(명령·경로·입력 글 없음) · 빨리 끝나면 0줄
+        plog = pathlib.Path(TEST_DATA) / "problems.log"
+
+        def slow_lines():
+            if not plog.exists():
+                return []
+            return [ln for ln in plog.read_text(encoding="utf-8").splitlines() if "| turn |" in ln and "느림" in ln]
+
+        p = proj_()
+        n0 = len(slow_lines())
+        run_hook([BASH, run_sh, "turn"], input=payload(p, "/refactor:go"), capture_output=True, env=env_(p))
+        n1 = len(slow_lines())
+        res["total"] += 1
+        if n1 != n0:
+            fail("T10 빨리 끝난 턴은 기록 없음", 0, n1 - n0)
+        t0 = time.perf_counter()
+        run_hook([BASH, run_sh, "turn"], input=payload(p, "/refactor:go"), capture_output=True, env=env_(p, {"TURN024_SLEEP": "11"}))
+        dt = time.perf_counter() - t0
+        got = slow_lines()[n1:]
+        res["total"] += 1
+        if len(got) != 1 or not re.search(r"\| turn \| 느림 1\d초$", got[0]) or mark_lines(p) != ["go t", "ready P1-1"]:
+            fail("T10 10초 넘은 턴 기록 한 줄", "… | turn | 느림 1N초", got, f"{dt:.1f}s · 표시 {mark_lines(p)}")
+    finally:
+        try:
+            lf(release, "")
+        except OSError:
+            pass
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
+
+
+def check_branch_024(res):
+    """0.2.4 A: 가지 강제 삭제 — 강제 삭제의 모든 철자(-D · -d/-f 묶음 · 긴 옵션 줄임)를 같은 것으로 보고,
+    Bash 도구의 한 줄 명령([cd <경로> && ]git [-C <경로> ]branch <옵션> <이름…>)일 때만 그 저장소에서 판정한다:
+    기본 가지(origin/HEAD → origin/main → origin/master, origin 원격이 없을 때만 로컬 main → master)의 조상이거나
+    merge-tree 결과가 기본 가지 트리와 같으면(스쿼시 합침) 통과, 아니면 막는다. 저장소는 버리는 임시 저장소(명령은 실행하지 않는다)."""
+    global PATH_PREFIX
+    made = []
+    not_merged = "합치지 않은 가지는 지우지 않습니다("
+    cant = "가지 삭제를 판정할 수 없어 막았습니다("
+    forms = ["-df", "-fd", "-d -f", "-f -d", "-d --force", "--delete -f", "--force -d", "--delete -q --force", "--dele --forc"]
+
+    def g(d, *args):
+        r = subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+                            "-c", "core.autocrlf=false", "-C", str(d), *args], capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)}: {r.stderr.decode('utf-8', 'replace')}")
+        return r.stdout.decode("utf-8", "replace").strip()
+
+    def put(d, name, text, msg="c"):
+        p = pathlib.Path(d) / name
+        if text is None:
+            p.unlink()
+            g(d, "rm", "-q", "--cached", "--ignore-unmatch", name)
+        else:
+            lf(p, text)
+            g(d, "add", name)
+        g(d, "commit", "-qm", msg)
+
+    def tmpdir(prefix):
+        d = pathlib.Path(tempfile.mkdtemp(prefix=prefix))
+        made.append(d)
+        return d
+
+    def repo(main="main", origin=True, track=True):
+        d = tmpdir("br024-")
+        g(d, "init", "-q")
+        g(d, "symbolic-ref", "HEAD", "refs/heads/" + main)
+        put(d, "base.txt", "base\n", "init")
+        if origin:
+            g(d, "remote", "add", "origin", str(tmpdir("br024o-")))
+        return d
+
+    def branch(d, name, files, main="main"):
+        """main 에서 가지를 만들고 files(이름 → 내용, None = 지움) 를 차례로 커밋한 뒤 main 으로 돌아온다"""
+        g(d, "checkout", "-q", "-b", name, main)
+        for f, t in files:
+            put(d, f, t)
+        g(d, "checkout", "-q", main)
+
+    def squash(d, name, main="main"):
+        """가지 name 의 파일 name.txt 를 main 에 한 커밋으로 넣는다(스쿼시 합침)"""
+        put(d, name + ".txt", name + "\n", "squash " + name)
+
+    def track(d, main="main"):
+        g(d, "update-ref", "refs/remotes/origin/" + main, "refs/heads/" + main)
+
+    def case(title, want, d, cmd, need=None, tool="Bash", cwd=None):
+        tin = {"command": cmd, "description": "t"} if tool in ("Bash", "PowerShell") else cmd
+        t0 = time.perf_counter()
+        code, err = run(d, tool, tin, extra={"cwd": str(cwd or d)})
+        dt = time.perf_counter() - t0
+        res["total"] += 1
+        if code != want or (need is not None and need not in err):
+            res["fails"].append(("0.2.4 A " + title, want, code, tool, json.dumps(tin, ensure_ascii=False)[:150], err.strip()[:300]))
+        return dt
+
+    try:
+        # 기본 저장소: origin 원격 + origin/HEAD → origin/main(= main)
+        r = repo()
+        names = ["sq1", "sq2", "sq3", "un", "pr", "rev", "cfl"] + [f"m{i}" for i in range(11)]
+        for n in names:
+            branch(r, n, [(n + ".txt", n + "\n")])
+        for n in ["sq1", "sq2", "sq3", "rev", "cfl"] + [f"m{i}" for i in range(11)]:
+            squash(r, n)
+        put(r, "rev.txt", None, "revert rev")                 # 합친 뒤 되돌림
+        put(r, "cfl.txt", "other\n", "change cfl")            # 합친 뒤 같은 줄을 다르게
+        branch(r, "anc", [("anc.txt", "anc\n")])
+        g(r, "merge", "-q", "--no-ff", "-m", "merge anc", "anc")   # 보통 합침(조상)
+        branch(r, "zero", [("z.txt", "z\n"), ("z.txt", None)])     # 가지 안에서 만들고 지움(순변화 0)
+        branch(r, "tg", [("tg.txt", "tg\n")])
+        g(r, "tag", "tg", "main")                             # 태그 tg 는 main, 가지 tg 는 안 합친 커밋
+        put(r, "after.txt", "after\n", "unrelated")           # 합친 뒤 main 에 무관한 커밋 1개 더
+        track(r)
+        g(r, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        other = tmpdir("br024cwd-")                           # 저장소가 아닌 다른 폴더(도구 cwd)
+
+        case("A-1 스쿼시 합침", OK, r, "git branch -D sq1")
+        case("A-2 보통 합침(조상)", OK, r, "git branch -D anc")
+        case("A-3 안 합침", B, r, "git branch -D un",
+             need="[refactor 안전장치] " + not_merged + "un: 기본 가지 origin/main 에 없는 내용이 있음). [가지 삭제 · 안 합쳐짐]\n"
+                  "  → 사람이 직접 결정합니다. 사용자에게 git branch -D un 명령을 드려 직접 실행하게 하세요. "
+                  "방금 GitHub 에서 합쳤다면 git fetch origin 을 먼저 실행한 뒤 다시 시도하세요.")
+        case("A-4 합친 뒤 main 이 되돌림", B, r, "git branch -D rev", need=not_merged)
+        case("A-5 합친 뒤 main 이 같은 줄을 다르게", B, r, "git branch -D cfl", need=not_merged)
+        case("A-6 합친 둘", OK, r, "git branch -D sq1 sq2")
+        case("A-6 합친 하나 + 안 합친 하나", B, r, "git branch -D sq1 un",
+             need=not_merged + "un: 기본 가지 origin/main 에 없는 내용이 있음).")
+        case("A-7 같은 명령 안 변수", B, r, "b=sq1; git branch -D $b")
+        case("A-7 정의 안 된 변수", B, r, "git branch -D $b", need=cant + "이름이 변수·명령 결과)")
+        case("A-7 명령 결과", B, r, "git branch -D $(git branch --merged)", need=cant + "이름이 변수·명령 결과)")
+        case("A-7 xargs", B, r, "git branch --merged | xargs git branch -D")
+        case("A-8 cd && (다른 cwd)", OK, r, f"cd {r.as_posix()} && git branch -D sq1", cwd=other)
+        case("A-8 cd ; (다른 cwd)", B, r, f"cd {r.as_posix()}; git branch -D sq1", cwd=other, need=cant + "한 줄 삭제 명령이 아님)")
+        case("A-8 git -C (다른 cwd)", OK, r, f"git -C {r.as_posix()} branch -D sq1", cwd=other)
+        case("A-8 --git-dir", B, r, f"git --git-dir={r.as_posix()}/.git branch -D sq1", cwd=other)
+        case("A-8 GIT_DIR=", B, r, f"GIT_DIR={r.as_posix()}/.git git branch -D sq1", cwd=other)
+        case("A-8 cwd 가 저장소 아님", B, r, "git branch -D sq1", cwd=other, need=cant + "저장소 위치를 알 수 없음)")
+        case("A-2 두 줄(합친 가지 둘)", B, r, "git branch -D sq1\ngit branch -D sq2", need=cant + "한 줄 삭제 명령이 아님)")
+        for f in forms:
+            case("A-9 안 합친 가지 " + f, B, r, f"git branch {f} un")
+        for f in forms:
+            case("A-10 합친 가지 " + f, OK, r, f"git branch {f} sq1")
+        case("A-12 기본 가지 자신", B, r, "git branch -D main", need=cant + "기본 가지 자신)")
+        case("A-13 없는 가지", B, r, "git branch -D nosuch", need=cant + "가지 없음)")
+        case("A-14 bash -c", B, r, 'bash -c "git branch -D sq1"')
+        case("A-14 eval", B, r, 'eval "git branch -D sq1"')
+        case("A-16 태그와 같은 이름(가지는 안 합침)", B, r, "git branch -D tg", need=not_merged)
+        case("A-17 Agent 지시문 코드 블록", B, r, ("Agent", {"description": "t", "prompt": "정리:\n```bash\ngit branch -D sq1\n```\n"})[1],
+             tool="Agent")
+        ten = " ".join(f"m{i}" for i in range(10))
+        dt = case("A-18 합친 가지 10개", OK, r, "git branch -D " + ten)
+        print(f"  0.2.4 · A-18 합친 가지 10개 판정: {dt*1000:.0f}ms")
+        res["total"] += 1
+        if dt > 10:
+            res["fails"].append(("0.2.4 A A-18 시간", "10초 안", f"{dt:.2f}s", "Bash", "", ""))
+        case("A-18 11개", B, r, "git branch -D " + ten + " m10", need=cant + "가지가 10개 넘음)")
+        case("A-19 원격 추적 가지", B, r, "git branch -r -D origin/main")
+        case("A-20 -C 작은따옴표", OK, r, f"git -C '{r.as_posix()}' branch -D sq1", cwd=other)
+        case("A-20 -C 큰따옴표", OK, r, f'git -C "{r.as_posix()}" branch -D sq1', cwd=other)
+        for n in ["sq1", "sq2", "sq3"]:
+            case("A-21 미분양 꼴 스쿼시 " + n, OK, r, "git branch -D " + n)
+        case("A-21 미분양 꼴 열린 PR 가지", B, r, "git branch -D pr", need=not_merged)
+        case("A-22 한계: 가지 안에서 만들고 지움(순변화 0)", OK, r, "git branch -D zero")
+        case("A-23 update-ref 로 기준 옮기기", B, r, "git update-ref refs/remotes/origin/main refs/heads/un",
+             need="git 기록을 다시 쓰거나 지우는 명령입니다.")
+        case("A-23 update-ref -d 기준", B, r, "git update-ref -d refs/remotes/origin/main")
+        case("A-25 PowerShell", B, r, "git branch -D sq1", tool="PowerShell")
+        case("A-26 허용 꼴 + reset --hard", B, r, f"git -C {r.as_posix()} branch -D sq1 && git reset --hard")
+        case("A-28 -d(강제 아님)", OK, r, "git branch -d un")
+        case("A-28 -f(삭제 아님)", OK, r, "git branch -f un HEAD~1")
+        case("A-28 -m", OK, r, "git branch -m un un2")
+
+        # A-15: merge-tree 만 129 로 끝나는 가짜 git(PATH 맨 앞) + 스쿼시 합친 가지 → 막음(git 2.38 미만)
+        fake = tmpdir("br024git-")
+        lf(fake / "git", "#!/usr/bin/env bash\ncase \" $* \" in *' merge-tree '*) exit 129 ;; esac\nPATH=${PATH#*:}; exec git \"$@\"\n")
+        os.chmod(fake / "git", 0o755)
+        keep = PATH_PREFIX
+        PATH_PREFIX = str(fake)
+        try:
+            case("A-15 git 2.38 미만(가짜 git)", B, r, "git branch -D sq1", need=cant + "git 2.38 미만)")
+        finally:
+            PATH_PREFIX = keep
+
+        # A-11: 기준 가지 찾기
+        r2 = repo()
+        branch(r2, "sq", [("sq.txt", "sq\n")])
+        squash(r2, "sq")
+        track(r2)                                             # origin/HEAD 없음 + origin/main
+        case("A-11 origin/HEAD 없음 + origin/main", OK, r2, "git branch -D sq")
+        r3 = repo(origin=False)
+        branch(r3, "sq", [("sq.txt", "sq\n")])
+        squash(r3, "sq")                                      # origin 원격 없음 + 로컬 main
+        case("A-11 origin 없음 + 로컬 main", OK, r3, "git branch -D sq")
+        r4 = repo()
+        branch(r4, "sq", [("sq.txt", "sq\n")])
+        squash(r4, "sq")                                      # origin 원격 있지만 참조 없음(로컬 main 은 있음)
+        case("A-11 origin 참조 없음", B, r4, "git branch -D sq", need=cant + "기본 가지를 못 찾음)")
+        r5 = repo(main="trunk", origin=False)
+        branch(r5, "sq", [("sq.txt", "sq\n")], main="trunk")
+        squash(r5, "sq")                                      # main·master 둘 다 없음
+        case("A-11 main·master 없음", B, r5, "git branch -D sq", need=cant + "기본 가지를 못 찾음)")
+
+        # A-24: origin/HEAD 가 origin 밖(refs/heads/feat)을 가리킴 + 안 합친 feat → origin/main 으로 판정 → 막음
+        r6 = repo()
+        branch(r6, "feat", [("feat.txt", "feat\n")])
+        track(r6)
+        g(r6, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/feat")
+        case("A-24 origin/HEAD 가 origin 밖", B, r6, "git branch -D feat",
+             need=not_merged + "feat: 기본 가지 origin/main 에 없는 내용이 있음).")
+
+        # A-27: 지금 체크아웃된 합친 가지 → guard 는 통과(git 이 거절하는 것은 따로 확인)
+        g(r, "checkout", "-q", "sq3")
+        case("A-27 체크아웃된 합친 가지", OK, r, "git branch -D sq3")
+    finally:
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
+
+
+def check_fix_024(res):
+    """0.2.4 검사관 지적 보완: 가지 강제 삭제 판정의 저장소 위치(.. · 상대 cd · 빈 cwd · 경로 가운데 ~)·합치기 드라이버·
+    replace·심볼릭 기준·기록 칸·문구, git.exe/gh.exe 를 git/gh 로 보기, 그리고 변이가 살아남던 자리(가지 이름의 ; · Grep 목록 실패)."""
+    global PATH_PREFIX
+    made = []
+    cant = "가지 삭제를 판정할 수 없어 막았습니다("
+    loc_why = cant + "저장소 위치를 알 수 없음). [가지 삭제 · 저장소 위치를 알 수 없음]"
+    not_merged = "합치지 않은 가지는 지우지 않습니다("
+    hint1 = ("  → 지울 가지 이름을 그대로 적어 git branch -D <가지> 한 줄로 실행하세요"
+             "(2>&1·파이프 같은 덧붙임 없이, 다른 저장소면 git -C <절대경로> 하나만).")
+    drv1 = "[refactor 안전장치] " + cant + "합치기 드라이버 설정). [가지 삭제 · 합치기 드라이버 설정]"
+
+    def drv2(names):
+        return ("  → 이 저장소에는 합칠 때 쓰는 프로그램 설정이 있어 스쿼시 합침을 확인할 수 없습니다. "
+                f"사용자에게 git branch -D {names} 명령을 드려 직접 실행하게 하세요.")
+
+    def g(d, *args):
+        r = subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+                            "-c", "core.autocrlf=false", "-C", str(d), *args], capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)}: {r.stderr.decode('utf-8', 'replace')}")
+        return r.stdout.decode("utf-8", "replace").strip()
+
+    def put(d, name, text, msg="c"):
+        (pathlib.Path(d) / name).parent.mkdir(parents=True, exist_ok=True)
+        lf(pathlib.Path(d) / name, text)
+        g(d, "add", name)
+        g(d, "commit", "-qm", msg)
+
+    def tmpdir(prefix):
+        d = pathlib.Path(tempfile.mkdtemp(prefix=prefix))
+        made.append(d)
+        return d
+
+    def repo(d=None):
+        d = d or tmpdir("fx024-")
+        d.mkdir(parents=True, exist_ok=True)
+        g(d, "init", "-q")
+        g(d, "symbolic-ref", "HEAD", "refs/heads/main")
+        put(d, "base.txt", "base\n", "init")
+        g(d, "remote", "add", "origin", str(tmpdir("fx024o-")))
+        return d
+
+    def branch(d, name, files):
+        g(d, "checkout", "-q", "-b", name, "main")
+        for f, t in files:
+            put(d, f, t)
+        g(d, "checkout", "-q", "main")
+
+    def track(d):
+        g(d, "update-ref", "refs/remotes/origin/main", "refs/heads/main")
+        g(d, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+    def std():
+        """sq(스쿼시 합침) · un(안 합침) · origin/HEAD → origin/main(= main)"""
+        d = repo()
+        branch(d, "sq", [("sq.txt", "sq\n")])
+        put(d, "sq.txt", "sq\n", "squash sq")
+        branch(d, "un", [("un.txt", "un\n")])
+        put(d, "after.txt", "after\n", "after")
+        track(d)
+        return d
+
+    def case(title, want, d, cmd, need=(), cwd="same", tool="Bash"):
+        """cwd: "same" = 저장소 d · "" = 빈 값 · None = cwd 칸 없음 · 그 밖 = 그 폴더"""
+        tin = {"command": cmd, "description": "t"} if isinstance(cmd, str) else cmd
+        payload = {"session_id": "t", "transcript_path": "/tmp/t.jsonl", "permission_mode": "default",
+                   "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tin, "tool_use_id": "toolu_1"}
+        if cwd is not None:
+            payload["cwd"] = str(d) if cwd == "same" else str(cwd)
+        r = run_hook([BASH, (HOOKS / "run.sh").as_posix(), "guard"], input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                     capture_output=True, env=env_for(d))
+        code, err = r.returncode, r.stderr.decode("utf-8", "replace")
+        res["total"] += 1
+        miss = [n for n in ((need,) if isinstance(need, str) else need) if n not in err]
+        if code != want or miss:
+            res["fails"].append(("0.2.4 보완 " + title, want, code, tool, json.dumps(tin, ensure_ascii=False)[:150],
+                                 (("없는 글귀: " + miss[0][:80] + " | ") if miss else "") + err.strip()[:300]))
+        return err
+
+    def last_log():
+        log = pathlib.Path(TEST_DATA) / "problems.log"
+        return log.read_text(encoding="utf-8").splitlines()[-1] if log.exists() else ""
+
+    def log_has(title, want):
+        res["total"] += 1
+        last = last_log()
+        if not last.endswith(want):
+            res["fails"].append(("0.2.4 보완 " + title, want, last[-90:], "Bash", "", ""))
+
+    try:
+        # D-1 · D-2: X(sq 합침) · Y(sq 안 합침, 같은 이름) · X/lnk → Y/sub 링크 — 판정한 저장소와 git 이 쓰는 저장소가 갈리는 꼴은 막는다
+        base = tmpdir("fx024loc-")
+        X, Y = repo(base / "X"), repo(base / "Y")
+        for d_, merged in ((X, True), (Y, False)):
+            branch(d_, "sq", [("sq.txt", "sq\n")])
+            if merged:
+                put(d_, "sq.txt", "sq\n", "squash sq")
+            put(d_, "sub/keep.txt", "k\n", "sub")
+            track(d_)
+        (X / "a..b").mkdir()
+        try:
+            (X / "lnk").symlink_to(Y / "sub", target_is_directory=True)
+            (X / "L2").symlink_to(Y / "sub", target_is_directory=True)
+            links = True
+        except OSError:            # Windows 에서 링크 권한이 없으면 링크 꼴은 건너뛴다
+            links = False
+        if links:
+            case("D-1 -C lnk/.. (cwd X)", B, X, "git -C lnk/.. branch -D sq", need=loc_why)
+            case("D-1 -C 절대 X/lnk/..", B, X, f"git -C {X.as_posix()}/lnk/.. branch -D sq", cwd=base, need=loc_why)
+            case("D-1 cd lnk && git -C ..", B, X, "cd lnk && git -C .. branch -D sq", need=loc_why)
+            case("D-1 cwd 링크 X/L2 + -C ..", B, X, "git -C .. branch -D sq", cwd=X / "L2", need=loc_why)
+        case("D-1 링크 없는 -C ../X", B, X, "git -C ../X branch -D sq", cwd=Y, need=loc_why)
+        case("D-1 이름에 점 두 개(a..b) 폴더", OK, X, "git -C a..b branch -D sq")
+        case("D-2 cd sub &&(상대)", B, X, "cd sub && git branch -D sq", need=loc_why)
+        case("D-2 cd ./sub &&", OK, X, "cd ./sub && git branch -D sq")
+        case("D-2 cd <절대> &&", OK, X, f"cd {X.as_posix()} && git branch -D sq", cwd=base)
+        # D-3: cwd 빈 값 · cwd 칸 없음(합친 가지) → 막음
+        case("D-3 cwd 빈 값", B, X, "git branch -D sq", cwd="", need=loc_why)
+        case("D-3 cwd 칸 없음", B, X, "git branch -D sq", cwd=None, need=loc_why)
+
+        # D-4: 폴더 이름 가운데의 ~(Windows 짧은 이름 RUNNER~1) → 판정(합침이면 통과) · 맨 앞 ~ → 막음
+        R = repo(tmpdir("fx024tl-") / "RUNNER~1" / "repo")
+        branch(R, "sq", [("sq.txt", "sq\n")])
+        put(R, "sq.txt", "sq\n", "squash sq")
+        track(R)
+        other = tmpdir("fx024cwd-")
+        RP = R.as_posix()
+        case("D-4 ~ 든 경로 cd &&", OK, R, f"cd {RP} && git branch -D sq", cwd=other)
+        case("D-4 ~ 든 경로 -C", OK, R, f"git -C {RP} branch -D sq", cwd=other)
+        case("D-4 ~ 든 경로 -C 작은따옴표", OK, R, f"git -C '{RP}' branch -D sq", cwd=other)
+        case("D-4 ~ 든 경로 -C 큰따옴표", OK, R, f'git -C "{RP}" branch -D sq', cwd=other)
+        case("D-4 -C ~/x", B, R, "git -C ~/x branch -D sq", need=cant + "한 줄 삭제 명령이 아님)")
+        case("D-4 가지 이름 ~x", B, R, "git branch -D ~x", need=cant + "한 줄 삭제 명령이 아님)")
+
+        # D-5: 합치기 드라이버(늘 0, 표시 파일을 만드는 프로그램) + attributes → merge-tree 를 부르지 않는다
+        r = repo()
+        put(r, "m.txt", "1\n2\n3\n4\n5\n", "m")
+        branch(r, "drv", [("m.txt", "1\n2\n3\n4\nbranch-only\n")])        # 양쪽이 같은 줄을 다르게(안 합침)
+        put(r, "m.txt", "1\n2\n3\n4\nmain-side\n", "main m")
+        branch(r, "sqd", [("m.txt", "one\n2\n3\n4\nmain-side\n")])       # 스쿼시 합침 뒤 main 이 다른 줄을 또 고침
+        put(r, "m.txt", "one\n2\n3\n4\nmain-side\n", "squash sqd")
+        branch(r, "ancd", [("ancd.txt", "ancd\n")])
+        g(r, "merge", "-q", "--no-ff", "-m", "merge ancd", "ancd")     # 보통 합침(조상)
+        put(r, "m.txt", "one\n2\n3\nfour\nmain-side\n", "main later")
+        track(r)
+        dmark = r.parent / (r.name + "-DRIVER_RAN")
+        made.append(dmark)
+        (r / ".git/info").mkdir(exist_ok=True)
+        lf(r / ".git/info/attributes", "* merge=keepours\n")
+        g(r, "config", "merge.keepours.driver", f"touch '{dmark.as_posix()}'; true")
+        case("D-5 드라이버 + 안 합친 가지", B, r, "git branch -D drv", need=(drv1, drv2("drv")))
+        case("D-5 드라이버 + 스쿼시 합친 가지", B, r, "git branch -D sqd", need=(drv1, drv2("sqd")))
+        log_has("D-8 드라이버 기록 칸", "[가지 삭제 · 합치기 드라이버 설정]")
+        case("D-5 드라이버 + 조상 가지", OK, r, "git branch -D ancd")
+        case("D-5 드라이버 + 조상·안 합친 것 섞임", B, r, "git branch -D ancd drv sqd", need=(drv1, drv2("drv sqd")))
+        res["total"] += 1
+        if dmark.exists():
+            res["fails"].append(("0.2.4 보완 D-5 드라이버 프로그램 실행 안 됨", "표시 파일 없음", "있음", "Bash", "", ""))
+        # 전역 설정(HOME)의 드라이버도 본다
+        home = tmpdir("fx024home-")
+        lf(home / ".gitconfig", f"[merge \"gl\"]\n\tdriver = touch '{dmark.as_posix()}'; true\n")
+        g(r, "config", "--unset", "merge.keepours.driver")
+        keep_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(home)
+        try:
+            case("D-5 전역 설정의 드라이버 + 스쿼시 합친 가지", B, r, "git branch -D sqd", need=drv1)
+        finally:
+            if keep_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = keep_home
+        # merge.renormalize=true + clean 필터(표시 파일): 스쿼시 합친 가지 → 통과 + 필터 실행 안 됨
+        r2 = repo()
+        put(r2, "t.txt", "1\n2\n3\n4\n5\n", "t")
+        branch(r2, "fsq", [("t.txt", "one\n2\n3\n4\n5\n")])
+        put(r2, "t.txt", "one\n2\n3\n4\n5\n", "squash fsq")
+        put(r2, "t.txt", "one\n2\n3\n4\nfive\n", "main later")
+        track(r2)
+        fmark = r2.parent / (r2.name + "-FILTER_RAN")
+        made.append(fmark)
+        (r2 / ".git/info").mkdir(exist_ok=True)
+        lf(r2 / ".git/info/attributes", "t.txt filter=ff\n")
+        g(r2, "config", "filter.ff.clean", f"sh -c \"touch '{fmark.as_posix()}'; cat\"")
+        g(r2, "config", "merge.renormalize", "true")
+        case("D-5 renormalize + clean 필터 + 스쿼시 합친 가지", OK, r2, "git branch -D fsq")
+        res["total"] += 1
+        if fmark.exists():
+            res["fails"].append(("0.2.4 보완 D-5 clean 필터 실행 안 됨", "표시 파일 없음", "있음", "Bash", "", ""))
+
+        # D-6: replace 로 안 합친 커밋을 main 커밋으로 바꿔 보이게 한 저장소 → 막음
+        s = std()
+        g(s, "replace", g(s, "rev-parse", "un"), g(s, "rev-parse", "main"))
+        case("D-6 replace 해 둔 안 합친 가지", B, s, "git branch -D un", need=not_merged)
+        # D-7: 기준 참조가 심볼릭(한 단계: origin/main → un2 · 두 단계: origin/HEAD → origin/develop → un) → 막음
+        s = std()
+        branch(s, "un2", [("un2.txt", "un2\n")])
+        g(s, "symbolic-ref", "refs/remotes/origin/main", "refs/heads/un2")
+        case("D-7 한 단계 심볼릭 기준", B, s, "git branch -D un2", need=cant)
+        s = std()
+        g(s, "symbolic-ref", "refs/remotes/origin/develop", "refs/heads/un")
+        g(s, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+        case("D-7 두 단계 심볼릭 기준", B, s, "git branch -D un")
+
+        # D-8 · D-9: 판정 불가·안 합쳐짐의 문구와 기록 칸(괄호 밖이라 <파일> 로 가려지지 않고 60자 안에 남는다)
+        s = std()
+        case("D-9 판정 불가 안내 글자", B, s, "git branch -D sq", cwd=tmpdir("fx024cwd-"), need=("[refactor 안전장치] " + loc_why + "\n", hint1))
+        log_has("D-8 판정 불가 기록 칸", "[가지 삭제 · 저장소 위치를 알 수 없음]")
+        case("D-8 안 합쳐짐 첫 줄", B, s, "git branch -D un",
+             need="[refactor 안전장치] " + not_merged + "un: 기본 가지 origin/main 에 없는 내용이 있음). [가지 삭제 · 안 합쳐짐]\n")
+        log_has("D-8 안 합쳐짐 기록 칸", "[가지 삭제 · 안 합쳐짐]")
+
+        # D-10: git.exe·gh.exe(대소문자·경로·따옴표) 를 git·gh 로 본다 / 파일 이름 자리의 git.exe 는 판정이 달라지지 않는다
+        for c in ["git.exe reset --hard", "git.exe push --force", "git.exe clean -fd", "git.exe checkout .", "git.exe branch -D un",
+                  "GIT.EXE reset --hard", '"C:/Program Files/Git/cmd/git.exe" reset --hard', "/mnt/c/x/git.exe reset --hard",
+                  "gh.exe repo delete a/b --yes"]:
+            case("D-10 막음 " + c, B, s, c)
+        for c in ["git.exe status", "ls git.exe", "cp git.exe /tmp/x", "git.exe log --oneline -3"]:
+            case("D-10 통과 " + c, OK, s, c)
+        case("D-10 git.exe 로 합친 가지 삭제", B, s, "git.exe branch -D sq", need=cant + "한 줄 삭제 명령이 아님)")
+
+        # S-1: 이름에 ; 가 든 합친 가지 — 따옴표로 감싸도 판정하지 않는다
+        g(s, "branch", "a;b", "main")
+        case("S-1 이름 a;b(합침)", B, s, 'git branch -D "a;b"', need=cant + "한 줄 삭제 명령이 아님)")
+        # S-3: update-ref 의 -m · --stdin 은 막고, 원격 추적 참조를 값으로만 쓰면 통과
+        case("S-3 update-ref -m", B, s, 'git update-ref -m "x" refs/remotes/origin/main refs/heads/f')
+        case("S-3 update-ref --stdin", B, s, "git update-ref --stdin")
+        case("S-3 update-ref 값으로만", OK, s, "git update-ref refs/heads/x refs/remotes/origin/main")
+
+        # E-4: 낱말 안의 =~ · :~ (bash 가 대입 꼴 낱말에서 ~ 를 펼친다) → 판정하지 않는다
+        case("E-4 -C a=~/x", B, s, "git -C a=~/x branch -D sq", need=cant + "한 줄 삭제 명령이 아님)")
+        case("E-4 -C a:~/x", B, s, "git -C a:~/x branch -D sq", need=cant + "한 줄 삭제 명령이 아님)")
+        # E-3: origin 없는 저장소의 로컬 기준(main)이 그 자체로 심볼릭(→ 안 합친 un) → 기준으로 쓰지 않는다
+        r3 = tmpdir("fx024nl-")
+        g(r3, "init", "-q")
+        g(r3, "symbolic-ref", "HEAD", "refs/heads/main")
+        put(r3, "base.txt", "base\n", "init")
+        branch(r3, "un", [("un.txt", "un\n")])
+        g(r3, "checkout", "-q", "--detach")
+        g(r3, "symbolic-ref", "refs/heads/main", "refs/heads/un")
+        case("E-3 로컬 기준 심볼릭", B, r3, "git branch -D un", need=cant + "기본 가지를 못 찾음)")
+
+        # E-1: <이름>.exe 는 <이름> 과 같은 판정 — ① 위험 쪽: .exe 꼴과 뗀 꼴이 둘 다 막힘(래퍼 bash·powershell·cmd 는 안의 명령을 계속 본다)
+        sec = "." + "env"
+        pe = make_project(phase="EXECUTE")
+        made.append(pe)
+        for c in ["cat.exe " + sec, "printenv.exe", "env.exe", "supabase.exe db reset", "prisma.exe migrate reset --force",
+                  "npm.exe run deploy", "psql.exe postgres://u@db.example.com/x", "vercel.exe --prod", "supabase.exe db push",
+                  "CAT.EXE " + sec, '"cat.exe" ' + sec, "head.exe -5 " + sec, "bash.exe -c 'cat " + sec + "'",
+                  'powershell.exe -c "Get-Content ' + sec + '"', "cmd.exe /c type " + sec, "rm.exe -rf ~"]:
+            case("E-1 막음(.exe 꼴) " + c, B, pe, c)
+            case("E-1 막음(뗀 꼴) " + c, B, pe, c.replace(".exe", "").replace(".EXE", ""))
+        case("E-1 막음 명령 자리 경로 /usr/bin/cat.exe", B, pe, "/usr/bin/cat.exe " + sec)
+        # ② 평범한 쪽: .exe 가 파일 이름·글 안에 든 명령은 .exe 를 .exf(정규화 대상 아님)로 바꾼 꼴과 같은 판정
+        for c in ["ls foo.exe", "cp a.exe b.exe", "rm build/app.exe", "file setup.exe", "chmod +x tool.exe", "sha256sum x.exe",
+                  'echo "run git.exe"', "grep -n '.exe' README.md", "git add tools/x.exe", 'git commit -m "add foo.exe"', "ls *.exe",
+                  "find . -name '*.exe'", "unzip a.zip -d out.exe.d", "wine app.exe", "mv old.exe new.exe", "du -sh dist/app.exe",
+                  "./build.exe --help", "tar czf out.tgz bin/a.exe", "rm -f a.exe b.exe", "ls -la C:/tools/node.exe", "stat python.exe",
+                  "objdump -d prog.exe | head", "strings app.exe | grep -i version", "md5sum *.exe > sums.txt", "git diff -- src/x.exe",
+                  "printf '%s' x.exe", "test -f a.exe && echo ok", "node.exe --version", "python.exe -m pytest", "git.exe status",
+                  "rm -rf build/.exe", "rm -rf ..exe", "rm -rf docs/refactor/x.exe"]:
+            want = run(pe, *bash(c.replace(".exe", ".exf")))[0]
+            case("E-1 평범한 명령(.exf 꼴과 같음) " + c, want, pe, c)
+        # E-2: 정규화 상한(20)에 닿았는데 .exe 낱말이 남으면 통과시키지 않는다
+        case("E-2 .exe 25개 + git.exe reset --hard", B, pe, "true.exe; " * 25 + "git.exe reset --hard", need=".exe 낱말이 너무 많아")
+
+        # S-2: 목록 명령(ls-files … -co)만 실패하는 가짜 git + 무시 안 된 비밀값 파일 + Grep 내용 검색 → 막음
+        p = make_project()
+        made.append(p)
+        lf(p / ".gitignore", "node_modules\n")
+        fake = tmpdir("fx024git-")
+        lf(fake / "git", "#!/usr/bin/env bash\ncase \" $* \" in *' -co '*) exit 1 ;; esac\nPATH=${PATH#*:}; exec git \"$@\"\n")
+        os.chmod(fake / "git", 0o755)
+        keep = PATH_PREFIX
+        PATH_PREFIX = str(fake)
+        try:
+            case("S-2 가짜 git(ls-files -co 만 실패) + Grep", B, p, ("Grep", {"pattern": "KEY", "output_mode": "content"})[1], tool="Grep")
+        finally:
+            PATH_PREFIX = keep
+    finally:
+        for p in made:
+            if p.is_dir():
+                rmtree_rw(p)
+            elif p.exists():
+                p.unlink()
+
+
+def check_turnfix_024(res):
+    """0.2.4 D-11: 입력 훅(turn.sh)은 표시 처리(go 턴의 닫힌 표시 쓰기 · 그 밖 입력의 지움·유지·ready ?)를 끝내기 전에
+    외부 프로그램을 띄우지 않는다 — 하루 청소(find)·.gitignore 처리는 그 뒤. 사본 플러그인 + PATH 맨 앞 가짜 find(멈춤)로
+    멈춘 순간의 표시를 보고, 끊은 뒤 보통 실행의 .gitignore·하루 청소 결과가 같은지 본다."""
+    import signal
+    made = []
+    plug = pathlib.Path(tempfile.mkdtemp(prefix="turnfix024-"))
+    made.append(plug)
+    shutil.copytree(ROOT / "plugins/refactor", plug / "refactor")
+    ctl = plug / "ctl"
+    ctl.mkdir()
+    reached, release = ctl / "reached", ctl / "release"
+    fake = plug / "fakefind"
+    fake.mkdir()
+    lf(fake / "find", f"#!/usr/bin/env bash\n: > '{reached.as_posix()}'; __i=0; while [ ! -f '{release.as_posix()}' ] && [ $__i -lt 300 ]; "
+       "do sleep 0.1; __i=$((__i + 1)); done\nPATH=${PATH#*:}; exec find \"$@\"\n")
+    os.chmod(fake / "find", 0o755)
+    run_sh = (plug / "refactor/hooks/run.sh").as_posix()
+    gi_want = ".allow-*\n.turn*\n*.tmp.*\n"
+
+    def fail(title, want, got, detail=""):
+        res["fails"].append(("0.2.4 D-11 " + title, want, got, "UserPromptSubmit", detail, ""))
+
+    def proj_(gate=None, mark=None):
+        p = make_project(phase="EXECUTE")
+        made.append(p)
+        approve(p, "P1-1")
+        if gate:
+            lf(p / "docs/refactor/STATE.md", f"---\nphase: EXECUTE\ngate: {gate}\n---\n")
+        if mark is not None:
+            lf(p / "docs/refactor/.turn.t", mark)
+        stale = p / "docs/refactor/.turn.stale"            # 하루 지난 표시 파일(하루 청소 대상)
+        lf(stale, "go old\n")
+        old = time.time() - 3 * 86400
+        os.utime(stale, (old, old))
+        return p
+
+    def payload(p, prompt):
+        return json.dumps({"session_id": "t", "hook_event_name": "UserPromptSubmit", "prompt": prompt, "cwd": str(p)},
+                          ensure_ascii=False).encode("utf-8")
+
+    def env_(p, slow):
+        env = env_for(p)
+        if slow:
+            env["PATH"] = str(fake) + os.pathsep + env["PATH"]
+        return env
+
+    def mark_lines(p):
+        f = p / "docs/refactor/.turn.t"
+        return f.read_text(encoding="utf-8").splitlines() if f.exists() else None
+
+    def stalled(p, prompt):
+        """가짜 find 에서 멈춘 순간의 표시 → (표시, 닿았나). 그다음 훅을 끊는다"""
+        for f in (reached, release):
+            if f.exists():
+                f.unlink()
+        kw = {"start_new_session": True} if os.name != "nt" else {}
+        pr = subprocess.Popen([BASH, run_sh, "turn"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, env=env_(p, True), **kw)
+        pr.stdin.write(payload(p, prompt))
+        pr.stdin.close()
+        t0 = time.monotonic()
+        while not reached.exists() and pr.poll() is None and time.monotonic() - t0 < 20:
+            time.sleep(0.05)
+        ok = reached.exists()
+        got = mark_lines(p)
+        if os.name != "nt":
+            try:
+                os.killpg(pr.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        lf(release, "")
+        try:
+            pr.wait(timeout=40)
+        except subprocess.TimeoutExpired:
+            pr.kill()
+            pr.wait()
+        return got, ok
+
+    def normal_after(title, p, prompt, want_mark):
+        """끊은 뒤 보통 실행: 표시 · .gitignore · 하루 청소(하루 지난 표시 파일 지움 · .turn-sweep 생김)"""
+        run_hook([BASH, run_sh, "turn"], input=payload(p, prompt), capture_output=True, env=env_(p, False))
+        gi = p / "docs/refactor/.gitignore"
+        got = (mark_lines(p), gi.read_text(encoding="utf-8") if gi.exists() else None,
+               (p / "docs/refactor/.turn.stale").exists(), (p / "docs/refactor/.turn-sweep").exists())
+        res["total"] += 1
+        if got != (want_mark, gi_want, False, True):
+            fail(title + " 끊은 뒤 보통 실행", (want_mark, gi_want, False, True), got)
+
+    try:
+        cases = [("go 턴", proj_(), "/refactor:go", ["go t", "ready ?"], ["go t", "ready P1-1"]),
+                 ("질문 대기 턴", proj_(gate="ask-user", mark="go t\nready P1-2\n"), "네, 그렇게 해 주세요",
+                  ["go t", "ready ?"], ["go t", "ready P1-1"]),
+                 ("그 밖 입력(앞 턴 표시 있음)", proj_(mark="go t\nready P1-1\n"), "그냥 질문인데요", None, None)]
+        for title, p, prompt, want_stall, want_after in cases:
+            if title != "go 턴":
+                lf(p / "docs/refactor/.gitignore", gi_want)       # go 턴이 아니면 .gitignore 는 만들지 않는다(있는 것 그대로)
+            got, ok = stalled(p, prompt)
+            res["total"] += 1
+            if not ok or got != want_stall:
+                fail(title + " 하루 청소에서 멈춘 순간의 표시", want_stall, got, f"멈춤 지점 {'닿음' if ok else '못 닿음'}")
+            normal_after(title, p, prompt, want_after)
+    finally:
+        try:
+            lf(release, "")
+        except OSError:
+            pass
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
 
 
 if __name__ == "__main__":

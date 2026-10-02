@@ -13,7 +13,7 @@ body:
     attributes:
       label: 플러그인 버전
       description: "`plugins/refactor/.claude-plugin/plugin.json` 의 version 값"
-      placeholder: "0.2.3"
+      placeholder: "0.2.4"
     validations:
       required: true
   - type: input
