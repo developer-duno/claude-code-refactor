@@ -35,10 +35,10 @@ phase=$(printf '%s' "$front" | sed -n -E 's/^[[:space:]]*phase:[[:space:]]*"?([A
 if [ "$phase" = "DONE" ]; then
   lib="${REFACTOR_ROOT:-}/scripts/refactor-lib.sh"
   if [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$lib" ] && { eval "$(tr -d '\r' < "$lib")"; rl_done_confirmed "$proj/docs/refactor"; }; then
-    printf '[Vibe Refactor] 이 프로젝트의 리팩토링은 완료(DONE) 상태입니다. 다시 점검하려면 사용자가 /refactor:go 다시 CHECKUP 을 실행합니다.\n'
+    printf '[Vibe Refactor] 이 프로젝트의 리팩토링은 완료(DONE) 상태입니다. 다시 점검하려면 사용자가 /refactor:go 다시 CHECKUP 을 실행합니다. 안전장치는 꺼져 있습니다.\n'
     exit 0
   fi
-  printf '[Vibe Refactor] STATE는 DONE이지만 사용자의 마무리 확인(/refactor:approve 마무리)이 없어 리팩토링 중 안전장치가 켜져 있습니다. 끝내려면 사용자가 /refactor:approve 마무리 를 입력합니다.\n'
+  printf '[Vibe Refactor] STATE는 DONE이지만 사용자의 마무리 확인(/refactor:approve 마무리)이 없어 안전장치가 켜져 있습니다. 끝내려면 사용자가 /refactor:approve 마무리 를 입력합니다.\n'
 fi
 
 printf '[Vibe Refactor] 이 프로젝트는 리팩토링이 진행 중입니다 (docs/refactor/STATE.md).\n'

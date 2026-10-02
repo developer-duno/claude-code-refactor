@@ -187,8 +187,8 @@ RECS_DONE
       { print }' "$state" > "$tmp" && [ -s "$tmp" ] && mv "$tmp" "$state"
     if [ -e "$tmp" ]; then rm -f "$tmp"; fi
   fi
-  say "✅ 리팩토링을 마무리했습니다(DONE). 이제 리팩토링 중에만 켜지는 안전장치(push·배포 차단, 기준선 보호, 안전 실행기 강제 등)가 꺼집니다."
-  say "   비밀값·되돌릴 수 없는 명령 보호는 계속 켜져 있습니다. 다시 점검하려면 한두 달 뒤 /refactor:go 다시 CHECKUP"
+  say "✅ 리팩토링을 마무리했습니다(DONE). 이제 이 프로젝트의 안전장치가 모두 꺼집니다(비밀값·되돌릴 수 없는 명령 보호 포함)."
+  say "   다시 켜고 점검하려면 /refactor:go 다시 CHECKUP (한두 달 뒤를 권합니다)"
   exit 0
 fi
 

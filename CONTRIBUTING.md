@@ -20,6 +20,8 @@
 1. **차단 케이스** — 그 규칙이 막아야 하는 입력 1개
 2. **통과 대조군** — 비슷하지만 막히면 안 되는 입력 1개 (과잉 차단 방지)
 
+STATE 없는 폴더에서 guard 를 손으로 부르면 늘 0 입니다(0.3.0부터 리팩토링 중에만 판정) — 재현할 때는 `REFACTOR_GUARD_ALWAYS=1` 을 주거나 `docs/refactor/STATE.md` 가 있는 폴더에서 부르세요.
+
 ## Pull Request
 
 PR 을 올릴 때는 [PR 양식](.github/PULL_REQUEST_TEMPLATE.md)의 항목을 채워 주세요.

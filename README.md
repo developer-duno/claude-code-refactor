@@ -3,11 +3,13 @@
 운영 중인 서비스를 AI로 **안전하게** 리팩토링하는 Claude Code 플러그인입니다.
 누구나 쓸 수 있는 공개 플러그인(MIT)이고, 화면 문구와 문서는 모두 한국어입니다(**한국어 전용 플러그인**).
 
-![version](https://img.shields.io/badge/version-0.2.4-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+![version](https://img.shields.io/badge/version-0.3.0-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+
+> **0.3.0에서 달라진 점**: 안전장치는 이제 리팩토링 중에만 켜집니다. 0.2.x처럼 평소 대화에서도 비밀값·위험 명령을 막으려면 [스위치](#6-안전장치)를 켜세요.
 
 > **English summary**
 > - **What it is:** A Korean-only Claude Code plugin that refactors a live service in a fixed order — code map, 25-item health check, deep audit, rebuttal review, baseline tests, plan — and then changes code only for steps a human approved, one step at a time.
-> - **What it blocks:** Hooks stop common accidents before they run: secret exposure (`.env`, environment dumps, tokens in git remotes), irreversible commands (force push, `reset --hard`, dropping databases) and common approval-bypass tricks; tests and builds run with production URLs and keys swapped for dummy values.
+> - **What it blocks:** While a refactor is in progress, hooks stop common accidents before they run: secret exposure (`.env`, environment dumps, tokens in git remotes), irreversible commands (force push, `reset --hard`, dropping databases) and common approval-bypass tricks; tests and builds run with production URLs and keys swapped for dummy values.
 > - **Install:** `claude plugin marketplace add developer-duno/claude-code-refactor` then `claude plugin install refactor@vibe-consulting`.
 
 바로 가기: [설치](#3-설치) · [명령](#4-명령-5개) · [사용 순서](#5-사용-순서) · [안전장치](#6-안전장치) · [한계](#6-4-한계) · [문제 신고](#11-피드백기여라이선스)
@@ -25,7 +27,7 @@
 이 플러그인의 답은 세 가지입니다.
 
 - **순서 강제** — 읽기만 하는 진단을 먼저 끝내고, 지금 동작을 테스트로 찍어 둔(기준선) 뒤, 사람이 승인한 단계만 한 번에 하나씩 고칩니다.
-- **안전장치** — Claude가 명령을 실행하거나 파일을 고치기 **직전에** 훅이 검사해서, 위 사고로 이어지는 흔한 명령을 막습니다.
+- **안전장치** — 리팩토링하는 동안, Claude가 명령을 실행하거나 파일을 고치기 **직전에** 훅이 검사해서, 위 사고로 이어지는 흔한 명령을 막습니다.
 - **안전 실행기** — `/refactor:go` 중의 테스트·빌드는 운영 주소·키를 가짜 값으로 바꿔서 돌립니다.
 
 ## 2. 30초 요약
@@ -68,7 +70,7 @@ Claude Code는 플러그인을 **어느 설정 파일에 적느냐(범위, `--sc
 | `local` | 프로젝트의 `.claude/settings.local.json` (git에 안 올라감) | 이 PC의 이 프로젝트만 |
 | `project` | 프로젝트의 `.claude/settings.json` (git으로 공유) | 이 저장소를 받는 팀원 모두 |
 
-> 알아 둘 것: 안전장치의 **항상 켜진 규칙**(비밀값 노출·되돌릴 수 없는 명령 막기, [§6](#6-안전장치))은 플러그인이 켜진 **모든 대화**에 적용됩니다. 리팩토링 중 규칙은 `docs/refactor/STATE.md`가 있는(리팩토링을 시작한) 프로젝트에서만 켜집니다.
+> 알아 둘 것: 어느 범위로 설치해도 안전장치([§6](#6-안전장치))는 **리팩토링을 시작하지 않은 프로젝트에서는 아무것도 막지 않습니다**(0.3.0부터). `/refactor:go`로 리팩토링을 시작한 프로젝트에서만 켜지고, `/refactor:approve 마무리` 뒤에는 다시 꺼집니다.
 
 **여러 프로젝트에 쓰는 경우** — 아무 폴더에서 두 줄:
 
@@ -92,8 +94,8 @@ claude plugin install refactor@vibe-consulting --scope local
 ### 3-3. 잘 깔렸는지 확인 (3단계)
 
 1. Claude Code에서 `/refactor:status` → "아직 시작하지 않았어요"가 나오면 명령 OK.
-2. `/hooks`를 열어 refactor의 훅(PreToolUse·PostToolUse·UserPromptSubmit·SessionStart)이 보이면 안전장치 OK.
-3. 첫 `/refactor:go`의 준비 단계에서 Claude가 안전장치를 스스로 시험합니다(항상 켜진 규칙·리팩토링 중 규칙·`/refactor:go` 중 규칙 각각 한 번). 막히지 않으면 그 사실을 보고합니다.
+2. `/hooks`를 열어 refactor의 훅(PreToolUse·PostToolUse·UserPromptSubmit·SessionStart)이 보이면 훅 등록 OK(실제로 막는 것은 `/refactor:go` 로 시작한 뒤부터).
+3. 첫 `/refactor:go`의 준비 단계에서 Claude가 안전장치를 스스로 시험합니다(기본 규칙·리팩토링 중 규칙·`/refactor:go` 중 규칙 각각 한 번). 막히지 않으면 그 사실을 보고합니다.
 
 ### 3-4. 설치 없이 시험해 보기
 
@@ -116,7 +118,7 @@ claude --plugin-dir ./claude-code-refactor/plugins/refactor
 | `/refactor:board` | 여러 프로젝트를 급한 순서로 한 표에. 예: `/refactor:board ~/projects` | 사람·Claude |
 | `/refactor:report` | 문제 신고 묶음을 만들어 **먼저 보여 주고**, 동의하면 GitHub 이슈로 보냄([§11](#11-피드백기여라이선스)) | 사람만 |
 
-- **승인은 사람만 할 수 있습니다.** `/refactor:approve`를 입력창에 치면 입력 훅(UserPromptSubmit)이 승인 스크립트를 실행하고, 결과를 `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록으로 Claude에게 전합니다. Claude가 승인 스크립트나 훅을 직접 부르는 것은 안전장치가 막고, 스크립트도 훅 밖에서는 아무것도 바꾸지 않습니다(현황만 보여 줌). 따옴표나 역슬래시로 이름을 쪼개기(`app''rove`), 새 Claude 세션에 승인 명령 넘기기(`claude -p "/refactor:approve …"`), 한 줄 파이썬·노드 코드 안에서 부르기처럼 **알려진 우회 모양**도 막습니다. 다만 글자를 조립하거나 파일에 적어 두었다가 넘기는 우회까지 모두 막지는 못합니다([§6-4](#6-4-한계)).
+- **승인은 사람만 할 수 있습니다.** `/refactor:approve`를 입력창에 치면 입력 훅(UserPromptSubmit)이 승인 스크립트를 실행하고, 결과를 `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록으로 Claude에게 전합니다. 리팩토링 중인 프로젝트의 대화에서 Claude가 승인 스크립트나 훅을 직접 부르는 것은 안전장치가 막고, 스크립트도 훅 밖에서는 아무것도 바꾸지 않습니다(현황만 보여 줌). 따옴표나 역슬래시로 이름을 쪼개기(`app''rove`), 새 Claude 세션에 승인 명령 넘기기(`claude -p "/refactor:approve …"`), 한 줄 파이썬·노드 코드 안에서 부르기처럼 **알려진 우회 모양**도 막습니다. 다만 글자를 조립하거나 파일에 적어 두었다가 넘기는 우회까지 모두 막지는 못합니다([§6-4](#6-4-한계)).
 - 계획서의 체크 표시를 손으로 고쳐도 승인으로 치지 않습니다. 승인의 근거는 `docs/refactor/APPROVALS.log` 한 곳입니다.
 - `/refactor:board`는 지금 프로젝트에 `docs/refactor/STATE.md`가 있으면 그 상위 폴더를, 없으면 지금 폴더 아래를 훑습니다. 상태는 🔴 급한 구멍 · 🙋 사장님 차례(화면 문구 그대로 — 승인·답변만 하면 진행) · 🙋 마무리 확인 필요(STATE는 DONE인데 `/refactor:approve 마무리`로 아직 확인 안 함) · ▶ 다음 단계 가능 · ⏳ 진행 중 · ✅ 완료 · ⏰ 14일 넘게 멈춤 · ⚠허용파일(허용 파일이 남아 있음)로 표시됩니다.
 
@@ -138,7 +140,7 @@ claude --plugin-dir ./claude-code-refactor/plugins/refactor
    ```
    승인하면 "👤 사람이 직접 할 일"(예: 결제사 테스트 키 발급)을 먼저 알려 줍니다. 승인은 그 순간의 **카드 내용**에 묶입니다 — 승인한 뒤 카드가 바뀌면 그 단계는 실행하지 않고 다시 승인을 받습니다.
 5. **승인 실행** — `/refactor:go` 한 번에 **한 단계만** 고치고, 기준선으로 확인하고, 다른 AI가 독립 검사를 한 뒤 보고하고 멈춥니다. 알려 준 커밋 한 줄을 입력한 뒤 다음 `/refactor:go`. 화면 확인은 **개발용 DB·테스트 키로 켠 개발 서버**에서 하세요(운영 DB가 하나뿐이면 보기만 하고 저장·결제·발송 버튼은 누르지 않기).
-6. **마무리** — 승인한 단계가 다 끝나면 완료 보고를 합니다. `/refactor:approve 마무리`를 입력해야 끝나고, 그래야 리팩토링 중 안전장치가 꺼집니다. 남은 단계를 안 할 거면 먼저 `/refactor:approve 보류 <ID>`. 한두 달 뒤 `/refactor:go 다시 CHECKUP`으로 재점검할 수 있습니다.
+6. **마무리** — 승인한 단계가 다 끝나면 완료 보고를 합니다. `/refactor:approve 마무리`를 입력해야 끝나고, 그래야 안전장치가 꺼집니다. 남은 단계를 안 할 거면 먼저 `/refactor:approve 보류 <ID>`. 한두 달 뒤 `/refactor:go 다시 CHECKUP`으로 재점검할 수 있습니다.
 
 **팁**
 
@@ -153,14 +155,17 @@ claude --plugin-dir ./claude-code-refactor/plugins/refactor
 
 Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하면 막습니다. 막으면 `[refactor 안전장치] …` 메시지와 함께 대신 할 방법(→)을 알려 주고, Claude는 우회하지 않고 사용자에게 보고하게 되어 있습니다. 셸 명령(Bash·PowerShell·Monitor), 파일 도구, Grep 도구, MCP 도구, 하위 에이전트에게 보내는 지시를 모두 봅니다.
 
+0.3.0부터 안전장치는 **리팩토링을 시작한 프로젝트에서만** 켜집니다(`/refactor:go` 부터 `/refactor:approve 마무리` 까지). 평소 대화에서는 아무것도 막지 않습니다 — 리팩토링 기록 폴더(`docs/refactor`)가 없는 프로젝트에서는 판정 자체를 하지 않아 느려지지도 않습니다(마무리한 프로젝트는 폴더가 남아 있어 짧은 확인을 한 번 거칩니다). 평소에도 켜 두고 싶으면 환경 변수 `REFACTOR_GUARD_ALWAYS=1` 을 설정하세요.
+
+스위치는 Claude Code 설정 파일의 `env` 칸(모든 세션과 그 하위 프로세스에 환경 변수를 설정하는 칸)에 적습니다 — 예: `~/.claude/settings.json` 에 `"env": {"REFACTOR_GUARD_ALWAYS": "1"}`. 값은 정확히 `1` 이어야 합니다. 켜졌는지는 리팩토링을 시작하지 않은 폴더에서 Claude에게 `cat .env.refactor-selftest` 를 실행해 보라고 해서 확인합니다 — `[refactor 안전장치]` 로 막히면 켜진 것입니다.
+
 ### 6-1. 막는 것
 
 | 언제 | 막는 것 |
 |---|---|
-| **항상** (플러그인이 켜진 모든 대화) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기·출력·복사·전송·수정하는 명령과 도구, 환경변수 전체 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색, git이 무시하지 않는 `.env`가 든 범위의 내용 검색 · 강제 push, `reset --hard`, `clean -f`, `checkout .`, 합치지 않은 가지 강제 삭제(`branch -D`·`-d -f` 등 — 이미 합쳐진 가지는 허용, [§6-2](#6-2-막지-않는-것-일부러-허용)), 원격 가지·저장소 삭제(`gh api -X DELETE`·`gh repo delete` 포함), 기록 다시 쓰기, `rm -rf ~`·프로젝트 통째 삭제 같은 대량 삭제, DB 삭제·초기화 · 승인 스크립트와 플러그인 훅을 직접 부르기, 승인 기록(`APPROVALS.log`)·허용 파일(`.allow-*`)·`.turn*`을 만들기·복사·이동·개명·압축 해제로 바꾸기, 계획서 승인 칸 체크, 플러그인 폴더 수정 · MCP 도구나 하위 에이전트 지시로 위 금지를 우회하기 |
-| **리팩토링 진행 중** (`docs/refactor/STATE.md`가 있고 마무리 전) | push·배포·원격 서버 명령, DB 구조 적용(마이그레이션), 원격 DB 접속, MCP로 운영 DB 조회·배포·메시지 발송, 플러그인 끄기, Claude 설정 수정, `git stash`, 파일을 지정하지 않은 `git log -p`, 프로젝트 전체 포맷터 · 커밋된 기준선 테스트와 마이그레이션 파일 수정(스냅숏 갱신 옵션 포함) |
+| **리팩토링 진행 중** (`/refactor:go` 로 시작한 때부터 `/refactor:approve 마무리` 까지) | `.env`·키 파일(`.git/config`·`.npmrc` 포함)을 읽기·출력·복사·전송·수정하는 명령과 도구, 환경변수 전체 출력, 토큰이 든 원격 주소 출력, git 기록 속 옛 비밀값 검색, git이 무시하지 않는 `.env`가 든 범위의 내용 검색 · 강제 push, `reset --hard`, `clean -f`, `checkout .`, 합치지 않은 가지 강제 삭제(`branch -D`·`-d -f` 등 — 이미 합쳐진 가지는 허용, [§6-2](#6-2-막지-않는-것-일부러-허용)), 원격 가지·저장소 삭제(`gh api -X DELETE`·`gh repo delete` 포함), 기록 다시 쓰기, `rm -rf ~`·프로젝트 통째 삭제 같은 대량 삭제, DB 삭제·초기화 · 승인 스크립트와 플러그인 훅을 직접 부르기, 승인 기록(`APPROVALS.log`)·허용 파일(`.allow-*`)·`.turn*`을 만들기·복사·이동·개명·압축 해제로 바꾸기, 계획서 승인 칸 체크, 플러그인 폴더 수정 · MCP 도구나 하위 에이전트 지시로 위 금지를 우회하기 · push·배포·원격 서버 명령, DB 구조 적용(마이그레이션), 원격 DB 접속, MCP로 운영 DB 조회·배포·메시지 발송, 플러그인 끄기, Claude 설정 수정, `git stash`, 파일을 지정하지 않은 `git log -p`, 프로젝트 전체 포맷터 · 커밋된 기준선 테스트와 마이그레이션 파일 수정(스냅숏 갱신 옵션 포함) |
 | **`/refactor:go` 실행 중** | 대표 실행 명령(npm·pnpm·yarn·bun·npx, python·node·deno, pytest, uv·poetry·pipenv run, make, turbo·nx, docker compose 등)은 안전 실행기로만 · 읽기 전용 단계, 그리고 승인된 실행 대기 단계가 없을 때는 `docs/refactor/` 밖 수정 금지 |
-| **너무 긴 입력** | 셸 명령 16KB(MCP 도구의 명령 칸 포함) · Grep 입력·Edit의 바꿀 부분·파일 경로 32KB · 하위 에이전트(Agent) 지시문 32KB(바이트 기준이라 한글만 쓰면 약 1만 글자) 또는 2,000줄을 넘거나, git 저장소 밖에서 Grep 검색 범위가 너무 넓으면(폴더 200개 또는 5초 이상) 판정하지 않고 막습니다(git 저장소 안에서는 git이 아는 파일 목록으로 판정하므로 폴더 수와 상관없습니다 — 다만 그 안에 따로 관리되는 저장소·서브모듈이 20개를 넘으면 막습니다) — 파일로 저장해 실행하거나 범위를 좁히세요. **Write 본문과 MCP 도구(노션·DB·메일 등) 입력은 크기로 막지 않습니다** — 큰 파일 쓰기·긴 문서·큰 SQL은 정상 작업이기 때문입니다. 대신 그 안의 경로·명령 규칙은 크기와 상관없이 적용되고, SQL은 256KB까지 문장마다 판정하며 그보다 크면 위험한 낱말(DROP·DELETE 등)이 하나라도 있을 때 막습니다 |
+| **너무 긴 입력** (리팩토링 진행 중에만) | 셸 명령 16KB(MCP 도구의 명령 칸 포함) · Grep 입력·Edit의 바꿀 부분·파일 경로 32KB · 하위 에이전트(Agent) 지시문 32KB(바이트 기준이라 한글만 쓰면 약 1만 글자) 또는 2,000줄을 넘거나, git 저장소 밖에서 Grep 검색 범위가 너무 넓으면(폴더 200개 또는 5초 이상) 판정하지 않고 막습니다(git 저장소 안에서는 git이 아는 파일 목록으로 판정하므로 폴더 수와 상관없습니다 — 다만 그 안에 따로 관리되는 저장소·서브모듈이 20개를 넘으면 막습니다) — 파일로 저장해 실행하거나 범위를 좁히세요. **Write 본문과 MCP 도구(노션·DB·메일 등) 입력은 크기로 막지 않습니다** — 큰 파일 쓰기·긴 문서·큰 SQL은 정상 작업이기 때문입니다. 대신 그 안의 경로·명령 규칙은 크기와 상관없이 적용되고, SQL은 256KB까지 문장마다 판정하며 그보다 크면 위험한 낱말(DROP·DELETE 등)이 하나라도 있을 때 막습니다 |
 
 명령 이름 바로 뒤에 `.exe`를 붙인 꼴(`git.exe …`·`cat.exe …`)도 같은 규칙으로 봅니다(경로를 앞에 붙인 꼴은 [§6-4](#6-4-한계)).
 
@@ -178,7 +183,7 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 - `node_modules`·`.next`·`dist`·`build` 같은 폴더 지우기.
 - **이미 합쳐진 가지 지우기**(`git branch -D <가지>`와 `-d -f` 같은 다른 철자) — 그 가지의 내용이 기본 가지에 이미 다 들어 있을 때만 통과합니다(스쿼시 합침 포함). 기본 가지는 GitHub 쪽(`origin/HEAD` → `origin/main` → `origin/master`)이고, `origin` 원격이 없는 저장소만 내 컴퓨터의 `main`·`master`입니다. 방금 GitHub에서 합쳤다면 `git fetch origin`을 먼저 하세요. Bash 도구로 친 **한 줄 명령**(`git branch -D a b`, `cd <절대경로> && git branch -D a`, `git -C <경로> branch -D a`)에서 가지 이름을 그대로 적었을 때만 판정합니다 — `2>&1`·파이프 같은 덧붙임, 변수, `..`가 든 경로, `~`로 시작하는 경로, `git.exe`로 쓴 명령은 판정하지 않고 막습니다. 가지는 10개까지입니다. 스쿼시 합침 확인에는 git 2.38 이상이 필요하고(기록이 그대로 이어진 보통 합침은 옛 git에서도 됩니다), 저장소에 합칠 때 쓰는 프로그램 설정(`merge.<이름>.driver`)이 있으면 스쿼시 합침은 확인하지 않고 막습니다. 하나라도 안 합쳐졌거나 판정할 수 없으면 통째로 막고, 이유를 문구에 적습니다.
 
-> 훅은 도구를 쓸 때마다 실행되므로 조금 느려집니다. 이 PC 실측으로 호출마다 0.15~0.4초 정도이고, 컴퓨터가 매우 바쁠 때는 몇 초까지 늘 수 있습니다.
+> 리팩토링 중인 프로젝트에서는 훅이 도구를 쓸 때마다 판정하므로 조금 느려집니다. 이 PC 실측으로 호출마다 0.15~0.4초 정도이고, 컴퓨터가 매우 바쁠 때는 몇 초까지 늘 수 있습니다. 리팩토링을 시작하지 않은 프로젝트에서는 판정하지 않고 바로 끝납니다.
 
 ### 6-3. 일부러 풀어야 할 때 (사람만 가능)
 
@@ -193,7 +198,10 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 ### 6-4. 한계
 
 - 안전장치는 **흔한 위험 명령을 모양으로 알아보고 막는 보조 장치**입니다. 스크립트를 거친 수정, 일부러 꼬아 쓴 명령 등 모든 우회를 막지는 못합니다. 사고(실수)를 줄이는 장치이지, 악의적인 공격을 막는 장치가 아닙니다. **보조 안전망이지 벽이 아닙니다.**
-- 이름을 쪼개거나 조립하는 우회는 **알려진 모양만** 막습니다. 따옴표·역슬래시·빈 변수·`$'…'`·중괄호·글로브로 쪼갠 이름은 승인·훅 진입점·되돌릴 수 없는 git 명령·원격 가지 삭제·대량 삭제·DB 초기화 규칙(리팩토링 중에는 배포·마이그레이션·원격 DB 규칙까지)에서 막고, 새 Claude 세션에 넘긴 승인 명령과 한 줄 인터프리터 코드 안의 승인 스크립트도 막습니다. 하지만 `printf`·`eval`로 글자를 이어 붙이거나, 명령을 파일에 적어 두었다가 다음 도구 호출에서 실행하거나, 새 Claude 세션에 파일로 넘기는 것(`claude -p < 파일`)은 명령 글자만 보고는 알아볼 수 없습니다.
+- 안전장치는 **리팩토링을 시작한 그 폴더에서 연 대화**에서만 켜집니다. 하위 폴더·상위 폴더·다른 프로젝트에서 연 대화에서는 꺼져 있고, 거기서 리팩토링 중인 프로젝트의 파일·승인 기록을 건드리는 것은 막지 못합니다. 리팩토링 중인 프로젝트는 그 폴더에서 연 대화에서만 작업하세요.
+- 리팩토링 기록(`docs/refactor`)이 없는 가지로 옮기면 안전장치가 꺼집니다. 리팩토링은 작업 가지에서 이어서 하세요.
+- 평소 대화의 비밀값 노출·되돌릴 수 없는 명령은 이 플러그인이 막지 않습니다(0.2.x 와 다른 점). 평소에도 막고 싶으면 `REFACTOR_GUARD_ALWAYS=1`([§6](#6-안전장치)).
+- 이름을 쪼개거나 조립하는 우회는 리팩토링 중인 프로젝트의 대화에서도 **알려진 모양만** 막습니다. 따옴표·역슬래시·빈 변수·`$'…'`·중괄호·글로브로 쪼갠 이름은 승인·훅 진입점·되돌릴 수 없는 git 명령·원격 가지 삭제·대량 삭제·DB 초기화 규칙(리팩토링 중에는 배포·마이그레이션·원격 DB 규칙까지)에서 막고, 새 Claude 세션에 넘긴 승인 명령과 한 줄 인터프리터 코드 안의 승인 스크립트도 막습니다. 하지만 `printf`·`eval`로 글자를 이어 붙이거나, 명령을 파일에 적어 두었다가 다음 도구 호출에서 실행하거나, 새 Claude 세션에 파일로 넘기는 것(`claude -p < 파일`)은 명령 글자만 보고는 알아볼 수 없습니다.
 - 커밋 메시지처럼 따옴표 안 문장에 `;`와 위험한 명령이 함께 있으면(`git commit -m "x; rm -rf docs/refactor"`) 막힐 수 있습니다. 명령을 `;`·`&&` 조각으로 나눠 보기 때문입니다 — 메시지를 파일로 쓰고 `git commit -F <파일>`을 쓰세요.
 - 안전장치 스크립트가 고장 나거나 실행되지 못하면(Windows에서 Git Bash를 못 찾을 때 등) **막지 않고 통과**시킵니다. 모든 작업이 멈추는 것을 막기 위해서이고, 그래서 준비 단계에서 작동 시험을 합니다.
 - 판정이 **25초 안에 끝나지 않으면 통과시키지 않고 막습니다**("판정이 너무 오래 걸려 막았습니다"). Claude Code는 제한 시간을 넘긴 훅을 "막지 않음"으로 처리하므로, 판정이 느린 입력이 검사 없이 지나가지 않게 실행기가 먼저 끊습니다. 명령 줄이 수천 개인 지시문이나 구분자(`;`·`&&`)가 수천 개인 명령처럼 아주 긴 입력은 컴퓨터가 느리거나 바쁠 때 이 제한에 걸립니다 — 안내대로 내용을 파일로 저장해 경로를 넘기거나 명령을 나누면 됩니다.
@@ -279,14 +287,14 @@ claude plugin uninstall refactor@vibe-consulting     # 지우기 — 기본 범�
 
 - 이 마켓플레이스는 공식 마켓플레이스가 아니라서 자동 업데이트가 기본으로 꺼져 있습니다(공식 문서). 새 버전은 위 두 줄로 받으세요.
 - 마지막 범위에서 지우면 플러그인 데이터 폴더(`problems.log`·신고 묶음)도 함께 지워집니다. 남기려면 `--keep-data`를 붙입니다.
-- 0.2.0에서 승인한 기록은 그대로 이어집니다. `/refactor:approve 확인`은 화면에 "봉인이 다르다"고 나올 때만 치세요 — 습관적으로 치면 손댄 기록까지 봉인될 수 있습니다. STATE가 DONE인데 사용자가 아직 `/refactor:approve 마무리`로 확인하지 않은 프로젝트는 리팩토링 중 안전장치가 계속 켜져 있으니, 끝내려면 `/refactor:approve 마무리`가 필요합니다.
+- 0.2.0에서 승인한 기록은 그대로 이어집니다. `/refactor:approve 확인`은 화면에 "봉인이 다르다"고 나올 때만 치세요 — 습관적으로 치면 손댄 기록까지 봉인될 수 있습니다. STATE가 DONE인데 사용자가 아직 `/refactor:approve 마무리`로 확인하지 않은 프로젝트는 안전장치가 계속 켜져 있으니, 끝내려면 `/refactor:approve 마무리`가 필요합니다.
 - 리팩토링 진행 중에는 Claude가 플러그인을 끄는 명령이 막혀 있습니다. 끄기·지우기는 사람이 터미널에서 합니다.
 
 ## 10. 문제가 생기면
 
 | 증상 | 할 일 |
 |---|---|
-| 안전장치가 아무것도 안 막음 | Windows면 Git for Windows 설치 확인 → Claude Code 다시 열기 → `/hooks`에서 refactor 훅 확인 |
+| 안전장치가 아무것도 안 막음 | 리팩토링을 시작하지 않은 프로젝트에서는 정상입니다(0.3.0부터). 리팩토링 중인데도 그렇다면: `/refactor:status` 가 "아직 시작하지 않았어요"라고 하면 다른 폴더나 다른 가지에서 연 것입니다 → Windows면 Git for Windows 설치 확인 → Claude Code 다시 열기 → `/hooks`에서 refactor 훅 확인 |
 | 승인이 안 먹힘 / `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록이 안 보임 | 입력 훅이 꺼졌거나 시간 안에 끝나지 못한 것입니다. `/refactor:approve`(인자 없이)로 현황을 다시 보고, `/hooks`에서 refactor 훅이 보이는지 확인하세요 |
 | `WSL … execvpe(/bin/bash) failed` | 안전 실행기를 PowerShell 도구로 실행했습니다. Bash 도구(Git Bash)로 다시 실행하세요([§7](#7-안전-실행기)) |
 | `[refactor 안전장치]`로 멈춤 | 정상입니다. → 줄의 안내를 따르거나, 정말 필요하면 사람이 `!`로 직접 실행 |
@@ -339,7 +347,7 @@ claude plugin validate --strict plugins/refactor; claude plugin validate --stric
 ```
 
 - Windows에서는 시험이 Git Bash를 자동으로 찾습니다(PATH의 WSL bash 대신). 못 찾으면 `GUARD_BASH`에 Git Bash 절대경로를 지정하세요. `python3`은 Windows 스토어 안내 프로그램일 수 있으니 `python`을 쓰세요.
-- 0.2.4 기준 결과(GitHub Actions): 안전장치 시험 1659/1659(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 154/154(Ubuntu·macOS)·155/155(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
+- 0.3.0 기준 결과(GitHub Actions): 안전장치 시험 1785/1785(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 155/155(Ubuntu·macOS)·156/156(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
 - 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올립니다.
 
 ### 폴더 구조
@@ -368,6 +376,13 @@ claude-code-refactor/
 ---
 
 ## 13. 변경점
+
+### 0.3.0 (2026-10-02)
+
+- **안전장치는 리팩토링 중에만 켜짐** — 0.2.x까지는 비밀값 노출·되돌릴 수 없는 명령 규칙이 플러그인이 켜진 대화라면 어디서나 돌았습니다. 그래서 리팩토링과 상관없는 평소 대화에서도 괜히 막히는 일이 있었고, 도구를 쓸 때마다 판정하느라 느려졌습니다. 이제 안전장치는 `/refactor:go`로 리팩토링을 시작한 프로젝트에서만, `/refactor:approve 마무리`까지 켜집니다 — "운영 중인 서비스를 안전하게 리팩토링한다"는 이 플러그인의 목적에 맞춘 것입니다. 평소에도 켜 두려면 환경 변수 `REFACTOR_GUARD_ALWAYS=1`을 설정하세요([§6](#6-안전장치)). **0.2.x에서 올리는 분이 알아야 할 것**: 평소 대화의 비밀값·위험 명령 보호가 꺼집니다. 리팩토링을 시작하지 않은 프로젝트와 마무리한 프로젝트에서는 `cat .env`·강제 push 같은 명령을 이 플러그인이 막지 않습니다(마무리 안내와 현황 문구도 "안전장치가 모두 꺼집니다"로 바꿨습니다). 다른 폴더에서 연 대화, 리팩토링 기록이 없는 가지에서도 꺼져 있습니다([§6-4](#6-4-한계)).
+- **리팩토링 중이 아니면 훅이 바로 끝남** — Claude Code가 훅에 알려 주는 프로젝트 폴더에 리팩토링 기록 폴더(`docs/refactor`)가 없으면, 실행기(`run.sh`)가 도구 입력을 읽지 않고 바로 끝납니다(안전장치 스크립트를 띄우지 않음). Claude Code가 프로젝트 폴더를 알려 주지 않았거나 그 폴더를 열 수 없으면 빠른 길을 타지 않고 안전장치가 판정합니다(판정할 수 없으면 켜진 쪽으로). 폴더가 있으면 안전장치가 STATE·마무리 확인·`/refactor:go` 표시를 보고, 켜진 상태가 아니면 아무것도 판정하지 않고 통과시킵니다.
+- **Grep 내용 검색의 비밀 파일 이름 판정 통일** — 검색 범위에 비밀값 파일이 있는지 볼 때 이름의 대소문자를 가리지 않습니다(예전에는 대문자 `.ENV`가 든 범위의 내용 검색이 통과했습니다). 이름 꼴에 `*.p12`·`*.pfx`·`*.jks`·`*.keystore`·`id_rsa`·`id_dsa`·`id_ecdsa`·`id_ed25519`·`.pgpass`·`.netrc`·`.pypirc`·`.git-credentials`·`.secrets`를 더했습니다 — 파일을 직접 읽을 때 막는 이름 쪽에 맞춘 것입니다. `.npmrc`는 저장소에 올려 두는 설정 파일인 경우가 많아 넣지 않았습니다(직접 읽기는 계속 막습니다).
+- **시험** — 새 시험 127개(켜짐·꺼짐 104 · 첫 `/refactor:go` 끝-끝 8 · Grep 이름 14 · 실행기 순서 1). 리팩토링을 시작하지 않은 프로젝트·기록 폴더만 있는 프로젝트·마무리 확인된 프로젝트에서는 통과하고 문제 기록에도 남지 않는지, STATE만 DONE으로 바뀐 프로젝트와 첫 `/refactor:go` 턴에서는 켜지는지, 스위치는 값이 정확히 `1`일 때만 듣는지, 실행기의 빠른 길이 입력을 읽지 않고 끝나는지를 봅니다. 기대값이 뒤집힌 기존 시험은 2개입니다 — 마무리 확인 뒤 강제 push(차단 → 통과), 대문자 `.ENV`가 든 범위의 Grep(통과 → 차단). 세 OS(Ubuntu·Windows Git Bash·macOS bash 3.2)에서 안전장치 시험 1785/1785, 스크립트 시험 155/155(Windows는 156/156) 통과.
 
 ### 0.2.4 (2026-10-02)
 
