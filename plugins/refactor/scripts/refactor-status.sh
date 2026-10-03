@@ -147,8 +147,25 @@ else
   echo "⚠️ 승인 도구 파일(refactor-lib.sh)을 찾지 못해 승인 현황을 계산하지 못했습니다. 플러그인을 다시 설치하세요. (이 상태에서는 어떤 단계도 실행하지 않는다)"
 fi
 
-allow=""
-for f in "$dir"/.allow-*; do [ -e "$f" ] && allow="$allow ${f##*/}"; done
+allow=""; allow_msg=""
+for f in "$dir"/.allow-*; do
+  [ -e "$f" ] || continue
+  # 기준선 허용 파일에 단계 ID 가 적혀 있으면(0.3.2) 그 단계 동안만 열리고 끝나면 저절로 닫힌다 — 상태별로 알리고, 공백만인 파일은 예전 문구
+  if [ "${f##*/}" = .allow-baseline-edit ] && [ -s "$f" ] && command -v rl_allow_baseline >/dev/null 2>&1; then
+    a=$(rl_allow_baseline "$dir"); a=${a%%$'\n'*}
+    case "$a" in
+      OPEN\ *) allow_msg="🔓 기준선 허용 파일(.allow-baseline-edit): 단계 ${a#* } 동안 열림(끝나면 저절로 닫힘)."; continue ;;
+      SHUT\ *) allow_msg="🔒 허용 파일의 단계 ${a#* } 가 승인 대기·카드 바뀜 — 지금은 닫힘."; continue ;;
+      DONE\ *) allow_msg="✅ 허용 파일의 단계가 모두 끝남 — 다음 입력 때 지워짐."; continue ;;
+      UNKNOWN\ *) allow_msg="⚠️ 허용 파일의 단계 ${a#* } 가 계획서에 없음(오타?) — 고치거나 지우세요(터미널에서 rm \"$f\")."; continue ;;
+    esac
+  fi
+  allow="$allow ${f##*/}"
+done
+if [ -n "$allow_msg" ]; then
+  echo
+  echo "$allow_msg"
+fi
 if [ -n "$allow" ]; then
   echo
   echo "⚠️ 허용 파일이 남아 있음:$allow — 해당 작업이 끝나고 커밋했으면 지우세요(터미널에서 rm \"$dir/<파일>\" — CLI 라면 입력창에 ! rm \"…\" 도 됨)."

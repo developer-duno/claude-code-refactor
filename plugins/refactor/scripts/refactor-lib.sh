@@ -304,12 +304,98 @@ rl_done_confirmed() { # $1 docs/refactor 폴더
   case "$last" in *"| 마무리 |"*) rl_log_intact "$1" ;; *) return 1 ;; esac
 }
 
+# 기준선 허용 파일(docs/refactor/.allow-baseline-edit) 읽기(0.3.2 #10) — $1 docs/refactor 폴더. 표준출력 1줄째:
+#   NONE            파일 없음(기준선은 잠김)
+#   ALL             공백만(개행·BOM·CR·NUL 포함) — 예전처럼 기준선 전부 허용(사람이 지운다)
+#   OPEN <ID…>      적힌 단계 중 지금 열린 단계(승인 기록 approved · 완료 아님 · 같은 ID 카드 하나 · 승인 줄 있음 · 승인 기록 봉인 그대로
+#                   = turn.sh ready_ids 와 같은 조건). 2줄째부터 그 카드들의 "깨질 것으로 예상되는 기준선" 칸에 백틱으로 적힌 경로(한 줄에 하나)
+#   SHUT <적힌 ID…> 열린 단계가 없고 아직 안 끝난 단계가 있음(승인 대기·보류·카드 바뀜 등) — 잠김
+#   DONE <적힌 ID…> 계획서 카드와 맞는 ID 가 하나 이상 있고 그것들이 모두 끝남(계획서에서 사라진 ID 는 끝난 것으로 봄) — 저절로 닫힘(turn.sh 가 다음 입력 때 지운다)
+#   UNKNOWN <적힌 ID…> 계획서 카드와 맞는 ID 가 하나도 없음(오타·계획서 없음), 또는 공백 아닌 글자가 있는데 ID 가 0개(주석만·* 등 — ID 자리에 ?) — 잠김, 지우지 않는다
+#   $2 = approved 이면 2줄째부터의 경로를 "열린 단계" 대신 "적힌 ID 중 승인된 카드 전부(완료 포함)" 로 낸다(상태 줄은 같다) —
+#        턴 끝 알림(rl_protected_dirty)용: 같은 턴에 카드 파일을 고친 뒤 완료 표시를 해도 그 파일을 헛경보하지 않게
+#   파일 읽기: NUL·CR 은 떼고(PowerShell 5.1 의 > 는 UTF-16), # 뒤는 주석, ID 글자([A-Za-z0-9_-]) 밖의 글자(BOM 포함)는 칸 나눔, 대소문자 무시
+#   경로: 프로젝트 폴더 기준 상대경로로 맞춘다(\ → /, 앞의 ./ 와 / 는 뗌) — 고치려는 파일과 정확히 같을 때만 연다(rl_abl_hit)
+rl_allow_baseline() {
+  local rd=$1 want=${2:-} ids tmp="" open="" left=0 matched=0 kind_ n_ id t box done_ cnt k r h hv st intact=0 ok
+  [ -f "$rd/.allow-baseline-edit" ] || { echo NONE; return 0; }
+  ids=$(tr -d '\000\r' < "$rd/.allow-baseline-edit" 2>/dev/null | LC_ALL=C awk '{ s = $0
+    if (NR == 1 && substr(s, 1, 3) == "\357\273\277") s = substr(s, 4)
+    if (NR == 1 && (substr(s, 1, 2) == "\377\376" || substr(s, 1, 2) == "\376\377")) s = substr(s, 3)
+    gsub(/[[:space:]]/, "", s); if (s != "") ns = 1
+    sub(/#.*/, ""); gsub(/[^A-Za-z0-9_-]+/, " "); n = split($0, a, " ")
+    for (i = 1; i <= n; i++) { u = toupper(a[i]); if (!(u in S)) { S[u] = 1; o = o " " u } } }
+    END { if (o != "") print substr(o, 2); else if (ns) print "?" }')
+  [ -n "$ids" ] || { echo ALL; return 0; }
+  [ "$ids" = "?" ] && { echo "UNKNOWN ?"; return 0; }
+  set --
+  if [ -f "$rd/REFACTOR_PLAN.md" ]; then
+    tmp=$(mktemp -d 2>/dev/null) || tmp=$(mktemp -d -t rlallow 2>/dev/null) || tmp=""
+    rl_log_intact "$rd" && intact=1
+    while IFS="$RL_US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
+      [ "$kind_" = CARD ] || continue
+      case " $ids " in *" $id "*) ;; *) continue ;; esac
+      matched=1
+      ok=0; [ "$intact" = 1 ] && [ "$st" = approved ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ] && ok=1
+      if [ "$ok" = 1 ] && [ "$done_" != 1 ]; then
+        open="$open $id"; [ -n "$tmp" ] && [ "$want" != approved ] && set -- "$@" "$tmp/c$n_"
+      elif [ "$done_" != 1 ]; then
+        left=1
+      fi
+      [ "$ok" = 1 ] && [ -n "$tmp" ] && [ "$want" = approved ] && set -- "$@" "$tmp/c$n_"
+    done <<RLAB
+$(RL_CARDDIR=$tmp rl_cards "$rd/REFACTOR_PLAN.md" "$rd/APPROVALS.log")
+RLAB
+  fi
+  if [ -n "$open" ]; then
+    echo "OPEN$open"
+  elif [ "$left" = 1 ]; then
+    echo "SHUT $ids"
+  elif [ "$matched" = 0 ]; then
+    echo "UNKNOWN $ids"
+  else
+    echo "DONE $ids"
+  fi
+  # 카드 본문의 "- **깨질 것으로 예상되는 기준선**:" 줄부터 다음 "- **" 칸·제목 줄 전까지, 백틱 안의 글을 경로로
+  if [ "$#" -gt 0 ] && { [ -n "$open" ] || [ "$want" = approved ]; }; then
+    LC_ALL=C awk 'FNR == 1 { on = 0 }
+      /^[ \t>]*([-+*][ \t]+)?\*\*/ { on = ($0 ~ /^[ \t>]*([-+*][ \t]+)?\*\*[^*]*깨질[^*]*기준선/) }
+      /^#/ { on = 0 }
+      on { s = $0
+        while (match(s, /`[^`]+`/)) {
+          p = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
+          gsub(/\\/, "/", p); sub(/^[ \t]+/, "", p); sub(/[ \t]+$/, "", p); sub(/^(\.?\/)+/, "", p)
+          if (p != "" && !(p in S)) { S[p] = 1; print p }
+        } }' "$@" 2>/dev/null
+  fi
+  [ -n "$tmp" ] && rm -rf "$tmp"
+  return 0
+}
+# 경로($1, 프로젝트 폴더 기준 상대경로)가 허용 경로 목록($2, 줄마다 하나)의 하나와 정확히 같은가
+rl_abl_hit() {
+  local rest="$2$RL_NL" p
+  while [ -n "$rest" ]; do
+    p=${rest%%"$RL_NL"*}; rest=${rest#*"$RL_NL"}
+    [ -n "$p" ] || continue
+    case "$1" in "$p") return 0 ;; esac
+  done
+  return 1
+}
+
 # 보호된 파일(커밋된 기준선·마이그레이션) 중 커밋 안 된 변경 목록: "<상태 두 글자> <경로>\t<내용 지문>" 줄들
 #   -z 로 받아 한글·공백 파일 이름도 따옴표·\ 이스케이프 없이 그대로 쓴다(이름 바꾸기는 새 경로만)
 rl_protected_dirty() {
-  local proj=$1 rdir=$2 ent xy path old keep h specs=()
+  local proj=$1 rdir=$2 ent xy path old keep h specs=() abl=NONE ablp="" pfx=""
   command -v git >/dev/null 2>&1 || return 0
-  [ -f "$rdir/.allow-baseline-edit" ] || specs+=('*baseline/*')
+  # 기준선 허용 파일: 공백만(ALL)이면 기준선을 통째로 빼고, 단계 ID 가 적혀 있으면 그 중 승인된 카드(완료 포함)에 적힌 파일만 뺀다(0.3.2)
+  #   (허용 파일이 남아 있는 동안 — 같은 턴에 카드 파일을 고치고 완료 표시를 해도 헛경보하지 않게. turn.sh 가 지우면 원래대로)
+  #   git 은 저장소 루트 기준 경로를 내므로, 프로젝트가 저장소 하위 폴더면 그 접두를 떼고 카드 경로(프로젝트 기준)와 맞춘다
+  if [ -f "$rdir/.allow-baseline-edit" ]; then
+    abl=$(rl_allow_baseline "$rdir" approved)
+    case "$abl" in *"$RL_NL"*) ablp=${abl#*"$RL_NL"}; abl=${abl%%"$RL_NL"*} ;; esac
+    [ -n "$ablp" ] && pfx=$(git -C "$proj" rev-parse --show-prefix 2>/dev/null)
+  fi
+  [ "$abl" = ALL ] || specs+=('*baseline/*')
   [ -f "$rdir/.allow-migration-edit" ] || specs+=('*supabase/migrations/*' '*prisma/migrations/*' '*alembic/versions/*' '*db/migrate/*' '*database/migrations/*' 'migrations/*' '*/migrations/*' 'drizzle/*.sql' 'drizzle/meta/*')
   [ "${#specs[@]}" -eq 0 ] && return 0
   local re_bl='(^|/)(tests?|__tests__|specs?)/([^/]+/)*baseline/'
@@ -320,7 +406,7 @@ rl_protected_dirty() {
     case "$xy" in *R*|*C*) IFS= read -r -d '' old ;; esac   # 이름 바꾸기·복사: 다음 칸은 옛 경로
     case "$path" in *"$RL_NL"*|*"$RL_TAB"*|docs/refactor/*) continue ;; esac
     keep=0
-    if [ ! -f "$rdir/.allow-baseline-edit" ] && [[ $path =~ $re_bl ]]; then keep=1; fi
+    if [ "$abl" != ALL ] && [[ $path =~ $re_bl ]] && ! { [ -n "$ablp" ] && case "$path" in "$pfx"*) rl_abl_hit "${path#"$pfx"}" "$ablp" ;; *) false ;; esac; }; then keep=1; fi
     if [ ! -f "$rdir/.allow-migration-edit" ] && [[ $path =~ $re_mig ]]; then keep=1; fi
     [ "$keep" = 1 ] || continue
     if [ -f "$proj/$path" ]; then h=$(git -C "$proj" hash-object -- "$path" 2>/dev/null); else h=gone; fi

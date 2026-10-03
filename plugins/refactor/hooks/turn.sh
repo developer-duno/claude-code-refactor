@@ -86,6 +86,20 @@ sweep() {
   fi
   # 0.2.0 이 남긴 세션 공용 .turn 이 이 세션 것이면 지운다(이제 .turn.<세션ID> 를 쓴다)
   if [ -f "$rdir/.turn" ]; then o_kind=""; o_sid=""; read -r o_kind o_sid < "$rdir/.turn"; [ "$o_sid" = "$sid" ] && rm -f "$rdir/.turn"; fi
+  allow_done
+  return 0
+}
+# 0.3.2 #10: 기준선 허용 파일에 적힌 단계가 모두 끝났으면(또는 계획서에 없으면) 지우고, .turn-allowgone.<세션ID> 에 그 단계들을 적어
+# 이번 턴의 셸 명령 뒤 점검(post-check.sh)이 한 번 알리게 한다. 빈 파일(예전처럼 전부 허용)은 지우지 않는다(사람이 지운다).
+# 지난 입력의 알림 표시가 남아 있으면(셸 명령 없이 끝난 턴) 먼저 지운다 — 늦게 알리지 않게
+allow_done() {
+  local a
+  [ -f "$rdir/.turn-allowgone.$sid" ] && rm -f "$rdir/.turn-allowgone.$sid"
+  [ -s "$rdir/.allow-baseline-edit" ] && load_lib || return 0
+  a=$(rl_allow_baseline "$rdir")
+  case "$a" in
+    "DONE "*) rm -f "$rdir/.allow-baseline-edit" && printf '%s\n' "${a#DONE }" > "$rdir/.turn-allowgone.$sid" 2>/dev/null ;;
+  esac
   return 0
 }
 

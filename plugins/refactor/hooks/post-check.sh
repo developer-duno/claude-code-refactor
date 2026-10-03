@@ -78,9 +78,18 @@ while IFS= read -r l; do
 done <<EOF
 $snap
 EOF
-[ -z "$changed" ] && [ -z "$log_alarm" ] && [ -z "$reverted" ] && exit 0
+# 4) 이번 입력 때 turn.sh 가 기준선 허용 파일을 지웠으면(적힌 단계가 모두 끝남, 0.3.2 #10) 한 번만 알린다
+allow_gone=""
+if [ -n "$sid" ] && [ -f "$rdir/.turn-allowgone.$sid" ]; then
+  allow_gone=$(tr -d '\r\n' < "$rdir/.turn-allowgone.$sid"); [ -n "$allow_gone" ] || allow_gone="?"
+  rm -f "$rdir/.turn-allowgone.$sid"
+fi
+[ -z "$changed" ] && [ -z "$log_alarm" ] && [ -z "$reverted" ] && [ -z "$allow_gone" ] && exit 0
 
 {
+  if [ -n "$allow_gone" ]; then
+    printf '[refactor 안전장치] 허용 파일(.allow-baseline-edit)의 단계(%s)가 모두 끝나 지웠습니다. → 알림일 뿐이니 하던 일을 계속하세요.\n' "$allow_gone"
+  fi
   if [ -n "$log_alarm" ]; then
     printf '[refactor 안전장치] 이번 턴에 승인 기록(docs/refactor/APPROVALS.log)이 바뀌었습니다. 승인은 사용자가 /refactor:approve 로만 합니다.\n'
     printf '  → 즉시 멈추고 사용자에게 알리세요. 이번 턴에 더해진 승인 줄은 사람이 확인하기 전까지 믿지 않습니다(git diff docs/refactor/APPROVALS.log 로 보여 주기).\n'
@@ -89,7 +98,7 @@ EOF
     printf '[refactor 안전장치] 이번 턴에 보호된 파일(커밋된 기준선 테스트·마이그레이션)이 바뀌었습니다(방금 명령 때문일 수 있음):\n'
     printf '%s' "$changed"
     printf '  → 작업을 멈추고 사용자에게 알리세요. 무엇이 바뀌었는지 git diff <파일> 로 보여 주고, 되돌릴지는 사람이 정합니다.\n'
-    printf '    (사용자가 일부러 바꾼 것이면 그대로 두면 됩니다. 기준선을 새 동작으로 바꾸는 단계라면 사람이 먼저 허용 파일을 만들어야 합니다.)\n'
+    printf '    (사용자가 일부러 바꾼 것이면 그대로 두면 됩니다. 기준선을 새 동작으로 바꾸는 단계라면 사람이 먼저 허용 파일에 그 단계 ID 를 적어야 하고, 카드에 적힌 기준선만 고칩니다.)\n'
   fi
   if [ -n "$reverted" ]; then
     printf '[refactor 안전장치] 이번 턴이 시작될 때 사용자가 고치던 보호된 파일(기준선 테스트·마이그레이션)의 변경이 사라졌습니다(방금 명령이 되돌렸을 수 있음):\n'
