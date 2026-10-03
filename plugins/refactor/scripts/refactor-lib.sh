@@ -308,26 +308,54 @@ rl_done_confirmed() { # $1 docs/refactor 폴더
 #   NONE            파일 없음(기준선은 잠김)
 #   ALL             공백만(개행·BOM·CR·NUL 포함) — 예전처럼 기준선 전부 허용(사람이 지운다)
 #   OPEN <ID…>      적힌 단계 중 지금 열린 단계(승인 기록 approved · 완료 아님 · 같은 ID 카드 하나 · 승인 줄 있음 · 승인 기록 봉인 그대로
-#                   = turn.sh ready_ids 와 같은 조건). 2줄째부터 그 카드들의 "깨질 것으로 예상되는 기준선" 칸에 백틱으로 적힌 경로(한 줄에 하나)
+#                   = turn.sh ready_ids 와 같은 조건) 중 지금 실행 중인 단계 — STATE.md 앞머리 current_step 값에 적힌 ID(0.3.3,
+#                   ID 글자 밖은 칸 나눔·대소문자 무시 · 본문은 안 읽음). 2줄째부터 그 카드들의 "깨질 것으로 예상되는 기준선" 칸에 백틱으로 적힌 경로(한 줄에 하나)
+#   WAIT <열린 ID…> 열린 단계는 있지만 current_step 에 그 단계가 안 적혀 있음(값 없음·"-"·STATE 없음·다른 단계 — 0.3.3) — 잠김, 경로 없음
 #   SHUT <적힌 ID…> 열린 단계가 없고 아직 안 끝난 단계가 있음(승인 대기·보류·카드 바뀜 등) — 잠김
 #   DONE <적힌 ID…> 계획서 카드와 맞는 ID 가 하나 이상 있고 그것들이 모두 끝남(계획서에서 사라진 ID 는 끝난 것으로 봄) — 저절로 닫힘(turn.sh 가 다음 입력 때 지운다)
 #   UNKNOWN <적힌 ID…> 계획서 카드와 맞는 ID 가 하나도 없음(오타·계획서 없음), 또는 공백 아닌 글자가 있는데 ID 가 0개(주석만·* 등 — ID 자리에 ?) — 잠김, 지우지 않는다
-#   $2 = approved 이면 2줄째부터의 경로를 "열린 단계" 대신 "적힌 ID 중 승인된 카드 전부(완료 포함)" 로 낸다(상태 줄은 같다) —
+#   $2 = approved 이면 2줄째부터의 경로를 "실행 중인 단계" 대신 "적힌 ID 중 승인된 카드 전부(완료 포함)" 로 낸다(상태 줄은 같다 — WAIT 여도 경로를 낸다) —
 #        턴 끝 알림(rl_protected_dirty)용: 같은 턴에 카드 파일을 고친 뒤 완료 표시를 해도 그 파일을 헛경보하지 않게
 #   파일 읽기: NUL·CR 은 떼고(PowerShell 5.1 의 > 는 UTF-16), # 뒤는 주석, ID 글자([A-Za-z0-9_-]) 밖의 글자(BOM 포함)는 칸 나눔, 대소문자 무시
 #   경로: 프로젝트 폴더 기준 상대경로로 맞춘다(\ → /, 앞의 ./ 와 / 는 뗌) — 고치려는 파일과 정확히 같을 때만 연다(rl_abl_hit)
 rl_allow_baseline() {
   local rd=$1 want=${2:-} ids tmp="" open="" left=0 matched=0 kind_ n_ id t box done_ cnt k r h hv st intact=0 ok
   [ -f "$rd/.allow-baseline-edit" ] || { echo NONE; return 0; }
-  ids=$(tr -d '\000\r' < "$rd/.allow-baseline-edit" 2>/dev/null | LC_ALL=C awk '{ s = $0
-    if (NR == 1 && substr(s, 1, 3) == "\357\273\277") s = substr(s, 4)
-    if (NR == 1 && (substr(s, 1, 2) == "\377\376" || substr(s, 1, 2) == "\376\377")) s = substr(s, 3)
-    gsub(/[[:space:]]/, "", s); if (s != "") ns = 1
-    sub(/#.*/, ""); gsub(/[^A-Za-z0-9_-]+/, " "); n = split($0, a, " ")
-    for (i = 1; i <= n; i++) { u = toupper(a[i]); if (!(u in S)) { S[u] = 1; o = o " " u } } }
-    END { if (o != "") print substr(o, 2); else if (ns) print "?" }')
+  ids=$(rl_allow_ids "$rd")
   [ -n "$ids" ] || { echo ALL; return 0; }
   [ "$ids" = "?" ] && { echo "UNKNOWN ?"; return 0; }
+  # 지금 실행 중인 단계(0.3.3): STATE.md 앞머리(첫 줄 --- 부터 다음 --- 전까지)의 current_step 값 — bash 내장 read 만(외부 명령 없이)
+  #   ID 글자 밖은 칸 나눔, 대문자로 → cw = " P1-1 P1-2 " 꼴
+  local cw="" ln fm=0 lo=abcdefghijklmnopqrstuvwxyz up=ABCDEFGHIJKLMNOPQRSTUVWXYZ i=0 cur=""
+  if [ -f "$rd/STATE.md" ]; then
+    while IFS= read -r ln || [ -n "$ln" ]; do
+      ln=${ln%$'\r'}
+      if [ "$fm" = 0 ]; then
+        ln=${ln#$'\357\273\277'}
+        case "$ln" in ---*) fm=1; continue ;; *) break ;; esac
+      fi
+      case "$ln" in
+        ---*) break ;;
+        current_step:*) cw=${ln#current_step:}; break ;;
+      esac
+    done < "$rd/STATE.md"
+  fi
+  while [ "$i" -lt 26 ]; do cw=${cw//${lo:i:1}/${up:i:1}}; i=$((i + 1)); done
+  # 같은 묶음의 숫자 범위 "P1-1~P1-5"(물결 앞뒤 공백 허용 · 시작 ≤ 끝 · 99칸 이하)는 사이 단계까지 펼친다(검사 보완 F1).
+  #   묶음이 다르거나(P1-1~P2-3)·끝이 숫자가 아니거나(P1-3A)·거꾸로·너무 넓으면 펼치지 않는다(양 끝 낱말만 남는다)
+  local re_rng='([A-Z0-9_]+)-([0-9]{1,6})[[:space:]]*~[[:space:]]*([A-Z0-9_]+)-([0-9]{1,6})([^A-Z0-9_-]|$)' rs=$cw ro="" rm rb rc rj rx
+  while [[ $rs =~ $re_rng ]]; do
+    rm=${BASH_REMATCH[0]}; rm=${rm%"${BASH_REMATCH[5]}"}; rx=${BASH_REMATCH[1]}; rb=$((10#${BASH_REMATCH[2]})); rc=$((10#${BASH_REMATCH[4]}))
+    ro="$ro${rs%%"$rm"*}"; rs=${rs#*"$rm"}
+    if [ "$rx" = "${BASH_REMATCH[3]}" ] && [ "$rb" -le "$rc" ] && [ $((rc - rb)) -le 99 ]; then
+      rj=$rb; while [ "$rj" -le "$rc" ]; do ro="$ro $rx-$rj"; rj=$((rj + 1)); done; ro="$ro "
+    else
+      ro="$ro${rm//\~/ }"
+    fi
+  done
+  cw=$ro$rs
+  cw=${cw//[!A-Za-z0-9_-]/ }
+  cw=" $cw "
   set --
   if [ -f "$rd/REFACTOR_PLAN.md" ]; then
     tmp=$(mktemp -d 2>/dev/null) || tmp=$(mktemp -d -t rlallow 2>/dev/null) || tmp=""
@@ -338,7 +366,8 @@ rl_allow_baseline() {
       matched=1
       ok=0; [ "$intact" = 1 ] && [ "$st" = approved ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ] && ok=1
       if [ "$ok" = 1 ] && [ "$done_" != 1 ]; then
-        open="$open $id"; [ -n "$tmp" ] && [ "$want" != approved ] && set -- "$@" "$tmp/c$n_"
+        open="$open $id"
+        case "$cw" in *" $id "*) cur="$cur $id"; [ -n "$tmp" ] && [ "$want" != approved ] && set -- "$@" "$tmp/c$n_" ;; esac
       elif [ "$done_" != 1 ]; then
         left=1
       fi
@@ -347,8 +376,10 @@ rl_allow_baseline() {
 $(RL_CARDDIR=$tmp rl_cards "$rd/REFACTOR_PLAN.md" "$rd/APPROVALS.log")
 RLAB
   fi
-  if [ -n "$open" ]; then
-    echo "OPEN$open"
+  if [ -n "$cur" ]; then
+    echo "OPEN$cur"
+  elif [ -n "$open" ]; then
+    echo "WAIT$open"
   elif [ "$left" = 1 ]; then
     echo "SHUT $ids"
   elif [ "$matched" = 0 ]; then
@@ -357,19 +388,48 @@ RLAB
     echo "DONE $ids"
   fi
   # 카드 본문의 "- **깨질 것으로 예상되는 기준선**:" 줄부터 다음 "- **" 칸·제목 줄 전까지, 백틱 안의 글을 경로로
-  if [ "$#" -gt 0 ] && { [ -n "$open" ] || [ "$want" = approved ]; }; then
-    LC_ALL=C awk 'FNR == 1 { on = 0 }
-      /^[ \t>]*([-+*][ \t]+)?\*\*/ { on = ($0 ~ /^[ \t>]*([-+*][ \t]+)?\*\*[^*]*깨질[^*]*기준선/) }
-      /^#/ { on = 0 }
-      on { s = $0
-        while (match(s, /`[^`]+`/)) {
-          p = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
-          gsub(/\\/, "/", p); sub(/^[ \t]+/, "", p); sub(/[ \t]+$/, "", p); sub(/^(\.?\/)+/, "", p)
-          if (p != "" && !(p in S)) { S[p] = 1; print p }
-        } }' "$@" 2>/dev/null
+  if [ "$#" -gt 0 ] && { [ -n "$cur" ] || [ "$want" = approved ]; }; then
+    rl_card_bl_paths "$@"
   fi
   [ -n "$tmp" ] && rm -rf "$tmp"
   return 0
+}
+# 기준선 허용 파일에서 단계 ID 뽑기(0.3.3 — rl_allow_baseline 에서 뗌) — $1 docs/refactor 폴더. 출력 1줄:
+#   ID 들(대문자·공백 구분·중복 제거) / ?(공백 아닌 글자가 있는데 ID 0개) / 빈 출력(공백만 또는 파일 없음)
+#   NUL·CR 은 떼고(PowerShell 5.1 의 > 는 UTF-16), 첫 줄의 BOM 은 떼고, # 뒤는 주석, ID 글자([A-Za-z0-9_-]) 밖은 칸 나눔
+rl_allow_ids() {
+  [ -f "$1/.allow-baseline-edit" ] || return 0
+  tr -d '\000\r' < "$1/.allow-baseline-edit" 2>/dev/null | LC_ALL=C awk '{ s = $0
+    if (NR == 1 && substr(s, 1, 3) == "\357\273\277") s = substr(s, 4)
+    if (NR == 1 && (substr(s, 1, 2) == "\377\376" || substr(s, 1, 2) == "\376\377")) s = substr(s, 3)
+    gsub(/[[:space:]]/, "", s); if (s != "") ns = 1
+    sub(/#.*/, ""); gsub(/[^A-Za-z0-9_-]+/, " "); n = split($0, a, " ")
+    for (i = 1; i <= n; i++) { u = toupper(a[i]); if (!(u in S)) { S[u] = 1; o = o " " u } } }
+    END { if (o != "") print substr(o, 2); else if (ns) print "?" }'
+}
+# 카드 본문 파일들의 "- **깨질 것으로 예상되는 기준선**:" 칸(그 줄부터 다음 "- **" 칸·제목 줄 전까지)에서 백틱 안의 글을 경로로(0.3.3 — rl_allow_baseline 에서 뗌)
+#   경로는 \ → /, 앞뒤 공백·앞의 ./ 와 / 를 뗀다. 기본 = 한 줄에 경로 하나(전체 중복 제거)
+#   -n = "<파일 이름(폴더 뺀 끝 이름)><TAB><경로>" 를 파일마다(그 파일 안에서만 중복 제거). 칸에 글이 있는데(공백 뗀 글이 "없음" 으로
+#        시작하지 않음) 백틱 경로가 0개인 파일은 "<파일 이름><TAB>?" 한 줄. 칸이 없거나 "없음" 이면 그 파일은 줄 없음
+rl_card_bl_paths() { # [-n] <카드 본문 파일…>
+  local nm=0
+  [ "${1:-}" = -n ] && { nm=1; shift; }
+  [ "$#" -gt 0 ] || return 0
+  LC_ALL=C awk -v NM="$nm" '
+    function fl() { if (NM == 1 && cur != "" && txt != "" && index(txt, "없음") != 1 && np == 0) print cur "\t?" }
+    FNR == 1 { fl(); on = 0; fi++; cur = FILENAME; sub(/.*\//, "", cur); txt = ""; np = 0 }
+    /^[ \t>]*([-+*][ \t]+)?\*\*/ { on = ($0 ~ /^[ \t>]*([-+*][ \t]+)?\*\*[^*]*깨질[^*]*기준선/); hd = on }
+    /^#/ { on = 0 }
+    on { s = $0
+      if (NM == 1) { u = s; if (hd) sub(/^[ \t>]*([-+*][ \t]+)?\*\*[^*]*\*\*[ \t]*:?/, "", u); hd = 0; gsub(/[[:space:]]/, "", u); txt = txt u }
+      while (match(s, /`[^`]+`/)) {
+        p = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
+        gsub(/\\/, "/", p); sub(/^[ \t]+/, "", p); sub(/[ \t]+$/, "", p); sub(/^(\.?\/)+/, "", p)
+        if (p == "") continue
+        if (NM == 1) { if (!((fi, p) in S)) { S[fi, p] = 1; np++; print cur "\t" p } }
+        else if (!(p in S)) { S[p] = 1; print p }
+      } }
+    END { fl() }' "$@" 2>/dev/null
 }
 # 경로($1, 프로젝트 폴더 기준 상대경로)가 허용 경로 목록($2, 줄마다 하나)의 하나와 정확히 같은가
 rl_abl_hit() {

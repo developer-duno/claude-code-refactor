@@ -20,6 +20,8 @@
 #    그 결과를 "[Vibe Refactor 승인 처리 결과 — 입력 훅]" 블록으로 이번 턴의 컨텍스트(stdout)에 넣는다.
 #    스킬의 ! 명령은 이 훅보다 먼저 돌기 때문에 승인·취소·마무리·확인·baseline 은 스킬이 아니라 여기서 처리한다
 #    (스킬 쪽 실행은 --from-hook 이 없어 현황만 보여 준다). 인자가 없으면 현황만(바꾸는 것 없음). 이 훅은 프롬프트를 막지 않는다(exit 0).
+#    승인 스크립트에는 REFACTOR_TURN_SID=<세션ID> 를 넘긴다("푸시"가 그 세션의 허락 파일 .turn-push.<세션ID> 를 만든다).
+#    push 허락은 그 차례에만: 사람 입력마다(알림 입력은 빼고) 승인 처리보다 먼저 그 세션의 .turn-push.<세션ID> 를 지운다.
 # 3) 리팩토링 진행 중이면(또는 /refactor:go 턴이면) 턴이 시작될 때 "보호된 파일 중 이미 바뀌어 있던 것"과
 #    승인 기록(APPROVALS.log)의 지문을 .turn-dirty.<세션ID> 에 적어 둔다. 셸 명령 뒤 점검(post-check.sh)은
 #    이 목록에 없던 변경·이 목록에서 사라진 변경만 알리고, 턴 중에 승인 기록이 바뀌면 알린다.
@@ -65,6 +67,10 @@ fi
 # 사람이 친 입력이 아닌 것(<task-notification> 같은 알림)은 무시. 붙여 넣은 글(<pasted_content …>)은 사람 입력이다
 re_sys='^([[:space:]]|\\[nrt])*<(task-notification|system-reminder|agent-message|cross-session-message|local-command-stdout)[[:space:]>]'
 [[ $prompt =~ $re_sys ]] && exit 0
+
+# 0.3.3: push 허락(/refactor:approve 푸시 가 만든 .turn-push.<세션ID>)은 그 차례에만 — 사람 입력마다 먼저 지운다
+# (위에서 알림 입력은 이미 걸렀으므로 지우지 않는다. 이번 입력이 /refactor:approve 푸시 면 아래 승인 처리가 새로 만든다)
+[ -f "$rdir/.turn-push.$sid" ] && rm -f "$rdir/.turn-push.$sid"
 
 T="$rdir/.turn.$sid"
 # 정리(하루 지난 표시 파일·0.2.0 의 세션 공용 .turn)는 외부 프로그램(find·date·rm)을 띄우므로 표시 처리(go 턴의 닫힌 표시 쓰기,
@@ -112,7 +118,7 @@ if [[ $prompt =~ $re_approve ]]; then
   a_args=${a_args//\\n/ }; a_args=${a_args//\\r/ }; a_args=${a_args//\\t/ }
   a_args=${a_args//\\\"/\"}; a_args=${a_args//\\\\/\\}
   if [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$REFACTOR_ROOT/hooks/run.sh" ]; then
-    a_out=$(printf '%s' "$a_args" | bash "$REFACTOR_ROOT/hooks/run.sh" refactor-approve "$proj" --from-hook 2>&1)
+    a_out=$(printf '%s' "$a_args" | REFACTOR_TURN_SID=$sid bash "$REFACTOR_ROOT/hooks/run.sh" refactor-approve "$proj" --from-hook 2>&1)
   else
     a_out="⚠️ 승인 스크립트를 찾지 못해 아무것도 바꾸지 않았습니다(REFACTOR_ROOT 없음). 플러그인을 다시 설치해 주세요."
   fi
@@ -188,6 +194,13 @@ reset_approvals() { # $1 단계 — "/refactor:go 다시" : 승인 기록에 재
   SUMF=""   # 기록이 바뀌었으니 지문을 다시 잰다
   # 기록이 봉인 그대로였을 때만 다시 봉인한다(밖에서 바뀐 기록을 이 줄로 덮어 인정하지 않게)
   [ "$intact" = 1 ] && rl_log_seal "$rdir"
+  # 0.3.3: 승인이 재설정되면 지난 기준선 허용 파일도 지운다(새 계획에서 같은 번호가 다른 카드일 수 있다) — 이번 턴의 컨텍스트(stdout)에 한 줄
+  if [ -f "$rdir/.allow-baseline-edit" ]; then
+    rm -f "$rdir/.allow-baseline-edit"
+    [ -f "$rdir/.allow-baseline-edit" ] || printf '%s\n' "[Vibe Refactor] 승인이 재설정되어 지난 기준선 허용 파일(.allow-baseline-edit)을 지웠습니다."
+  fi
+  # 마이그레이션 허용 파일은 지우지 않고 알리기만(사람이 만들고 사람이 지운다)
+  [ -f "$rdir/.allow-migration-edit" ] && printf '%s\n' "[Vibe Refactor] 마이그레이션 허용 파일(.allow-migration-edit)이 남아 있습니다 — 필요 없으면 사람이 지웁니다."
   # 계획서의 승인 체크 표시도 비운다(완료 전 단계만) — 다시 승인할 때까지 "승인 대기"로 보이게
   [ -f "$rdir/REFACTOR_PLAN.md" ] || return 0
   local kind_ n_ id t box done_ cnt k r h hv st ids=""

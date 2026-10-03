@@ -150,11 +150,14 @@ fi
 allow=""; allow_msg=""
 for f in "$dir"/.allow-*; do
   [ -e "$f" ] || continue
-  # 기준선 허용 파일에 단계 ID 가 적혀 있으면(0.3.2) 그 단계 동안만 열리고 끝나면 저절로 닫힌다 — 상태별로 알리고, 공백만인 파일은 예전 문구
-  if [ "${f##*/}" = .allow-baseline-edit ] && [ -s "$f" ] && command -v rl_allow_baseline >/dev/null 2>&1; then
+  # 기준선 허용 파일에 단계 ID 가 적혀 있으면(0.3.2) 그 단계를 실행하는 동안만(0.3.3 — STATE.md current_step) 열리고 끝나면 저절로 닫힌다 —
+  # 상태별로 알린다. 빈(0바이트·공백만) 파일은 기준선 전부가 열려 저절로 안 닫히므로 따로 경고(0.3.3)
+  if [ "${f##*/}" = .allow-baseline-edit ] && command -v rl_allow_baseline >/dev/null 2>&1; then
     a=$(rl_allow_baseline "$dir"); a=${a%%$'\n'*}
     case "$a" in
-      OPEN\ *) allow_msg="🔓 기준선 허용 파일(.allow-baseline-edit): 단계 ${a#* } 동안 열림(끝나면 저절로 닫힘)."; continue ;;
+      ALL) allow_msg="⚠️ 빈 기준선 허용 파일 — 기준선 전부가 열려 있고 저절로 닫히지 않습니다. 단계 목록으로 바꾸기: /refactor:approve 허용 <ID> · 닫기: /refactor:approve 허용 닫기"; continue ;;
+      OPEN\ *) allow_msg="🔓 기준선 허용 파일(.allow-baseline-edit): 단계 ${a#* } 실행 중 — 열림(끝나면 저절로 닫힘)."; continue ;;
+      WAIT\ *) allow_msg="🔒 기준선 허용: 단계 ${a#* } — 그 단계를 실행하는 동안만 열림(지금은 닫힘)."; continue ;;
       SHUT\ *) allow_msg="🔒 허용 파일의 단계 ${a#* } 가 승인 대기·카드 바뀜 — 지금은 닫힘."; continue ;;
       DONE\ *) allow_msg="✅ 허용 파일의 단계가 모두 끝남 — 다음 입력 때 지워짐."; continue ;;
       UNKNOWN\ *) allow_msg="⚠️ 허용 파일의 단계 ${a#* } 가 계획서에 없음(오타?) — 고치거나 지우세요(터미널에서 rm \"$f\")."; continue ;;

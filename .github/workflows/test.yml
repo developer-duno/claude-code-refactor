@@ -17,13 +17,21 @@ concurrency:
 
 jobs:
   test:
+    # 검사 이름 = matrix.os — main 보호 규칙의 필수 검사가 이 이름(test (ubuntu-latest) 등)을 본다. 이름은 바꾸지 말고 판은 image 로 고른다
     name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.image }}
     timeout-minutes: 30
+    continue-on-error: ${{ matrix.preview }} # 미리보기 칸은 실패해도 실행 전체를 실패로 만들지 않는다(필수 검사도 아님)
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          # 우분투는 판을 고정한다 — ubuntu-latest 가 다음 판으로 넘어가는 날 필수 검사가 갑자기 깨지지 않게(0.3.3)
+          - { os: ubuntu-latest, image: ubuntu-24.04, preview: false }
+          - { os: windows-latest, image: windows-latest, preview: false }
+          - { os: macos-latest, image: macos-latest, preview: false }
+          # 다음 우분투 판을 미리 돌려 본다 — 초록이 이어지면 위 고정을 이 판으로 올린다
+          - { os: ubuntu-26.04 미리보기, image: ubuntu-26.04, preview: true }
     env:
       PYTHONUTF8: "1" # Windows 콘솔 기본 인코딩으로 한국어 출력이 깨지지 않게
     steps:

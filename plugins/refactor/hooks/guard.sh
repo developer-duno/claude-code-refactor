@@ -367,7 +367,7 @@ allow_baseline=0; abl_mode=""; abl_ids=""; abl_paths=""; abl_why=""
 if [ -f "$rdir/.allow-baseline-edit" ]; then
   if [ -s "$rdir/.allow-baseline-edit" ]; then abl_mode=lazy; else allow_baseline=1; abl_mode=ALL; fi
 fi
-abl_load() { # → abl_mode: ALL(공백·주석만 = 전부 허용) / OPEN(열린 단계 있음, abl_paths = 카드에 적힌 경로들) / SHUT·DONE·UNKNOWN(열린 단계 없음) / NONE
+abl_load() { # → abl_mode: ALL(공백·주석만 = 전부 허용) / OPEN(지금 실행 중인 단계 있음, abl_paths = 카드에 적힌 경로들) / WAIT(열린 단계가 STATE.md current_step 에 안 적힘, 0.3.3) / SHUT·DONE·UNKNOWN(열린 단계 없음) / NONE
   [ "$abl_mode" = lazy ] || return 0
   abl_mode=SHUT; abl_ids="?"
   [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$lib" ] || return 0   # 플러그인 폴더를 모르면 닫힌 쪽
@@ -376,13 +376,16 @@ abl_load() { # → abl_mode: ALL(공백·주석만 = 전부 허용) / OPEN(열�
   out=$(rl_allow_baseline "$rdir")
   l1=${out%%"$NL"*}; [ "$l1" != "$out" ] && abl_paths=${out#*"$NL"}
   abl_mode=${l1%% *}; abl_ids=""; [ "$l1" != "$abl_mode" ] && abl_ids=${l1#* }
-  case "$abl_mode" in ALL|OPEN|SHUT|DONE|UNKNOWN|NONE) ;; *) abl_mode=SHUT; abl_ids="?" ;; esac
+  case "$abl_mode" in ALL|OPEN|WAIT|SHUT|DONE|UNKNOWN|NONE) ;; *) abl_mode=SHUT; abl_ids="?" ;; esac
   [ "$abl_mode" = ALL ] && allow_baseline=1
   return 0
 }
 abl_closed_why() { # 열린 단계가 없을 때의 까닭 → abl_why (파일이 없으면 빈 칸)
   abl_why=""
-  case "$abl_mode" in SHUT|DONE|UNKNOWN) abl_why="허용 파일(.allow-baseline-edit)에 적힌 단계($abl_ids)는 계획서에 없거나 승인·실행 대기 상태가 아닙니다(끝난 단계면 저절로 닫힌 것)." ;; esac
+  case "$abl_mode" in
+    SHUT|DONE|UNKNOWN) abl_why="허용 파일(.allow-baseline-edit)에 적힌 단계($abl_ids)는 계획서에 없거나 승인·실행 대기 상태가 아닙니다(끝난 단계면 저절로 닫힌 것)." ;;
+    WAIT) abl_why="허용 파일의 단계($abl_ids)는 지금 실행 중으로 적힌 단계가 아닙니다 — 그 단계를 시작할 때 STATE.md 의 current_step 을 \"<ID> (진행 중)\" 으로 먼저 적습니다(7-execute 순서 1)." ;;
+  esac
 }
 abl_file_ok() { # $1 고치려는 기준선 파일(절대경로) — 허용 파일이 이 파일을 열어 주나(아니면 abl_why 에 까닭)
   abl_why=""
@@ -392,7 +395,7 @@ abl_file_ok() { # $1 고치려는 기준선 파일(절대경로) — 허용 파�
   [ "$abl_mode" = ALL ] && return 0
   if [ "$abl_mode" = OPEN ]; then
     [ -n "$abl_paths" ] && rl_abl_hit "${1#"$proj"/}" "$abl_paths" && return 0
-    abl_why="이 파일은 열린 단계($abl_ids)의 '깨질 것으로 예상되는 기준선' 칸에 없습니다 — 카드에 적힌 파일만 고칩니다."
+    abl_why="이 파일은 지금 실행 중인 단계($abl_ids)의 '깨질 것으로 예상되는 기준선' 칸에 없습니다 — 카드에 적힌 파일만 고칩니다."
     return 1
   fi
   abl_closed_why; return 1
@@ -405,7 +408,7 @@ abl_any_open() { # 셸 명령(스냅숏 갱신·기준선 폴더 쓰기)은 단�
   [ "$abl_mode" = ALL ] && return 0
   if [ "$abl_mode" = OPEN ]; then
     [ -n "$abl_paths" ] && return 0
-    abl_why="열린 단계($abl_ids)의 카드에 '깨질 것으로 예상되는 기준선' 파일이 적혀 있지 않습니다(\"없음\") — 기준선을 바꾸지 않는 단계입니다."
+    abl_why="지금 실행 중인 단계($abl_ids)의 카드에 '깨질 것으로 예상되는 기준선' 파일이 적혀 있지 않습니다(\"없음\") — 기준선을 바꾸지 않는 단계입니다."
     return 1
   fi
   abl_closed_why; return 1
@@ -438,9 +441,14 @@ MSG_APPROVE="사용자에게 /refactor:approve <단계ID> (기준선은 /refacto
 # 안내 예시의 단계 ID: /refactor:go 턴이면 이번 실행 대기 단계(.turn 의 ready), 아니면 예시
 abl_ex="P1-1 P1-2"
 if [ "$go_turn" = 1 ] && [ -n "$t_ready" ] && [ "$t_ready" != "?" ]; then abl_ex=${t_ready//[!A-Za-z0-9_ -]/}; [ -n "${abl_ex// /}" ] || abl_ex="P1-1 P1-2"; fi
-MSG_ALLOW_B="기준선을 새 동작으로 바꿔야 하는 🛠 단계라면 멈추고 사람에게 요청하세요: 터미널에서 printf '$abl_ex\n' > \"$rdir/.allow-baseline-edit\" (이번에 승인된 🛠 단계 ID 를 모두 적으면 한 번으로 끝 · PowerShell 은 Set-Content -Encoding ascii -Path \"…\" -Value \"$abl_ex\" · CLI 라면 입력창에 ! printf … 도 됨). 적힌 단계가 모두 끝나면 저절로 닫힙니다. 고칠 수 있는 파일은 카드의 '깨질 것으로 예상되는 기준선' 칸에 백틱으로 적힌 것뿐입니다."
+MSG_ALLOW_B="기준선을 새 동작으로 바꿔야 하는 🛠 단계라면 멈추고 사용자에게 입력창에 /refactor:approve 허용 $abl_ex 를 입력해 달라고 요청하세요(터미널이 없어도 됩니다 — 원격·VS Code). 터미널에서는 printf '$abl_ex\n' > \"$rdir/.allow-baseline-edit\" 도 됩니다(PowerShell 은 Set-Content -Encoding ascii -Path \"…\" -Value \"$abl_ex\"). 이번에 승인된 🛠 단계 ID 를 모두 적으면 한 번으로 끝 · 적힌 단계가 모두 끝나면 저절로 닫힙니다. 고칠 수 있는 파일은 지금 실행 중인 단계의 카드에 적힌 파일('깨질 것으로 예상되는 기준선' 칸에 백틱으로 적힌 것)뿐입니다."
+# 허용은 이미 있는데 실행 중 단계가 안 맞아 막힐 때(WAIT · OPEN 인데 카드 밖 파일)의 안내 — 사람에게 다시 부탁할 일이 아니다(검사 보완 F2)
+MSG_ALLOW_CS="허용은 이미 있습니다 — STATE.md 의 current_step 을 지금 실행할 단계 \"<ID> (진행 중)\" 으로 먼저 고친 뒤 다시 하세요(사람에게 부탁할 것 없음). 카드에 없는 기준선 파일은 고치지 않습니다."
+# WAIT 일 때만 덧붙인다(R3 — OPEN 은 실행 중 단계가 이미 허용 파일에 있어 까닭이 다르다)
+MSG_ALLOW_K5="current_step 이 맞는데도 막히면 그 단계가 허용 파일에 없는 것입니다 — 사용자에게 /refactor:approve 허용 <그 ID> 를 부탁하세요."
+abl_hint() { case "$abl_mode" in WAIT) AH="$MSG_ALLOW_CS $MSG_ALLOW_K5" ;; OPEN) AH=$MSG_ALLOW_CS ;; *) AH=$MSG_ALLOW_B ;; esac; }   # 기준선 차단의 → 안내 → AH(abl_file_ok·abl_any_open 뒤에 부른다)
 MSG_ALLOW_M="구조 변경은 새 마이그레이션 파일로 만드세요. 이미 있는 파일을 꼭 고쳐야 하면 사람에게 요청: 터미널에서 touch \"$rdir/.allow-migration-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨 · 끝나면 지우기)."
-MSG_HUMAN="필요하면 사람에게 직접 실행해 달라고 요청하세요(예: 터미널에서 printf 'P1-1 P1-2\n' > \"$rdir/.allow-baseline-edit\" (CLI 라면 입력창에 ! printf … 도 됨))."
+MSG_HUMAN="필요하면 사용자에게 입력창에 /refactor:approve 허용 $abl_ex 를 입력해 달라고 요청하세요(터미널이 없어도 됩니다 — 원격·VS Code). 터미널에서는 printf '$abl_ex\n' > \"$rdir/.allow-baseline-edit\" 도 됩니다(CLI 라면 입력창에 ! printf … 도 됨). 적힌 단계가 모두 끝나면 저절로 닫히고, 지금 실행 중인 단계의 카드에 적힌 파일만 고칠 수 있습니다."
 
 normpath() { # $1 → NP (절대경로, / 구분자, ./ 와 ../ 정리). $2 = 상대경로의 기준 폴더(없으면 프로젝트)
   local p=${1//"$BS"/$SL} re_dot='/\./' re_up='/[^/]+/\.\./' re_dbl='//+' b
@@ -634,7 +642,7 @@ check_file_tool() {
     is_claude_settings "$path" && block "리팩토링 진행 중에는 Claude 설정 파일($name)을 고치지 않습니다." "권한·훅 설정 변경은 사람이 직접 합니다."
     # 이미 커밋된 기준선은 기준선 작성 단계에서도 고치지 않는다(새 기준선 파일은 커밋 전까지 고쳐도 된다)
     if [ -e "$path" ] && is_baseline_path "$path" && ! abl_file_ok "$path" && is_tracked "$path"; then
-      block "이미 커밋된 기준선 테스트($name)는 허용 없이 고치지 않습니다.${abl_why:+ $abl_why}" "$MSG_ALLOW_B 이번 단계의 새 테스트는 tests/baseline 밖(예: tests/refactor/)에 만드세요."
+      abl_hint; block "이미 커밋된 기준선 테스트($name)는 허용 없이 고치지 않습니다.${abl_why:+ $abl_why}" "$AH 이번 단계의 새 테스트는 tests/baseline 밖(예: tests/refactor/)에 만드세요."
     fi
     if [ -e "$path" ] && is_migration_path "$path" && [ "$allow_migration" = 0 ] && is_tracked "$path"; then
       block "이미 커밋된 마이그레이션 파일($name)은 고치지 않습니다(운영 DB에 이미 적용됐을 수 있음)." "$MSG_ALLOW_M"
@@ -2867,8 +2875,10 @@ mk_views() {
 #   단, $( ) · ` ` 명령 치환이 든 문자열은 실행되는 명령이므로 그대로 둔다.
 mk_lq() {
   local m0 dv dk=0
+  # 0.3.3 K2: 안전 실행기로 감싼 명령(…run.sh" refactor-safe-run -- git commit -m "…" — 7-execute 5-1 의 단계 커밋)도 그냥 꼴과 같이 문구를 뺀다
+  #   (R3: 그 접두는 명령 시작 자리의 bash <경로> 뒤에서만 — 따옴표 안의 글자로 경계를 어긋나게 읽지 않게. 그룹이 둘 늘어 문구 그룹 = 6)
   # 0.3.2: 가운데 묶음은 > 를 건너지 않는다 — echo x >> "docs/refactor/APPROVALS.log" 의 리다이렉트 대상(따옴표)을 문구로 보고 비우면 쓰기 판정이 대상을 못 본다
-  blank_quoted "(^|[;&|(])[[:space:]]*(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep|git[[:space:]]+log|git[[:space:]]+commit|echo|printf|write-host|write-output)([^;&|\"'>]*)(\"([^\"\\\\]|\\\\.)*\"|'[^']*')" 4 "$1"
+  blank_quoted "(^|[;&|(]|(^|[;&|(])[[:space:]]*bash[[:space:]]+(\"[^\"]*\"|'[^']*'|[^[:space:];&|\"']+)[[:space:]]+refactor-safe-run[[:space:]]+--[[:space:]])[[:space:]]*(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep|git[[:space:]]+log|git[[:space:]]+commit|echo|printf|write-host|write-output)([^;&|\"'>]*)(\"([^\"\\\\]|\\\\.)*\"|'[^']*')" 6 "$1"
   unquote_simple "$BQ"; LQ=$UQ   # 검색어·문구를 뺀 뒤 단순 따옴표 인자는 벗긴다(git reset "--hard" → git reset --hard)
   # 보내는 데이터는 실행되지 않는다 — curl·wget 류의 -d·--data·--json·-F 따옴표 값과 JSON 값("키":"값")은 비운다
   #   (curl -d '{"cmd":"git reset --hard"}' …). $( )·` ` 가 든 큰따옴표 값은 실행되므로 그대로 둔다
@@ -2946,6 +2956,98 @@ test_only_subst() {
   return 0
 }
 
+# 0.3.3 외출 중 push 허락(사람이 /refactor:approve 푸시 → 입력 훅이 만든 docs/refactor/.turn-push.<세션ID>):
+#   1줄 "push <가지>"(가지 글자 [A-Za-z0-9._/-], 첫 글자는 영숫자·_) · 2줄 만든 시각(초). 이 세션 것이고 만든 지 0~1800초일 때만 → PB(허락된 가지)
+#   push 가 보이는 명령에서만 부른다(date 1회 — 평소 도구 호출엔 비용 0)
+push_grant() {
+  PB=""
+  hascs "$sid" '^[A-Za-z0-9_-]{1,128}$' || return 1
+  local f="$rdir/.turn-push.$sid" l1="" l2="" now
+  [ -f "$f" ] || return 1
+  { IFS= read -r l1; IFS= read -r l2; } < "$f" 2>/dev/null
+  l1=${l1%$'\r'}; l2=${l2%$'\r'}
+  hascs "$l1" '^push [A-Za-z0-9_][A-Za-z0-9._/-]*$' || return 1
+  hascs "$l2" '^[0-9]{1,12}$' || return 1
+  now=$(date +%s 2>/dev/null)
+  hascs "$now" '^[0-9]{1,12}$' || return 1
+  now=$((10#$now - 10#$l2))
+  [ "$now" -ge 0 ] && [ "$now" -le 1800 ] || return 1
+  PB=${l1#push }
+  return 0
+}
+# $1 판정용 문자열 하나가 "허락된 가지($2)로 보내는 정확한 push 한 번" 인가. 조각(&& || ; | & ( ) 백틱 줄바꿈)으로 나눠
+#   push 낱말(따옴표 뗀 뒤 대소문자 무시)이 정확히 한 번 · 그 조각이 git push [-u|--set-upstream] origin <가지>(가지는 따옴표 한 쌍까지) [2>&1] 뿐 ·
+#   그 조각에 \ 없음 · 명령 어디에도 작업 폴더를 바꾸는 조각(cd·pushd·popd·chdir·set-location·sl·push-location) 없음
+push_exact() {
+  local s=$1 ab=$2 re_dup='[0-9]?>&[0-9]' seg n=0 ps="" t w i
+  while [[ $s =~ $re_dup ]]; do s=${s/"${BASH_REMATCH[0]}"/ }; done
+  s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//&/$NL}; s=${s//(/$NL}; s=${s//)/$NL}; s=${s//\`/$NL}
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    set -f; w=($seg); set +f
+    for t in "${w[@]}"; do
+      t=${t//\"/}; t=${t//\'/}
+      case "$t" in
+        [Pp][Uu][Ss][Hh]) n=$((n + 1)); ps=$seg ;;
+      esac
+    done
+    t=${w[0]:-}; t=${t//\"/}; t=${t//\'/}
+    case "$t" in [Cc][Dd]|[Pp][Uu][Ss][Hh][Dd]|[Pp][Oo][Pp][Dd]|[Cc][Hh][Dd][Ii][Rr]|[Ss][Ll]|[Ss][Ee][Tt]-[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]|[Pp][Uu][Ss][Hh]-[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]) return 1 ;; esac
+  done
+  [ "$n" = 1 ] || return 1
+  case "$ps" in *"$BS"*) return 1 ;; esac
+  set -f; w=($ps); set +f
+  [ "${w[0]:-}" = git ] && [ "${w[1]:-}" = push ] || return 1
+  i=2
+  { [ "${w[2]:-}" = -u ] || [ "${w[2]:-}" = --set-upstream ]; } && i=3
+  [ "${w[$i]:-}" = origin ] || return 1
+  i=$((i + 1)); t=${w[$i]:-}
+  case "$t" in \"*\") t=${t#\"}; t=${t%\"} ;; \'*\') t=${t#\'}; t=${t%\'} ;; esac
+  [ -n "$t" ] && [ "$t" = "$ab" ] || return 1
+  [ "${#w[@]}" -eq $((i + 1)) ]
+}
+
+# 허락 push 의 자리 확인(검사 보완 F3·F4) → 통과면 0, 아니면 PW 에 까닭. 정확한 꼴 판정이 모두 맞은 뒤에만 부른다(git 1회)
+#   F3: 훅 입력의 작업 폴더(BRCWD — check_shell 이 정규화, 비었으면 빈 값)가 프로젝트 폴더이거나 그 아래 — 앞 호출의 cd 로 다른 저장소에 있으면 막는다
+#   F4: 프로젝트 저장소 설정에 remote.origin.push(올리기 규칙)가 있으면 허락된 가지 말고 다른 가지로 갈 수 있어 막는다. git 이 없거나,
+#       origin 주소(remote.origin.url)가 안 보이면(git 저장소가 아님 · origin 없음 — 설정이 없을 때와 종료 코드가 같아 주소로 가린다) 막는다
+push_where() {
+  PW=""; PWH="푸시 허락으로는 올릴 수 없는 저장소 설정입니다 — 사람이 터미널에서 올립니다."
+  local pn out ln v inp=0 nc=0
+  normpath "$proj" /; pn=$NP
+  # K1: 리눅스·맥 경로(WINPATH=0)는 대소문자를 가린다 — 전역 nocasematch 를 이 비교에서만 끈다(대소문자만 다른 다른 저장소를 프로젝트로 보지 않게)
+  if [ -n "${BRCWD:-}" ] && [ "$pn" != / ]; then
+    if [ "$WINPATH" = 1 ]; then
+      case "$BRCWD/" in "$pn"/*) inp=1 ;; esac
+    else
+      shopt -q nocasematch && nc=1; shopt -u nocasematch
+      case "$BRCWD/" in "$pn"/*) inp=1 ;; esac
+      [ "$nc" = 1 ] && shopt -s nocasematch
+    fi
+  fi
+  if [ "$inp" = 0 ]; then
+    PW="(지금 작업 폴더가 리팩토링 프로젝트 밖입니다)"; PWH="프로젝트 폴더로 옮긴 뒤(cd 는 따로 한 번 실행) 같은 꼴로 다시 — 허락은 그대로입니다."; return 1
+  fi
+  command -v git >/dev/null 2>&1 || { PW="(git 을 찾지 못했습니다)"; return 1; }
+  # F4·K4: 올리기 규칙(remote.origin.push)이 있거나, push.default 가 upstream·tracking(가지의 upstream 으로 감 — 허락된 가지 이름과 다른 원격 가지로 갈 수 있음)이면 막는다
+  out=$(git --no-replace-objects -c core.fsmonitor=false -C "$proj" config --get-regexp '^(remote[.]origin[.](url|push)|push[.]default)$' 2>/dev/null)
+  case "$NL$out$NL" in
+    *"${NL}remote.origin.push${NL}"*|*"${NL}remote.origin.push "*) PW="원격에 올리기 규칙(remote.origin.push)이 설정돼 있어 허락 push 를 쓸 수 없습니다 — 사람이 터미널에서 올립니다."; return 1 ;;
+  esac
+  while IFS= read -r ln; do
+    case "$ln" in
+      "push.default "*) v=${ln#push.default }
+        case "$v" in [Uu][Pp][Ss][Tt][Rr][Ee][Aa][Mm]|[Tt][Rr][Aa][Cc][Kk][Ii][Nn][Gg]) PW="push.default 가 $v 라 허락된 가지가 아닌 원격 가지로 올라갈 수 있습니다."; return 1 ;; esac ;;
+    esac
+  done <<PWOUT
+$out
+PWOUT
+  case "$NL$out" in
+    *"${NL}remote.origin.url "*) return 0 ;;
+  esac
+  PW="(origin 원격 주소를 확인하지 못했습니다 — git 저장소가 아니거나 origin 이 없음)"; return 1
+}
+
 check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대로). 없으면 도구 입력의 command 칸
   local rawcmd
   if [ "$#" -gt 0 ]; then rawcmd=$1; else jget command; rawcmd=$JV; fi
@@ -2962,6 +3064,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   normpath "$cwd" /; cwd=$NP
   [ -n "$BRCWD" ] && BRCWD=$cwd
   [ "$#" -eq 0 ] && [ "$tool" = Bash ] && BRTOP=1
+  local PTOP=0; [ "$#" -eq 0 ] && PTOP=1   # push 허락(0.3.3)은 도구 입력의 맨 위 명령에만(bash -c 안쪽 등 다시 부른 판정에는 쓰지 않는다)
 
   # 판정용 모양(mk_views): 정규화한 명령(cmd) · lr · lx. 비밀값 판정용 사본(cmds, heredoc 본문을 줄 단위로 거른 것)이 다르면 그것으로도 lx 를 만든다
   local lxs="" cmd0=$cmd
@@ -3170,9 +3273,22 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ "$refactor_on" = 1 ] || return 0
   [ "${AGENT_MODE:-0}" = 1 ] && return 0
 
-  has "$lq" 'git[[:space:]]+push' && block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음)." "커밋 메시지 초안만 주고, 사람이 터미널에서 git push 로 실행하게 하세요(CLI 라면 입력창에 ! git push 도 됨)."
+  if has "$lq" 'git[[:space:]]+push'; then
+    # 0.3.3: 사람이 /refactor:approve 푸시 로 허락한 턴이면 맨 위 명령의 정확한 꼴(git push [-u] origin <허락된 가지>)만 통과.
+    #   판정용 사본(원형 cmd0·lq·lz·hv·hvz) 모두가 정확한 꼴이어야 하고, 줄 이어쓰기·역슬래시(JSON 의 \\)가 있으면 막는다
+    local push_hint="단계 커밋은 그대로 두고, 사람이 터미널에서 git push 로 실행하게 하세요(CLI 라면 입력창에 ! git push 도 됨). 원격이라 터미널이 없으면 사용자에게 /refactor:approve 푸시 를 입력해 달라고 하세요(작업 가지만 · 그 차례에만)."
+    if [ "$PTOP" = 1 ] && push_grant; then
+      case "$rawcmd" in *"$BS$BS"*) false ;; *) true ;; esac \
+        && push_exact "$cmd0" "$PB" && push_exact "$lq" "$PB" \
+        && { [ -z "$lz" ] || push_exact "$lz" "$PB"; } && { [ -z "$hv" ] || push_exact "$hv" "$PB"; } && { [ -z "$hvz" ] || push_exact "$hvz" "$PB"; } \
+        || block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음)." "$push_hint 허락된 꼴은 git push -u origin $PB 뿐입니다."
+      push_where || block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음). $PW" "$PWH"
+    else
+      block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음)." "$push_hint"
+    fi
+  fi
   if has "$lq" 'git[[:space:]]+stash([[:space:]]|$)' && ! has "$lq" 'git[[:space:]]+stash[[:space:]]+(list|show)'; then
-    block "리팩토링 중에는 git stash를 쓰지 않습니다(다른 작업이 섞여 사라질 수 있음)." "먼저 사람에게 커밋을 부탁하세요."
+    block "리팩토링 중에는 git stash를 쓰지 않습니다(다른 작업이 섞여 사라질 수 있음)." "커밋이 필요하면 7-execute 5-1 대로 그 단계 파일만 — 단계 밖 변경이면 멈추고 사람에게 알리세요."
   fi
   # 0.3.2: 다른 가지·커밋으로 옮기기 — 기록 폴더(STATE)가 없는 곳으로 가면 안전장치가 통째로 꺼진다. 원형과 사본(lz·hv·hvz) 모두(bash -c "git sw"'itch x')
   if br_switch "$lq" || { [ -n "$lz" ] && br_switch "$lz"; } || { [ -n "$hv" ] && br_switch "$hv"; } || { [ -n "$hvz" ] && br_switch "$hvz"; }; then
@@ -3208,10 +3324,10 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
     done
     has "$lq" '(--snapshot-update|--force-regen|--regen-all|--update-golden|update_snapshots=|update_golden=)' && snap=1
     if [ "$snap" = 1 ] && ! abl_any_open; then
-      block "스냅숏·골든 파일을 새 결과로 덮어쓰는 옵션은 기준선을 바꿀 수 있어 막혀 있습니다.${abl_why:+ $abl_why}" "$MSG_ALLOW_B"
+      abl_hint; block "스냅숏·골든 파일을 새 결과로 덮어쓰는 옵션은 기준선을 바꿀 수 있어 막혀 있습니다.${abl_why:+ $abl_why}" "$AH"
     fi
     if { writes_to "$RE_BL_CMD" || interp_writes "$RE_BL_CMD"; } && ! abl_any_open; then
-      block "기준선 테스트 폴더의 파일을 바꾸거나 지우는 명령은 막혀 있습니다.${abl_why:+ $abl_why}" "$MSG_ALLOW_B"
+      abl_hint; block "기준선 테스트 폴더의 파일을 바꾸거나 지우는 명령은 막혀 있습니다.${abl_why:+ $abl_why}" "$AH"
     fi
   fi
   if [ "$allow_migration" = 0 ] && { writes_to "$RE_MIG_CMD" || interp_writes "$RE_MIG_CMD"; }; then
