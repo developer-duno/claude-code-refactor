@@ -3,7 +3,7 @@
 운영 중인 서비스를 AI로 **안전하게** 리팩토링하는 Claude Code 플러그인입니다.
 누구나 쓸 수 있는 공개 플러그인(MIT)이고, 화면 문구와 문서는 모두 한국어입니다(**한국어 전용 플러그인**).
 
-![version](https://img.shields.io/badge/version-0.3.0-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+![version](https://img.shields.io/badge/version-0.3.1-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
 
 > **0.3.0에서 달라진 점**: 안전장치는 이제 리팩토링 중에만 켜집니다. 0.2.x처럼 평소 대화에서도 비밀값·위험 명령을 막으려면 [스위치](#6-안전장치)를 켜세요.
 
@@ -58,6 +58,7 @@
 - **Claude Code** 최신 버전 (`claude --version`으로 확인)
 - **git** — 리팩토링할 프로젝트는 git 저장소여야 합니다(되돌리기의 바탕).
 - **Windows**: **Git for Windows(Git Bash)**. Windows에서 훅 명령은 Git Bash가 있으면 Git Bash로, 없으면 PowerShell로 실행됩니다(공식 문서). 이 플러그인의 훅은 `bash`로 돌기 때문에 Git Bash가 없으면 안전장치가 작동하지 않습니다.
+- **VS Code 확장 사용자**: 사람이 칠 명령(커밋·허용 파일 만들기 등)은 VS Code 하단 터미널이나 OS 터미널에서 실행합니다 — VS Code 확장은 입력창의 `!` 바로가기를 지원하지 않습니다.
 - macOS·Linux: 기본 bash(3.2 이상)면 됩니다. 훅·스크립트는 bash 3.2 문법만 씁니다 — `GUARD_BASH` 환경변수로 bash 3.2 경로를 지정하면 시험을 그 bash로 돌려 볼 수 있습니다.
 
 ### 3-2. 범위 고르기 — 여러 프로젝트에 쓸까, 한 프로젝트에서만 쓸까
@@ -133,7 +134,7 @@ claude --plugin-dir ./claude-code-refactor/plugins/refactor
    /refactor:approve baseline
    /refactor:go
    ```
-   기준선 테스트를 만든 뒤 커밋을 부탁합니다. 알려 준 한 줄(`! git add -A && git commit -m "…"`)을 입력하고 다시 `/refactor:go`.
+   기준선 테스트를 만든 뒤 커밋을 부탁합니다. 알려 준 한 줄을 터미널에서 실행하고(`git add -A && git commit -m "…"` — CLI 라면 입력창에 `! git add …` 도 됨) 다시 `/refactor:go`.
 4. **계획서** — `docs/refactor/REFACTOR_PLAN.md`를 보고 할 단계만 승인합니다.
    ```
    /refactor:approve P0-1 P1-1
@@ -146,7 +147,7 @@ claude --plugin-dir ./claude-code-refactor/plugins/refactor
 
 - 처음에는 `/refactor:go 하나씩`으로 한 단계씩 보면서 진행하면 이해하기 쉽습니다.
 - 대화가 길어지면 `/clear` 후 `/refactor:go` — 진행 상황은 파일에 있으니 그대로 이어집니다.
-- 입력창에서 `!`로 시작하는 줄은 **사람이 직접 실행하는 명령**입니다(커밋·허용 파일 만들기 등). 안전장치를 거치지 않습니다.
+- Claude가 부탁하는 명령은 **사람이 직접 실행하는 명령**입니다(커밋·허용 파일 만들기 등). 터미널에서 실행하세요(CLI 라면 입력창에 `! <명령>` 도 됨 — VS Code 확장은 `!`를 지원하지 않습니다). 안전장치를 거치지 않습니다.
 - 비용: 건강검진·정밀검사는 보조 AI(감사관)를 여러 명 동시에 써서 토큰을 꽤 씁니다. 감사관은 Sonnet 모델을 씁니다(`plugins/refactor/agents/auditor.md`의 `model:` 줄). 처음 진단(준비~기준선 계획)이 가장 크고, 그 뒤로는 승인한 단계만큼만 씁니다.
 
 ---
@@ -187,13 +188,13 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 
 ### 6-3. 일부러 풀어야 할 때 (사람만 가능)
 
-동작을 일부러 바꾸는 단계에서 기준선 테스트를 새 동작으로 고쳐야 하면, Claude가 멈추고 아래처럼 부탁합니다. 입력창에 그대로 붙여 넣으세요.
+동작을 일부러 바꾸는 단계에서 기준선 테스트를 새 동작으로 고쳐야 하면, Claude가 멈추고 아래처럼 부탁합니다. 터미널에 그대로 붙여 넣으세요(CLI 라면 입력창에 `! touch "…"` 도 됨).
 
 ```
-! touch "<프로젝트 폴더>/docs/refactor/.allow-baseline-edit"
+touch "<프로젝트 폴더>/docs/refactor/.allow-baseline-edit"
 ```
 
-마이그레이션 파일은 `.allow-migration-edit`입니다. **작업을 커밋한 다음에는 꼭 지우세요**(`! rm "<같은 경로>"`). 허용 파일은 git에 올라가지 않습니다.
+마이그레이션 파일은 `.allow-migration-edit`입니다. **작업을 커밋한 다음에는 꼭 지우세요**(터미널에서 `rm "<같은 경로>"`, CLI 라면 입력창에 `! rm "…"` 도 됨). 허용 파일은 git에 올라가지 않습니다.
 
 ### 6-4. 한계
 
@@ -234,8 +235,10 @@ bash "<플러그인 폴더>/hooks/run.sh" refactor-safe-run -- npm test
 가장 안전한 것은 개발용 DB와 테스트 키를 따로 두는 것입니다. 개발용 DB가 원격(예: 개발용 Supabase 프로젝트)이라 가짜 값으로 바뀌면 곤란할 때는, 개발용인지 확인한 뒤 **사람이** 그 이름을 허용 목록에 적습니다.
 
 ```
-! printf 'DATABASE_URL=db.<개발용 프로젝트>.supabase.co\n' >> "<프로젝트 폴더>/docs/refactor/.allow-env"
+printf 'DATABASE_URL=db.<개발용 프로젝트>.supabase.co\n' >> "<프로젝트 폴더>/docs/refactor/.allow-env"
 ```
+
+터미널에서 실행합니다(CLI 라면 입력창에 `! printf …` 도 됨).
 
 `이름=호스트`로 적으면 그 값이 나중에 다른(운영) 주소로 바뀌었을 때 자동으로 다시 가립니다. `--check`가 허용한 이름의 지금 호스트를 보여 주니 확인한 뒤 적으세요(운영 주소는 절대 적지 않기). 한 줄에 하나, git에 올라가지 않습니다. 운영 DB가 하나뿐이면 DB를 쓰는 테스트는 돌리지 않고, DB 없이 확인할 수 있는 계산·문구 기준선만 만듭니다.
 
@@ -294,10 +297,11 @@ claude plugin uninstall refactor@vibe-consulting     # 지우기 — 기본 범�
 
 | 증상 | 할 일 |
 |---|---|
+| `! …` 를 쳤는데 Claude 가 대화로 받음 | VS Code 확장은 `!` 바로가기를 지원하지 않습니다(공식 문서). VS Code 하단 터미널이나 OS 터미널에서 `!` 없이 그 명령을 실행하세요 |
 | 안전장치가 아무것도 안 막음 | 리팩토링을 시작하지 않은 프로젝트에서는 정상입니다(0.3.0부터). 리팩토링 중인데도 그렇다면: `/refactor:status` 가 "아직 시작하지 않았어요"라고 하면 다른 폴더나 다른 가지에서 연 것입니다 → Windows면 Git for Windows 설치 확인 → Claude Code 다시 열기 → `/hooks`에서 refactor 훅 확인 |
 | 승인이 안 먹힘 / `[Vibe Refactor 승인 처리 결과 — 입력 훅]` 블록이 안 보임 | 입력 훅이 꺼졌거나 시간 안에 끝나지 못한 것입니다. `/refactor:approve`(인자 없이)로 현황을 다시 보고, `/hooks`에서 refactor 훅이 보이는지 확인하세요 |
 | `WSL … execvpe(/bin/bash) failed` | 안전 실행기를 PowerShell 도구로 실행했습니다. Bash 도구(Git Bash)로 다시 실행하세요([§7](#7-안전-실행기)) |
-| `[refactor 안전장치]`로 멈춤 | 정상입니다. → 줄의 안내를 따르거나, 정말 필요하면 사람이 `!`로 직접 실행 |
+| `[refactor 안전장치]`로 멈춤 | 정상입니다. → 줄의 안내를 따르거나, 정말 필요하면 사람이 터미널에서 직접 실행(CLI 라면 입력창에 `!`로) |
 | "명령이 너무 깁니다(16KB 초과)" | 명령을 파일로 저장하고, 무엇을 하는지 확인한 뒤 실행 |
 | "판정이 너무 오래 걸려 막았습니다(N초 초과)" | 판정이 제한 시간 안에 끝나지 않은 것입니다. 긴 지시문·SQL은 파일로 저장해 경로를 넘기고, 긴 명령은 나누거나 스크립트 파일로 만들어 무엇을 하는지 확인한 뒤 실행합니다. N이 25가 아니면 환경 변수 `REFACTOR_GUARD_LIMIT`이 설정돼 있는 것입니다(지우면 25초) |
 | "합치지 않은 가지는 지우지 않습니다(…)" | 그 가지의 내용이 기본 가지에 아직 없습니다. GitHub에서 방금 합쳤다면 `git fetch origin` 뒤 다시 시도하고, 정말 지워야 하면 사람이 직접 `git branch -D <가지>` |
@@ -347,7 +351,7 @@ claude plugin validate --strict plugins/refactor; claude plugin validate --stric
 ```
 
 - Windows에서는 시험이 Git Bash를 자동으로 찾습니다(PATH의 WSL bash 대신). 못 찾으면 `GUARD_BASH`에 Git Bash 절대경로를 지정하세요. `python3`은 Windows 스토어 안내 프로그램일 수 있으니 `python`을 쓰세요.
-- 0.3.0 기준 결과(GitHub Actions): 안전장치 시험 1785/1785(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 155/155(Ubuntu·macOS)·156/156(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
+- 0.3.1 기준 결과(GitHub Actions): 안전장치 시험 1847/1847(Ubuntu·Windows Git Bash·macOS 기본 bash 3.2 모두), 스크립트 시험 155/155(Ubuntu·macOS)·156/156(Windows Git Bash, Windows 전용 1개 포함) 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
 - 배포할 때는 `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`을 함께 올립니다.
 
 ### 폴더 구조
@@ -376,6 +380,12 @@ claude-code-refactor/
 ---
 
 ## 13. 변경점
+
+### 0.3.1 (2026-10-03)
+
+- **대괄호 경로를 변수에 담아 읽으면 '실행'으로 헛막히던 것 고침 (#7)** — `/refactor:go` 중 `R='app/api/items/[id]/route.ts' && sed -n '1,5p' "$R"` 처럼 Next.js 동적 경로를 따옴표로 감싸 변수에 담으면, 읽기만 하는 명령인데도 "테스트·빌드·앱 실행은 안전 실행기로만"으로 막혔습니다. 안전장치가 명령을 단어로 나눌 때 따옴표를 공백으로 바꾸는데, 대괄호·공백·별표가 든 값은 따옴표가 남아 있어 `R=` 와 값이 두 단어로 갈라졌고, 값(`….ts`)이 명령 자리로 밀려 스크립트 실행으로 판정된 것입니다. 이제 따옴표로 감싼 대입 값(`NAME='…'`·`NAME="…"`)은 단어로 나누기 전에 한 단어로 묶습니다. 대입 뒤의 진짜 명령(빈 대입 뒤 `X= node x.js`·`X= npm test`, `R='app/[id]/x.ts' && node "$R"`)은 지금처럼 막고, 값 안의 명령 치환(`R="$(node x.js)"`)도 계속 봅니다. 덤으로 `FOO='a b' npm test`·`env FOO='a b' node x.js` 처럼 공백 든 따옴표 값 뒤의 실행 명령이 그동안 통과되던 빈틈도 닫혔습니다. PowerShell 꼴 대입(`$name = '…'`)의 같은 헛막힘은 원인이 달라 다음 판에서 다룹니다.
+- **사람이 칠 명령은 터미널이 기본 (#8)** — VS Code 확장은 입력창의 `!` 바로가기를 지원하지 않아(공식 문서), `! touch …` 를 치면 명령이 실행되지 않고 Claude 에게 대화로 전달됐습니다. 안전장치 안내·현황·스킬·README 의 명령 안내를 `터미널에서 <명령> (CLI 라면 입력창에 ! <명령> 도 됨)` 꼴로 바꾸고, [§10](#10-문제가-생기면) 표와 [§3-1](#3-1-준비물) 준비물에 VS Code 확장 안내를 더했습니다.
+- **새 테스트 파일 위치 (#9)** — 실행 단계 지침의 새 테스트 예시(`tests/refactor/<단계ID>.test.*`)가 테스트 실행기가 모으지 않는 폴더일 수 있어, "실행기가 이미 모으는 폴더(기존 테스트 옆, 또는 기준선과 같은 수집 범위)"로 바꿨습니다. 새 테스트 파일은 그 파일만 따로 돌려 실행된 테스트 수가 0 이 아닌지와 먼저 빨강인지 확인하고(0 이면 실행기 설정 밖), 설정 밖 폴더를 써야 하면 설정 파일을 단계 카드의 "건드릴 파일"에 넣습니다.
 
 ### 0.3.0 (2026-10-02)
 

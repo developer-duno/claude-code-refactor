@@ -831,6 +831,7 @@ def main():
     check_gate_030(res)
     check_firstgo_030(res)
     check_secretnames_030(res)
+    check_bracket_assign_031(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -3081,6 +3082,62 @@ def check_secretnames_030(res):
     finally:
         for p in made:
             rmtree_rw(p) if p.exists() else None
+
+
+def check_bracket_assign_031(res):
+    """0.3.1 #7: 따옴표로 감싼 대입 값에 대괄호·공백·별표가 있으면 값이 명령 자리로 밀려 '실행'으로 헛막히던 것.
+    읽기만 하는 명령은 통과, 대입 뒤 진짜 실행(node·npm test)과 빈 대입 뒤 명령(X= node x.js)은 차단. 공백 든 따옴표 값 뒤의 실행(FOO='a b' npm test)은
+    0.3.0 에서 통과되던 빈틈이라 이번에 새로 막힘. PLAN·EXECUTE 둘 다(go 표시 있음)."""
+    P = "app/api/items/[id]/route.ts"
+    cases = [
+        # 이슈 #7 표 1~6
+        (OK, "이슈 1 sed 변수+대괄호", rf"""R='{P}' && sed -n '1,5p' "$R" """.strip()),
+        (OK, "이슈 2 cat 변수+대괄호", rf"""R='{P}' && cat "$R" """.strip()),
+        (OK, "이슈 3 head 변수+대괄호", rf"""F='{P}' && head -5 "$F" """.strip()),
+        (OK, "이슈 4 sed 직접", rf"""sed -n '1,5p' '{P}'"""),
+        (OK, "이슈 5 대괄호 없음", r"""R='app/api/items/route.ts' && sed -n '1,5p' "$R" """.strip()),
+        (OK, "이슈 6 cat 직접", rf"""cat '{P}'"""),
+        # probe7.py a~o
+        (OK, "a 대입만, 사용 없음", r"""R='app/[id]/r.ts' && true"""),
+        (OK, "b 대입만 ; 로", r"""R='app/[id]/r.ts'; true"""),
+        (OK, "c 대입+echo 참조", r"""R='app/[id]/r.ts' && echo "$R" """.strip()),
+        (OK, "d 대입+sed 참조", r"""R='app/[id]/r.ts' && sed -n 1p "$R" """.strip()),
+        (OK, "e 대입 따옴표 없음+sed", r"""R=app/[id]/r.ts && sed -n 1p "$R" """.strip()),
+        (OK, "f 값 '[id' (여는 괄호만)", r"""R='app/[id/r.ts' && sed -n 1p "$R" """.strip()),
+        (OK, "g 값 'id]' (닫는 괄호만)", r"""R='app/id]/r.ts' && sed -n 1p "$R" """.strip()),
+        (OK, "h 값 'x[1]' 끝 숫자", r"""R='app/x[1].ts' && sed -n 1p "$R" """.strip()),
+        (OK, "i 값 '[id]' 만", r"""R='[id]' && sed -n 1p "$R" """.strip()),
+        (OK, "j 대입+참조 없이 직접 2회", r"""sed -n 1p 'app/[id]/r.ts' && sed -n 1p 'app/[id]/r.ts'"""),
+        (OK, "k 대입 뒤 다른 변수 사용", r"""R='app/[id]/r.ts' && Q=x && sed -n 1p "$Q" """.strip()),
+        (OK, "l export 대입", r"""export R='app/[id]/r.ts' && sed -n 1p "$R" """.strip()),
+        (OK, "m 중괄호 참조", r"""R='app/[id]/r.ts' && sed -n 1p "${R}" """.strip()),
+        (OK, "n 참조만(대입 없음)", r"""sed -n 1p "$R" """.strip()),
+        (OK, "o 대입+cat, 값에 공백 포함 괄호", r"""R='app/[id] x/r.ts' && cat "$R" """.strip()),
+        # 공백·별표·.py 값, 큰따옴표 대입
+        (OK, "값 공백 'a b.ts'", r"""R='a b.ts' && true"""),
+        (OK, "값 별표 'lib/*.js'", r"""R='lib/*.js' && true"""),
+        (OK, "값 '.py' 'app/[id]/x.py'", r"""R='app/[id]/x.py' && true"""),
+        (OK, "큰따옴표 대입 \"app/[id]/r.ts\"", r"""R="app/[id]/r.ts" && cat "$R" """.strip()),
+        # 차단 유지
+        (B, "차단 · 빈 대입 뒤 node", r"""X= node x.js"""),
+        (B, "차단 · 빈 대입 뒤 npm test", r"""X= npm test"""),   # '*=' 뒤 단어를 건너뛰는 식으로 고치면 test 만 남아 통과돼 버린다 — 그 구멍을 지킨다
+        (B, "차단 · 대괄호 대입 뒤 node", r"""R='app/[id]/x.ts' && node "$R" """.strip()),
+        (B, "차단 · npm test", r"""npm test"""),
+        (B, "차단 · 공백 값 대입 뒤 npm test", r"""FOO='a b' npm test"""),
+        (B, "차단 · 큰따옴표 명령 치환 대입", r"""R="$(node x.js)" && true"""),
+    ]
+    for phase in ("PLAN", "EXECUTE"):
+        proj = make_project(phase=phase, allow=(".turn",))
+        try:
+            (proj / "app/api/items/[id]").mkdir(parents=True, exist_ok=True)
+            lf(proj / P, "x\n")
+            for want, title, cmd in cases:
+                code, err = run(proj, *bash(cmd))
+                res["total"] += 1
+                if code != want:
+                    res["fails"].append((f"0.3.1 #7 {phase} " + title, want, code, "Bash", cmd, err.strip()[:200]))
+        finally:
+            rmtree_rw(proj)
 
 
 if __name__ == "__main__":

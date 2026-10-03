@@ -43,7 +43,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
    - **리팩토링 중에는 다른 가지로 옮기지 않는다**(`git switch <가지>`·`git checkout <가지>`) — 리팩토링 기록(`docs/refactor`)이 없는 가지로 가면 안전장치가 통째로 꺼진다. 가지를 옮겨야 하면 멈추고 사람에게 부탁한다. (준비 단계에서 허락받은 작업 가지를 **새로 만드는 것**(`git switch -c refactor/…`)은 `phases/0-setup.md` 지시대로 한다.)
    - **테스트·빌드·개발 서버·스크립트 실행은 항상 안전 실행기로 한다**(운영일 수 있는 DB 주소·키를 가짜 값으로 바꿔 실행한다. `/refactor:go` 중에는 안전장치가 강제한다):
      `bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-safe-run -- <명령>` — `&&`·`;`로 이은 명령마다 각각 붙인다(여러 명령을 한 번에 감싸려면 `… refactor-safe-run -- sh -c "npm test && npm run build"`). 안전장치가 모르는 실행 명령(예: 새 도구)에도 붙인다. 무엇이 바뀌는지(이름만) 보려면 `… refactor-safe-run --check`. **Bash 도구(Git Bash)로만 실행한다** — PowerShell 도구에서 `bash`를 치면 Windows 자체의 WSL bash가 잡혀 실패한다.
-   - 개발용 DB가 원격이라 가짜 값으로 바뀌면 DB 테스트를 못 한다 — 사람이 개발용이라고 확인한 값을 `docs/refactor/.allow-env`에 적어야 한다(사람만. 주소 값은 `이름=호스트`, 키 값은 이름만: `! printf 'DATABASE_URL=<개발용 호스트>\n' >> "<프로젝트>/docs/refactor/.allow-env"`). 네가 만들지 않는다.
+   - 개발용 DB가 원격이라 가짜 값으로 바뀌면 DB 테스트를 못 한다 — 사람이 개발용이라고 확인한 값을 `docs/refactor/.allow-env`에 적어야 한다(사람만. 주소 값은 `이름=호스트`, 키 값은 이름만: 터미널에서 `printf 'DATABASE_URL=<개발용 호스트>\n' >> "<프로젝트>/docs/refactor/.allow-env"` (CLI 라면 입력창에 `! printf …` 도 됨)). 네가 만들지 않는다.
    - 안전 실행기로 만든 빌드 결과(.next·dist)에는 가짜 값이 들어 있다. 배포용으로 쓰지 말라고 보고에 적는다.
    - PROFILE에 운영 DB와 개발 DB가 "하나뿐" 또는 "모름"이면 DB·외부 API를 쓰는 테스트는 돌리지 않는다. 결과에 `127.0.0.1:9` 연결 실패가 보이면 안전 실행기가 제대로 막은 것이다 — 우회하지 말고 "개발용 DB 필요"로 보고한다.
 4. **비밀값은 한 글자도 출력하지 않는다**(`****`). `.env`·키 파일은 열지 않고, 이름과 git 추적 여부만 본다. 비밀값을 찾을 때는 `grep -l`·`git log --all --oneline -S "<접두어>"`처럼 값이 화면에 찍히지 않는 방법만 쓴다. 원격 저장소 주소는 `git remote -v | sed -E 's#//[^/@]*@#//****@#'`처럼 가려서 본다.
@@ -114,7 +114,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 
 - 긴 표·원문을 대화에 붙이지 마라. 파일에 남기고 경로만 알려 준다.
 - 치명적인 발견(예: 비밀 키가 공개 저장소에 올라감, 로그인 없이 전체 주문이 보임)은 자동 진행 중이라도 **보고 맨 위**에 올리고 "지금 사람이 할 일"을 먼저 말한다.
-- 사람에게 명령을 부탁할 때는 입력창에 그대로 붙여 넣을 수 있게 `! `로 시작하는 한 줄로 준다(예: `! git add -A && git commit -m "refactor: P1-2 결제 금액 서버 재계산"`).
+- 사람에게 명령을 부탁할 때는 **터미널에서 그대로 붙여 넣을 한 줄**로 주고, CLI 사용자는 입력창에 `! ` 를 붙여 쳐도 된다고 덧붙인다(VS Code 확장은 `!` 미지원)(예: 터미널에서 `git add -A && git commit -m "refactor: P1-2 결제 금액 서버 재계산"` (CLI 라면 입력창에 `! git add …` 도 됨)).
 
 ---
 

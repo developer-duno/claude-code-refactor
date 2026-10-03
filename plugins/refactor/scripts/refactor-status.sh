@@ -151,7 +151,7 @@ allow=""
 for f in "$dir"/.allow-*; do [ -e "$f" ] && allow="$allow ${f##*/}"; done
 if [ -n "$allow" ]; then
   echo
-  echo "⚠️ 허용 파일이 남아 있음:$allow — 해당 작업이 끝나고 커밋했으면 지우세요(입력창에서 ! rm \"$dir/<파일>\")."
+  echo "⚠️ 허용 파일이 남아 있음:$allow — 해당 작업이 끝나고 커밋했으면 지우세요(터미널에서 rm \"$dir/<파일>\" — CLI 라면 입력창에 ! rm \"…\" 도 됨)."
 fi
 
 if [ -f "$dir/APPROVALS.log" ]; then

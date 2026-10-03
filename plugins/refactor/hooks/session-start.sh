@@ -48,6 +48,6 @@ printf '이어서 하려면 사용자가 /refactor:go, 현황만 보려면 /refa
 
 for f in "$proj"/docs/refactor/.allow-*; do
   [ -e "$f" ] || continue
-  printf '[주의] 허용 파일이 남아 있습니다: docs/refactor/%s — 그 작업이 끝났고 커밋했다면 사용자에게 지우라고 알려 주세요(입력창에서 ! rm "%s").\n' "${f##*/}" "$f"
+  printf '[주의] 허용 파일이 남아 있습니다: docs/refactor/%s — 그 작업이 끝났고 커밋했다면 사용자에게 지우라고 알려 주세요(터미널에서 rm "%s" — CLI 라면 입력창에 ! rm "…" 도 됨).\n' "${f##*/}" "$f"
 done
 exit 0
