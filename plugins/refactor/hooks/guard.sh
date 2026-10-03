@@ -386,9 +386,9 @@ for f in "$proj"/.env*; do
 done
 
 MSG_APPROVE="사용자에게 /refactor:approve <단계ID> (기준선은 /refactor:approve baseline) 명령을 안내하고 멈추세요. 대화 중 '좋아요'는 승인이 아닙니다."
-MSG_ALLOW_B="기준선을 새 동작으로 바꿔야 하는 🛠 단계라면 멈추고 사람에게 요청하세요: 입력창에서 ! touch \"$rdir/.allow-baseline-edit\" (끝나면 지우기)."
-MSG_ALLOW_M="구조 변경은 새 마이그레이션 파일로 만드세요. 이미 있는 파일을 꼭 고쳐야 하면 사람에게 요청: ! touch \"$rdir/.allow-migration-edit\" (끝나면 지우기)."
-MSG_HUMAN="필요하면 사람에게 입력창에서 직접 실행해 달라고 요청하세요(예: ! touch \"$rdir/.allow-baseline-edit\")."
+MSG_ALLOW_B="기준선을 새 동작으로 바꿔야 하는 🛠 단계라면 멈추고 사람에게 요청하세요: 터미널에서 touch \"$rdir/.allow-baseline-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨 · 끝나면 지우기)."
+MSG_ALLOW_M="구조 변경은 새 마이그레이션 파일로 만드세요. 이미 있는 파일을 꼭 고쳐야 하면 사람에게 요청: 터미널에서 touch \"$rdir/.allow-migration-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨 · 끝나면 지우기)."
+MSG_HUMAN="필요하면 사람에게 직접 실행해 달라고 요청하세요(예: 터미널에서 touch \"$rdir/.allow-baseline-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨))."
 
 normpath() { # $1 → NP (절대경로, / 구분자, ./ 와 ../ 정리). $2 = 상대경로의 기준 폴더(없으면 프로젝트)
   local p=${1//"$BS"/$SL} re_dot='/\./' re_up='/[^/]+/\.\./' re_dbl='//+' b
@@ -555,7 +555,7 @@ check_file_tool() {
       *.md|*.markdown)
         if has "$ctext" "(^|\\\\n|\"content\"[[:space:]]*:[[:space:]]*\"|\"new_string\"[[:space:]]*:[[:space:]]*\")[[:space:]]*([$][[:space:]]+)?(sudo[[:space:]]+)?(echo|printf|cat|tee|touch|python3?|node|ruby|perl|pwsh|add-content|set-content|out-file)[[:space:]]([^\\\\]|\\\\[^n])*${HT}" \
            && has "$ctext" "(>>?|tee|touch|open|append|write|add-content|set-content|out-file)([^\\\\]|\\\\[^n])*${HT}"; then
-          block "승인 기록(APPROVALS.log)·허용 파일(.allow-*)·.turn 에 쓰는 명령을 문서에 적지 않습니다(사람 전용)." "사람에게 안내하는 줄이면 앞에 ! 를 붙여 적으세요(예: ! touch \"…/.allow-baseline-edit\")."
+          block "승인 기록(APPROVALS.log)·허용 파일(.allow-*)·.turn 에 쓰는 명령을 문서에 적지 않습니다(사람 전용)." "사람에게 안내하는 줄이면 명령 앞에 '터미널에서' 를 붙여 적으세요(예: 터미널에서 touch \"…/.allow-baseline-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨))."
         fi ;;
       *)
         if has "$ctext" "(>>?|tee[[:space:]]+(-a[[:space:]]+)?|touch[[:space:]]+)[\\\\\\\"'[:space:]]*[^[:space:]\\\\\\\"']*${HT}|(open|appendfile|appendfilesync|writefile|writefilesync|write_text|add-content|set-content|out-file)[[:space:](]+[^)]{0,120}${HT}"; then
@@ -1638,7 +1638,7 @@ hv_deploy() {
     || has "$t" "${S}docker(-compose|[[:space:]]+compose)[^;&|]*[[:space:]]down[^;&|]*[[:space:]](-v|--volumes)([[:space:]]|$)" \
     || has "$t" '(^|[[:space:]:])db:(reset|drop|wipe|purge)([[:space:]]|$)' \
     || { has "$t" 'prisma[[:space:]]+migrate[[:space:]]+dev' && ! has "$t" '--create-only'; }; then
-    block "리팩토링 진행 중에는 DB 구조 변경(마이그레이션 적용)을 사람이 직접 합니다." "로컬 테스트 DB라면 사람이 입력창에서 ! <명령> 으로 실행합니다."
+    block "리팩토링 진행 중에는 DB 구조 변경(마이그레이션 적용)을 사람이 직접 합니다." "로컬 테스트 DB라면 사람이 터미널에서 <명령> 으로 실행합니다(CLI 라면 입력창에 ! <명령> 도 됨)."
   fi
   if has "$t" "${S}(psql|mysql|mariadb|mongosh|mongo|redis-cli|sqlcmd)${E}"; then
     has "$r" '[$][{]?[A-Za-z_]*(URL|URI|DSN|DATABASE|DB_|CONN)' && remote_db=1
@@ -1658,7 +1658,7 @@ go_runner() {
   runsh=${runsh//"$BS"/$SL}; runsh="${runsh%/}/hooks/run.sh"
   # 안전 실행기 뒤에 따옴표로 넘긴 명령(sh -c "npm test && npm run build")은 통째로 감싼 것이니 쪼개지 않는다
   blank_quoted "(refactor-safe-run[[:space:]]+--[[:space:]][^;&|]*)(\"[^\"]*\"|'[^']*')" 2 "$rq"; rq=$BQ
-  if [ "${2:-0}" = 1 ]; then rq=${rq//\'/}; rq=${rq//\"/}; fi
+  if [ "${2:-0}" = 1 ]; then join_assign_vals "$rq"; rq=${JA//\'/}; rq=${rq//\"/}; fi   # #7: 대입 값(R='a b.ts')은 따옴표를 빼기 전에 한 단어로
   rq=${rq//&&/$NL}; rq=${rq//||/$NL}; rq=${rq//;/$NL}; rq=${rq//|/$NL}; rq=${rq//(/$NL}; rq=${rq//\`/$NL}
   local re_cmt='[[:space:]]#.*$'
   while [ -n "$rq" ]; do
@@ -1826,10 +1826,28 @@ norm_dirvars() {
   NV=$s
 }
 
+# #7: 따옴표로 감싼 대입 값(R='app/[id]/x.ts' · R="a b" · PowerShell $r = '…')의 따옴표를 떼고 값 안의 공백·괄호를 자리표시로 바꿔 한 단어로 묶는다 → JA
+#     따옴표를 공백으로 바꾸거나(seg_words) 모두 빼기(go_runner) 전에 부른다 — 값이 둘로 갈라지면 뒤쪽이 명령 자리로 밀려 '실행'으로 헛막힌다.
+#     따옴표 문자열 안의 a='…' 은 건드리지 않고, $( · ` 가 든 값(명령 치환)은 그대로 둬 안의 명령을 계속 본다. 대입 뒤 단어를 건너뛰지는 않는다(X= node x.js 는 그대로 본다)
+join_assign_vals() {
+  JA=$1
+  case "$JA" in *=*[\"\']*) ;; *) return 0 ;; esac
+  local s=$1 out="" pre m v sep='[[:space:]{}()]' re_as="(^|[[:space:];&|(])(\\\$[A-Za-z_][A-Za-z0-9_:]*[[:space:]]*=[[:space:]]*|[A-Za-z_][A-Za-z0-9_]*=)(('[^']*'|\"[^\"]*\")+)|'[^']*'|\"[^\"]*\""
+  while [[ $s =~ $re_as ]]; do
+    m=${BASH_REMATCH[0]}; v=${BASH_REMATCH[3]}; pre=${s%%"$m"*}; s=${s#*"$m"}
+    if [ -n "${BASH_REMATCH[2]}" ] && { [ -n "${BASH_REMATCH[1]}" ] || [ -z "$out$pre" ]; } && [[ $v != *'$('* && $v != *'`'* ]]; then
+      v=${v//\'/}; v=${v//\"/}; v=${v//$sep/$PH}
+      m="${BASH_REMATCH[1]}${BASH_REMATCH[2]}$v"
+    fi
+    out="$out$pre$m"
+  done
+  JA="$out$s"
+}
 # 명령 조각 하나를 단어로 나누고(따옴표·괄호는 지움) 앞에 붙은 래퍼(sudo·env·nohup·xargs·if/then·eval·corepack·cmd /c·powershell -c·bash -c …)를 건너뛴다
 # → SW(단어 배열), SI(명령 이름 위치), SCMD(명령 이름: 경로·.exe 뗌), INCMD(cmd /c 안), XARGS(xargs 로 받음)
 seg_words() {
   local s=$1 n re_cmdopt='^/{1,2}[a-z](:[a-z]+)?$' re_shc='^-[a-z]*c[a-z]*$'
+  join_assign_vals "$s"; s=$JA   # #7: 따옴표 대입 값은 따옴표를 공백으로 바꾸기 전에 한 단어로(아래 join_assign_vals)
   s=${s//\"/ }; s=${s//\'/ }; s=${s//\{/ }; s=${s//\}/ }; s=${s//)/ }; s=${s//(/ }
   set -f; SW=($s); set +f
   n=${#SW[@]}; SI=0; INCMD=0; XARGS=0; LASTWRAP=""
@@ -2976,7 +2994,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ "$refactor_on" = 1 ] || return 0
   [ "${AGENT_MODE:-0}" = 1 ] && return 0
 
-  has "$lq" 'git[[:space:]]+push' && block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음)." "커밋 메시지 초안만 주고, 사람이 입력창에서 ! git push 로 실행하게 하세요."
+  has "$lq" 'git[[:space:]]+push' && block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음)." "커밋 메시지 초안만 주고, 사람이 터미널에서 git push 로 실행하게 하세요(CLI 라면 입력창에 ! git push 도 됨)."
   if has "$lq" 'git[[:space:]]+stash([[:space:]]|$)' && ! has "$lq" 'git[[:space:]]+stash[[:space:]]+(list|show)'; then
     block "리팩토링 중에는 git stash를 쓰지 않습니다(다른 작업이 섞여 사라질 수 있음)." "먼저 사람에게 커밋을 부탁하세요."
   fi
