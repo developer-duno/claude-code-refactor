@@ -21,6 +21,7 @@
 #   4. push·배포·DB 구조 적용·운영 DB 접속·배포성 npm 스크립트·플러그인 끄기·Claude 설정 수정·stash
 #   5. 기준선 테스트와 이미 커밋된 마이그레이션 파일 수정(스냅숏 갱신·포맷터 포함)
 #      → 사람이 docs/refactor/.allow-baseline-edit / .allow-migration-edit 를 만들면 풀린다
+#        (.allow-baseline-edit 에 단계 ID 를 적으면 그 단계들이 열려 있는 동안 카드에 적힌 기준선만 — 끝나면 저절로 닫힘, 0.3.2)
 #   6. /refactor:go 실행 중: 읽기 전용 단계에서는 docs/refactor 밖 수정 금지,
 #      모든 단계에서 테스트·빌드·앱 실행은 안전 실행기(refactor-safe-run)를 거쳐야 한다(운영 키 대신 가짜 값)
 #
@@ -360,7 +361,55 @@ if [ "$phase" = "BASELINE" ] && [ -f "$rdir/BASELINE.md" ] && [ -f "$rdir/APPROV
   rl_base_state "$rdir/BASELINE.md" "$rdir/APPROVALS.log"
   [ "$RL_STATE" = "approved" ] && in_baseline_phase=1
 fi
-allow_baseline=0; [ -f "$rdir/.allow-baseline-edit" ] && allow_baseline=1
+# 기준선 허용 파일(0.3.2 #10): 없으면 잠김, 0바이트(예전 touch)면 예전처럼 전부 허용(allow_baseline=1).
+#   내용이 있으면(단계 ID 목록) 기준선을 고치는 자리(파일 도구·셸 쓰기)에 닿았을 때 abl_load 가 한 번만 읽는다 — 평소 도구 호출엔 비용 0
+allow_baseline=0; abl_mode=""; abl_ids=""; abl_paths=""; abl_why=""
+if [ -f "$rdir/.allow-baseline-edit" ]; then
+  if [ -s "$rdir/.allow-baseline-edit" ]; then abl_mode=lazy; else allow_baseline=1; abl_mode=ALL; fi
+fi
+abl_load() { # → abl_mode: ALL(공백·주석만 = 전부 허용) / OPEN(열린 단계 있음, abl_paths = 카드에 적힌 경로들) / SHUT·DONE·UNKNOWN(열린 단계 없음) / NONE
+  [ "$abl_mode" = lazy ] || return 0
+  abl_mode=SHUT; abl_ids="?"
+  [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$lib" ] || return 0   # 플러그인 폴더를 모르면 닫힌 쪽
+  declare -F rl_allow_baseline >/dev/null 2>&1 || eval "$(tr -d '\r' < "$lib")"
+  local out l1
+  out=$(rl_allow_baseline "$rdir")
+  l1=${out%%"$NL"*}; [ "$l1" != "$out" ] && abl_paths=${out#*"$NL"}
+  abl_mode=${l1%% *}; abl_ids=""; [ "$l1" != "$abl_mode" ] && abl_ids=${l1#* }
+  case "$abl_mode" in ALL|OPEN|SHUT|DONE|UNKNOWN|NONE) ;; *) abl_mode=SHUT; abl_ids="?" ;; esac
+  [ "$abl_mode" = ALL ] && allow_baseline=1
+  return 0
+}
+abl_closed_why() { # 열린 단계가 없을 때의 까닭 → abl_why (파일이 없으면 빈 칸)
+  abl_why=""
+  case "$abl_mode" in SHUT|DONE|UNKNOWN) abl_why="허용 파일(.allow-baseline-edit)에 적힌 단계($abl_ids)는 계획서에 없거나 승인·실행 대기 상태가 아닙니다(끝난 단계면 저절로 닫힌 것)." ;; esac
+}
+abl_file_ok() { # $1 고치려는 기준선 파일(절대경로) — 허용 파일이 이 파일을 열어 주나(아니면 abl_why 에 까닭)
+  abl_why=""
+  [ "$allow_baseline" = 1 ] && return 0
+  [ -n "$abl_mode" ] || return 1
+  abl_load
+  [ "$abl_mode" = ALL ] && return 0
+  if [ "$abl_mode" = OPEN ]; then
+    [ -n "$abl_paths" ] && rl_abl_hit "${1#"$proj"/}" "$abl_paths" && return 0
+    abl_why="이 파일은 열린 단계($abl_ids)의 '깨질 것으로 예상되는 기준선' 칸에 없습니다 — 카드에 적힌 파일만 고칩니다."
+    return 1
+  fi
+  abl_closed_why; return 1
+}
+abl_any_open() { # 셸 명령(스냅숏 갱신·기준선 폴더 쓰기)은 단계 수준: 열린 단계가 있고 그 카드들에 적힌 기준선이 하나라도 있으면 허용(파일 수준은 턴 끝 알림이 본다)
+  abl_why=""
+  [ "$allow_baseline" = 1 ] && return 0
+  [ -n "$abl_mode" ] || return 1
+  abl_load
+  [ "$abl_mode" = ALL ] && return 0
+  if [ "$abl_mode" = OPEN ]; then
+    [ -n "$abl_paths" ] && return 0
+    abl_why="열린 단계($abl_ids)의 카드에 '깨질 것으로 예상되는 기준선' 파일이 적혀 있지 않습니다(\"없음\") — 기준선을 바꾸지 않는 단계입니다."
+    return 1
+  fi
+  abl_closed_why; return 1
+}
 allow_migration=0; [ -f "$rdir/.allow-migration-edit" ] && allow_migration=1
 
 ro_phase=0
@@ -386,9 +435,12 @@ for f in "$proj"/.env*; do
 done
 
 MSG_APPROVE="사용자에게 /refactor:approve <단계ID> (기준선은 /refactor:approve baseline) 명령을 안내하고 멈추세요. 대화 중 '좋아요'는 승인이 아닙니다."
-MSG_ALLOW_B="기준선을 새 동작으로 바꿔야 하는 🛠 단계라면 멈추고 사람에게 요청하세요: 터미널에서 touch \"$rdir/.allow-baseline-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨 · 끝나면 지우기)."
+# 안내 예시의 단계 ID: /refactor:go 턴이면 이번 실행 대기 단계(.turn 의 ready), 아니면 예시
+abl_ex="P1-1 P1-2"
+if [ "$go_turn" = 1 ] && [ -n "$t_ready" ] && [ "$t_ready" != "?" ]; then abl_ex=${t_ready//[!A-Za-z0-9_ -]/}; [ -n "${abl_ex// /}" ] || abl_ex="P1-1 P1-2"; fi
+MSG_ALLOW_B="기준선을 새 동작으로 바꿔야 하는 🛠 단계라면 멈추고 사람에게 요청하세요: 터미널에서 printf '$abl_ex\n' > \"$rdir/.allow-baseline-edit\" (이번에 승인된 🛠 단계 ID 를 모두 적으면 한 번으로 끝 · PowerShell 은 Set-Content -Encoding ascii -Path \"…\" -Value \"$abl_ex\" · CLI 라면 입력창에 ! printf … 도 됨). 적힌 단계가 모두 끝나면 저절로 닫힙니다. 고칠 수 있는 파일은 카드의 '깨질 것으로 예상되는 기준선' 칸에 백틱으로 적힌 것뿐입니다."
 MSG_ALLOW_M="구조 변경은 새 마이그레이션 파일로 만드세요. 이미 있는 파일을 꼭 고쳐야 하면 사람에게 요청: 터미널에서 touch \"$rdir/.allow-migration-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨 · 끝나면 지우기)."
-MSG_HUMAN="필요하면 사람에게 직접 실행해 달라고 요청하세요(예: 터미널에서 touch \"$rdir/.allow-baseline-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨))."
+MSG_HUMAN="필요하면 사람에게 직접 실행해 달라고 요청하세요(예: 터미널에서 printf 'P1-1 P1-2\n' > \"$rdir/.allow-baseline-edit\" (CLI 라면 입력창에 ! printf … 도 됨))."
 
 normpath() { # $1 → NP (절대경로, / 구분자, ./ 와 ../ 정리). $2 = 상대경로의 기준 폴더(없으면 프로젝트)
   local p=${1//"$BS"/$SL} re_dot='/\./' re_up='/[^/]+/\.\./' re_dbl='//+' b
@@ -555,7 +607,7 @@ check_file_tool() {
       *.md|*.markdown)
         if has "$ctext" "(^|\\\\n|\"content\"[[:space:]]*:[[:space:]]*\"|\"new_string\"[[:space:]]*:[[:space:]]*\")[[:space:]]*([$][[:space:]]+)?(sudo[[:space:]]+)?(echo|printf|cat|tee|touch|python3?|node|ruby|perl|pwsh|add-content|set-content|out-file)[[:space:]]([^\\\\]|\\\\[^n])*${HT}" \
            && has "$ctext" "(>>?|tee|touch|open|append|write|add-content|set-content|out-file)([^\\\\]|\\\\[^n])*${HT}"; then
-          block "승인 기록(APPROVALS.log)·허용 파일(.allow-*)·.turn 에 쓰는 명령을 문서에 적지 않습니다(사람 전용)." "사람에게 안내하는 줄이면 명령 앞에 '터미널에서' 를 붙여 적으세요(예: 터미널에서 touch \"…/.allow-baseline-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨))."
+          block "승인 기록(APPROVALS.log)·허용 파일(.allow-*)·.turn 에 쓰는 명령을 문서에 적지 않습니다(사람 전용)." "사람에게 안내하는 줄이면 명령 앞에 '터미널에서' 를 붙여 적으세요(예: 터미널에서 printf 'P1-1 P1-2\n' > \"…/.allow-baseline-edit\" (CLI 라면 입력창에 ! printf … 도 됨))."
         fi ;;
       *)
         if has "$ctext" "(>>?|tee[[:space:]]+(-a[[:space:]]+)?|touch[[:space:]]+)[\\\\\\\"'[:space:]]*[^[:space:]\\\\\\\"']*${HT}|(open|appendfile|appendfilesync|writefile|writefilesync|write_text|add-content|set-content|out-file)[[:space:](]+[^)]{0,120}${HT}"; then
@@ -581,8 +633,8 @@ check_file_tool() {
   if [ "$refactor_on" = 1 ]; then
     is_claude_settings "$path" && block "리팩토링 진행 중에는 Claude 설정 파일($name)을 고치지 않습니다." "권한·훅 설정 변경은 사람이 직접 합니다."
     # 이미 커밋된 기준선은 기준선 작성 단계에서도 고치지 않는다(새 기준선 파일은 커밋 전까지 고쳐도 된다)
-    if [ -e "$path" ] && is_baseline_path "$path" && [ "$allow_baseline" = 0 ] && is_tracked "$path"; then
-      block "이미 커밋된 기준선 테스트($name)는 허용 없이 고치지 않습니다." "$MSG_ALLOW_B 이번 단계의 새 테스트는 tests/baseline 밖(예: tests/refactor/)에 만드세요."
+    if [ -e "$path" ] && is_baseline_path "$path" && ! abl_file_ok "$path" && is_tracked "$path"; then
+      block "이미 커밋된 기준선 테스트($name)는 허용 없이 고치지 않습니다.${abl_why:+ $abl_why}" "$MSG_ALLOW_B 이번 단계의 새 테스트는 tests/baseline 밖(예: tests/refactor/)에 만드세요."
     fi
     if [ -e "$path" ] && is_migration_path "$path" && [ "$allow_migration" = 0 ] && is_tracked "$path"; then
       block "이미 커밋된 마이그레이션 파일($name)은 고치지 않습니다(운영 DB에 이미 적용됐을 수 있음)." "$MSG_ALLOW_M"
@@ -1320,6 +1372,117 @@ br_force_del() {
   done
   return 1
 }
+# 0.3.2: 다른 가지·커밋으로 옮기는 git switch / git checkout / gh pr checkout 이 보이는가 → 0. 리팩토링 중에만 부른다(check_shell 의 refactor_on 구역).
+#   통과: 지금 위치에서 새 가지 만들기(switch -c/--create · checkout -b — 시작점 없음·HEAD·@) · checkout --orphan <새>(시작점 없음) ·
+#   인자 없는 --detach/-d · checkout 경로 모드(-- 뒤 낱말이 있을 때 · -p · 비옵션 2개 이상 · 작업 폴더 기준으로 디스크에 있는 이름 하나) ·
+#   switch/checkout <지금 가지>(.git/HEAD 와 같을 때).
+#   막음: 그 밖의 가지·커밋·태그·-·@{-N}·변수·명령 치환 · switch --orphan · -t/--track · 시작점을 준 만들기 ·
+#   강제 만들기(-C·-B·--force-create — 있는 가지를 덮고 옮긴다) · `git checkout <가지> --`(-- 뒤가 비면 가지 이동).
+#   명령 이름(git·switch·checkout·gh pr)은 대소문자를 가리지 않고, 옵션 글자만 가린다(-c 와 -C — br_force_del 처럼 nocasematch 를 끈다).
+#   옵션 줄임(--det)·묶음(-qc)·= 꼴을 본다. git 은 부르지 않는다
+br_switch() {
+  has "$1" 'gh[[:space:]]+pr[[:space:]]+checkout([[:space:]]|$)' && return 0
+  local r
+  shopt -u nocasematch; set -f
+  br_switch_in "$1"; r=$?
+  set +f; shopt -s nocasematch
+  return $r
+}
+br_switch_in() {
+  local rest=$1 sub seg w raw o v k c n pos dyn create fcreate detach orphan track pathm dd paths wantarg skipn IFS=$' \t\n'
+  local re_sw="[Gg][Ii][Tt][[:space:]]+([Ss][Ww][Ii][Tt][Cc][Hh]|[Cc][Hh][Ee][Cc][Kk][Oo][Uu][Tt])(([[:space:]][^;&|${NL}]*)?)"
+  while [[ $rest =~ $re_sw ]]; do
+    sub=${BASH_REMATCH[1]}; seg=${BASH_REMATCH[2]}; rest=${rest#*"${BASH_REMATCH[0]}"}
+    case "$sub" in [Ss][Ww]*) sub=switch ;; *) sub=checkout ;; esac
+    create=0; fcreate=0; detach=0; orphan=0; track=0; pathm=0; dd=0; paths=0; wantarg=0; skipn=0; n=0; pos=""; dyn=0
+    for w in $seg; do
+      raw=$w
+      case "$raw" in '#'*) break ;; esac   # 따옴표 없는 # 로 시작하는 낱말부터는 주석(bash·PowerShell) — 인자로 세지 않는다
+      while :; do case "$w" in [\"\'\(\`]*) w=${w#?} ;; *) break ;; esac; done
+      while :; do case "$w" in *[\"\'\)\`]) w=${w%?} ;; *) break ;; esac; done
+      [ -n "$w" ] || continue
+      [ "$skipn" = 1 ] && { skipn=0; continue; }
+      case "$w" in *'>'*|'<'*) case "$w" in *'>'|'<') skipn=1 ;; esac; continue ;; esac   # 리다이렉트(> 파일)는 인자가 아니다
+      [ "$wantarg" = 1 ] && { wantarg=0; continue; }   # -c <새 가지> · --orphan <새 가지> 의 이름
+      [ "$dd" = 1 ] && { paths=1; break; }   # checkout … -- <파일>: 경로가 하나라도 있어야 파일 되돌리기
+      [ "$pathm" = 1 ] && break
+      case "$w" in
+        --) [ "$sub" = checkout ] && dd=1 ;;
+        --?*) o=${w#--}; v=""; case "$o" in *=*) v=1; o=${o%%=*} ;; esac
+              k=""
+              case "$o" in
+                force|discard-changes|merge|quiet|progress|no-progress|guess|no-guess|no-track|recurse-submodules|no-recurse-submodules|ignore-other-worktrees|overwrite-ignore|no-overwrite-ignore|ours|theirs|overlay|no-overlay|ignore-skip-worktree-bits|pathspec-file-nul) ;;
+                conflict) [ -z "$v" ] && wantarg=1 ;;
+                patch|pathspec-from-file) [ "$sub" = checkout ] && pathm=1 ;;
+                *) case detach in "$o"*) k=detach ;; esac; case track in "$o"*) k=track ;; esac
+                   case create in "$o"*) k=create ;; esac; case force-create in "$o"*) k=fcreate ;; esac
+                   case orphan in "$o"*) k=orphan ;; esac ;;
+              esac
+              case "$k" in
+                create) create=1; [ -z "$v" ] && wantarg=1 ;;
+                fcreate) fcreate=1 ;;
+                orphan) orphan=1; [ -z "$v" ] && wantarg=1 ;;
+                detach) detach=1 ;;
+                track) track=1 ;;
+              esac ;;
+        -?*) o=${w#-}
+             while [ -n "$o" ]; do
+               c=${o:0:1}; o=${o:1}
+               case "$sub$c" in
+                 switchc|checkoutb) create=1; [ -z "$o" ] && wantarg=1; o="" ;;   # -cnew 꼴은 남은 글자가 이름
+                 switchC|checkoutB) fcreate=1; o="" ;;
+                 *d) detach=1 ;;
+                 *t) track=1 ;;
+                 checkoutp) pathm=1 ;;
+               esac
+             done ;;
+        *) n=$((n + 1)); pos=$w; case "$raw" in *[\$\`]*) dyn=1 ;; esac ;;   # 변수·명령 치환($( ) · ` `)은 무엇이 될지 모른다
+      esac
+    done
+    [ "$fcreate" = 1 ] && return 0   # 강제 만들기는 있는 가지를 지금 위치로 덮고 옮긴다
+    [ "$sub" = checkout ] && { [ "$pathm" = 1 ] || [ "$paths" = 1 ]; } && continue   # 파일 되돌리기(-- <파일> · -p): 가지는 그대로
+    [ "$track" = 1 ] && return 0
+    if [ "$create" = 1 ]; then
+      [ "$n" = 0 ] && continue
+      [ "$n" = 1 ] && { [ "$pos" = HEAD ] || [ "$pos" = @ ]; } && continue
+      return 0
+    fi
+    if [ "$orphan" = 1 ]; then
+      [ "$sub" = checkout ] && [ "$n" = 0 ] && continue   # switch --orphan 은 추적 파일을 모두 지운다
+      return 0
+    fi
+    if [ "$detach" = 1 ]; then [ "$n" = 0 ] && continue; return 0; fi
+    [ "$n" = 0 ] && continue
+    [ "$n" = 1 ] && [ "$dyn" = 0 ] && br_cur_branch && [ "$pos" = "$CURB" ] && continue   # 지금 가지(아무 일 없음)
+    if [ "$sub" = checkout ]; then
+      [ "$n" -ge 2 ] && [ "$dyn" = 0 ] && continue   # <가지> <파일…> 또는 파일 여럿: 경로 모드(변수·명령 치환이 끼면 막음)
+      [ "$dyn" = 1 ] && return 0
+      case "$pos" in -|@\{*) return 0 ;; esac
+      # git 은 이름을 작업 폴더 기준으로 푼다 — 프로젝트 기준으로 보면 하위 폴더에서 친 '루트 폴더 이름과 같은 가지'가 통과한다
+      case "$pos" in
+        /*|[A-Za-z]:*) [ -e "$pos" ] && continue ;;
+        *) [ -e "${cwd:-$proj}/$pos" ] && continue ;;
+      esac
+      return 0
+    fi
+    return 0
+  done
+  return 1
+}
+# 프로젝트의 지금 가지 이름 → CURB. .git 이 파일(gitdir: …)이면 그 폴더의 HEAD. 분리 HEAD·못 읽음 → 1
+br_cur_branch() {
+  local g="$proj/.git" l=""
+  if [ -f "$g" ]; then
+    IFS= read -r l < "$g" || [ -n "$l" ] || return 1
+    l=${l%$'\r'}
+    case "$l" in "gitdir: "*) g=${l#gitdir: } ;; *) return 1 ;; esac
+    case "$g" in /*|[A-Za-z]:*) ;; *) g="$proj/$g" ;; esac
+  fi
+  [ -f "$g/HEAD" ] || return 1
+  l=""; IFS= read -r l < "$g/HEAD" || [ -n "$l" ] || return 1
+  l=${l%$'\r'}
+  case "$l" in "ref: refs/heads/"?*) CURB=${l#ref: refs/heads/} ;; *) return 1 ;; esac
+}
 # 가지 이름·경로 낱말 하나 → BW(따옴표 벗긴 값). 판정할 수 없는 글자가 있으면 1:
 #   $ ` * ? [ { ; & | < > 따옴표 · 맨 앞의 ~ 와 =~ · :~(bash 가 홈 폴더로 바꿈 — 그 밖의 가운데 ~ 는 Windows 짧은 이름 RUNNER~1 꼴이라 허용) ·
 #   따옴표 없는 \ ( ) # · Windows 가 아닐 때의 \ · 큰따옴표 안의 \\ (셸이 바꿔 읽음) · 빈 값
@@ -1794,7 +1957,7 @@ expand_vars() {
   EV=$1
   case "$EV" in *'$'*) ;; *) return 0 ;; esac
   case "$EV" in *=*) ;; *) return 0 ;; esac
-  local pass rest m name val k re_ref q="'" re
+  local pass rest m name val k re_ref re_lhs P_LHS=$'\002' q="'" re
   local re_sh="(^|[;&|({[:space:]])([A-Za-z_][A-Za-z0-9_]*)=(\"([^\"]*)\"|${q}([^${q}]*)${q}|([^[:space:];&|()\"${q}<>]*))"
   local re_ps="(^|[;&|({[:space:]])[$]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(\"([^\"]*)\"|${q}([^${q}]*)${q}|([^[:space:];&|()\"${q}<>=]+))"
   for pass in 1 2; do
@@ -1804,14 +1967,26 @@ expand_vars() {
       while [[ $rest =~ $re ]]; do
         m=${BASH_REMATCH[0]}; name=${BASH_REMATCH[2]}
         case "${BASH_REMATCH[3]}" in \"*) val=${BASH_REMATCH[4]} ;; "$q"*) val=${BASH_REMATCH[5]} ;; *) val=${BASH_REMATCH[6]} ;; esac
+        # 0.3.2: PowerShell 의 따옴표 값 대입($R = 'app/x.ts')은 bash 의 R='app/x.ts' 처럼 한 낱말로 붙인다 — 띄어 두면 따옴표를 벗긴 뒤
+        #   값이 명령 자리로 읽혀 '실행'으로 헛막힌다. 따옴표 없는 값($R = npm test)은 PowerShell 이 명령으로 실행하므로 붙이지 않는다
+        if [ "$re" = "$re_ps" ]; then
+          case "${BASH_REMATCH[3]}" in [\"\']*) EV=${EV/"$m"/"${BASH_REMATCH[1]}\$$name=${BASH_REMATCH[3]}"} ;; esac
+        fi
         rest=${rest#*"$m"}
         [ -z "$val" ] && continue
         EV=${EV//"\${$name}"/$val}   # ${x}set 처럼 중괄호 표기는 바로 뒤에 글자가 붙어도 그 변수다
+        # 0.3.2: PowerShell 대입의 왼쪽($R = …)은 참조가 아니다 — 값으로 바꾸면 'app/x.ts = …' 가 명령 자리로 읽혀 헛막힌다.
+        #   치환 동안만 그 $ 를 자리표시(\002)로 바꿔 두었다가 되돌린다(== 비교는 대입이 아님)
+        if [ "$tool" = "PowerShell" ]; then
+          re_lhs="[$](${name}[[:space:]]*=([^=]|$))"; k=0
+          while [[ $EV =~ $re_lhs ]] && [ "$k" -lt 20 ]; do EV=${EV/"${BASH_REMATCH[0]}"/"$P_LHS${BASH_REMATCH[1]}"}; k=$((k + 1)); done
+        fi
         re_ref="[$]([{]${name}[}]|${name})([^A-Za-z0-9_]|$)"
         k=0
         while [[ $EV =~ $re_ref ]] && [ "$k" -lt 20 ]; do
           EV=${EV/"${BASH_REMATCH[0]}"/"$val${BASH_REMATCH[2]}"}; k=$((k + 1))
         done
+        EV=${EV//"$P_LHS"/'$'}
       done
     done
   done
@@ -2692,7 +2867,8 @@ mk_views() {
 #   단, $( ) · ` ` 명령 치환이 든 문자열은 실행되는 명령이므로 그대로 둔다.
 mk_lq() {
   local m0 dv dk=0
-  blank_quoted "(^|[;&|(])[[:space:]]*(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep|git[[:space:]]+log|git[[:space:]]+commit|echo|printf|write-host|write-output)([^;&|\"']*)(\"([^\"\\\\]|\\\\.)*\"|'[^']*')" 4 "$1"
+  # 0.3.2: 가운데 묶음은 > 를 건너지 않는다 — echo x >> "docs/refactor/APPROVALS.log" 의 리다이렉트 대상(따옴표)을 문구로 보고 비우면 쓰기 판정이 대상을 못 본다
+  blank_quoted "(^|[;&|(])[[:space:]]*(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep|git[[:space:]]+log|git[[:space:]]+commit|echo|printf|write-host|write-output)([^;&|\"'>]*)(\"([^\"\\\\]|\\\\.)*\"|'[^']*')" 4 "$1"
   unquote_simple "$BQ"; LQ=$UQ   # 검색어·문구를 뺀 뒤 단순 따옴표 인자는 벗긴다(git reset "--hard" → git reset --hard)
   # 보내는 데이터는 실행되지 않는다 — curl·wget 류의 -d·--data·--json·-F 따옴표 값과 JSON 값("키":"값")은 비운다
   #   (curl -d '{"cmd":"git reset --hard"}' …). $( )·` ` 가 든 큰따옴표 값은 실행되므로 그대로 둔다
@@ -2998,6 +3174,10 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   if has "$lq" 'git[[:space:]]+stash([[:space:]]|$)' && ! has "$lq" 'git[[:space:]]+stash[[:space:]]+(list|show)'; then
     block "리팩토링 중에는 git stash를 쓰지 않습니다(다른 작업이 섞여 사라질 수 있음)." "먼저 사람에게 커밋을 부탁하세요."
   fi
+  # 0.3.2: 다른 가지·커밋으로 옮기기 — 기록 폴더(STATE)가 없는 곳으로 가면 안전장치가 통째로 꺼진다. 원형과 사본(lz·hv·hvz) 모두(bash -c "git sw"'itch x')
+  if br_switch "$lq" || { [ -n "$lz" ] && br_switch "$lz"; } || { [ -n "$hv" ] && br_switch "$hv"; } || { [ -n "$hvz" ] && br_switch "$hvz"; }; then
+    block "리팩토링 중에는 다른 가지·커밋으로 옮기지 않습니다(리팩토링 기록이 없는 곳으로 가면 안전장치가 통째로 꺼짐)." "가지를 옮겨야 하면 멈추고 사람에게 부탁하세요(사람이 터미널에서 git switch <가지>). 지금 위치에서 새 가지 만들기(git switch -c <새 가지>)와 파일 되돌리기(git restore <파일> · git checkout -- <파일>)는 됩니다. 강제 만들기(-C·-B)는 다른 가지를 덮어쓸 수 있어 막습니다 — -c·-b 로 만드세요."
+  fi
   if has "$lq" "$re_glp" && ! has "$lq" 'git[[:space:]]+log[^;&|]*[[:space:]]--[[:space:]]+[^[:space:]-]'; then
     block "리팩토링 진행 중에는 파일을 지정하지 않은 git log -p 를 쓰지 않습니다(옛 비밀값이 찍힐 수 있음)." "파일을 지정하세요: git log -p -- <파일>, 또는 목록만: git log --oneline"
   fi
@@ -3027,11 +3207,11 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
         && has "$sseg" '([[:space:]]-u([[:space:]]|$)|--update([[:space:]=]|$)|--update-?snapshots?|--updatesnapshot)'; then snap=1; fi
     done
     has "$lq" '(--snapshot-update|--force-regen|--regen-all|--update-golden|update_snapshots=|update_golden=)' && snap=1
-    if [ "$snap" = 1 ]; then
-      block "스냅숏·골든 파일을 새 결과로 덮어쓰는 옵션은 기준선을 바꿀 수 있어 막혀 있습니다." "$MSG_ALLOW_B"
+    if [ "$snap" = 1 ] && ! abl_any_open; then
+      block "스냅숏·골든 파일을 새 결과로 덮어쓰는 옵션은 기준선을 바꿀 수 있어 막혀 있습니다.${abl_why:+ $abl_why}" "$MSG_ALLOW_B"
     fi
-    if writes_to "$RE_BL_CMD" || interp_writes "$RE_BL_CMD"; then
-      block "기준선 테스트 폴더의 파일을 바꾸거나 지우는 명령은 막혀 있습니다." "$MSG_ALLOW_B"
+    if { writes_to "$RE_BL_CMD" || interp_writes "$RE_BL_CMD"; } && ! abl_any_open; then
+      block "기준선 테스트 폴더의 파일을 바꾸거나 지우는 명령은 막혀 있습니다.${abl_why:+ $abl_why}" "$MSG_ALLOW_B"
     fi
   fi
   if [ "$allow_migration" = 0 ] && { writes_to "$RE_MIG_CMD" || interp_writes "$RE_MIG_CMD"; }; then

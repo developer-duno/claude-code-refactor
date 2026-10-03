@@ -49,8 +49,21 @@ for st in "$root"/docs/refactor/STATE.md "$root"/*/docs/refactor/STATE.md "$root
   [ -f "$st" ] || continue
   pdir=${st%/docs/refactor/STATE.md}
   if [ "$pdir" = "$root" ]; then name="(기준 폴더)"; else name=${pdir#"$root"/}; fi
-  allow=0
-  for f in "$pdir"/docs/refactor/.allow-*; do [ -e "$f" ] && allow=1; done
+  allow=0; allow_steps=""
+  for f in "$pdir"/docs/refactor/.allow-*; do
+    [ -e "$f" ] || continue
+    # 기준선 허용 파일에 단계 ID 가 적혀 있으면(0.3.2) 그 단계 동안만 열린다(끝나면 저절로 닫힘) — ⚠허용파일 대신 따로 표시
+    if [ "$have_lib" = 1 ] && [ "${f##*/}" = .allow-baseline-edit ] && [ -s "$f" ]; then
+      a=$(rl_allow_baseline "$pdir/docs/refactor"); a=${a%%$'\n'*}
+      case "$a" in
+        OPEN\ *) allow_steps="🔓단계 ${a#* } 동안 열림(끝나면 저절로 닫힘)"; continue ;;
+        SHUT\ *) allow_steps="🔒허용파일 단계 ${a#* } 승인 대기·카드 바뀜(지금은 닫힘)"; continue ;;
+        DONE\ *) allow_steps="✅허용파일 단계 모두 끝남(다음 입력 때 지워짐)"; continue ;;
+        UNKNOWN\ *) allow_steps="⚠허용파일 단계 ${a#* } 계획서에 없음(오타?)"; continue ;;
+      esac
+    fi
+    allow=1
+  done
   doneok=0
   [ "$have_lib" = 1 ] && rl_done_confirmed "$pdir/docs/refactor" && doneok=1
   # 실행 대기(승인됨·미완료·번호 하나, 승인 기록이 봉인 그대로) / 승인 대기 단계가 있나 — 상태 명령과 같은 기준
@@ -64,7 +77,7 @@ for st in "$root"/docs/refactor/STATE.md "$root"/*/docs/refactor/STATE.md "$root
 $(rl_cards "$pdir/docs/refactor/REFACTOR_PLAN.md" "$pdir/docs/refactor/APPROVALS.log")
 RECS
   fi
-  row=$(awk -v NAME="$name" -v TODAY="$today" -v ALLOW="$allow" -v DONEOK="$doneok" -v READY="$ready" -v PEND="$pend" '
+  row=$(awk -v NAME="$name" -v TODAY="$today" -v ALLOW="$allow" -v STEPS="$allow_steps" -v DONEOK="$doneok" -v READY="$ready" -v PEND="$pend" '
     function dn(s,   t, y, m, d) { split(s, t, "-"); y = t[1] + 0; m = t[2] + 0; d = t[3] + 0; if (m <= 2) { y--; m += 12 }
       return 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * (m - 3) + 2) / 5) + d }
     function val(s) { sub(/^[^:]*:[ \t]*/, "", s); sub(/\r$/, "", s); gsub(/^"|"$/, "", s); gsub(/\|/, "/", s); return s }
@@ -83,6 +96,7 @@ RECS
       flag = ""
       if (days > 14 && !(ph == "DONE" && DONEOK == 1)) flag = flag " ⏰" days "일 멈춤"
       if (ALLOW == 1) flag = flag " ⚠허용파일"
+      if (STEPS != "") flag = flag " " STEPS
       plan = (v["steps_total"] + 0 > 0) ? (v["steps_done"] + 0) "/" (v["steps_approved"] + 0) "/" (v["steps_total"] + 0) : "-"
       when = (days < 0) ? "?" : (days == 0 ? "오늘" : days "일 전")
       printf "%d\t%d\t| %s | %s%s | %s | %s | %s | %s | %s | %s | %s |\n", rank, (days < 0 ? 0 : days), NAME, st, flag, (ph == "" ? "?" : ph), (g == "" ? "-" : g), red, plan, (v["readiness"] == "" ? "-" : v["readiness"]), v["next"], when

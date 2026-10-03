@@ -1016,12 +1016,238 @@ def main():
     except Exception as e:
         check("판 번호 일치: plugin/marketplace/README/bug.yml", False, f"예외: {e}")
 
+    check_allow_steps_032(check)
+
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
     for label, detail in fails:
         print(f"FAIL {label}\n      {detail}")
     print(f"\n{total - len(fails)}/{total} 통과 · bash={BASH}{' · PATH+' + PATH_PREFIX if PATH_PREFIX else ''}")
     return 1 if fails else 0
+
+
+PLAN_032 = """# 계획서
+
+### [P1-1] 금액 계산
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/money.test.ts` 중 "금액" 항목
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-2] 주문 주소
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `./tests/baseline/golden/d.json` 의 주문 항목
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-3] 아직 승인 안 함
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: 없음
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+"""
+
+
+def check_allow_steps_032(check):
+    """0.3.2 #10: rl_allow_baseline 출력 · 턴 끝 알림(rl_protected_dirty)은 열린 단계 카드에 적힌 기준선만 뺀다(11) ·
+    적힌 단계가 모두 끝나면 turn.sh 가 허용 파일을 지우고 post-check 가 한 번 알린다(3) · 현황(status·board) 문구."""
+    lib = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
+    g = lambda d, *a: subprocess.run(["git", "-C", str(d), "-c", "user.email=t@example.com", "-c", "user.name=t", *a], check=True, capture_output=True)
+
+    def libcall(d, expr):
+        r = subprocess.run([BASH, "-c", 'eval "$(tr -d \'\\r\' < "$1")"; P=$2; R=$2/docs/refactor; ' + expr, "x", lib, d.as_posix()],
+                           capture_output=True, env=env(), timeout=90)
+        return r.stdout.decode("utf-8", "replace").replace("\r", ""), r.stderr.decode("utf-8", "replace")
+
+    def allow(d, data):
+        (d / "docs/refactor/.allow-baseline-edit").write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
+
+    def mk():
+        d = project(plan=PLAN_032)
+        (d / "tests/baseline/golden").mkdir(parents=True)
+        for f in ("money.test.ts", "other.test.ts", "golden/d.json"):
+            lf(d / "tests/baseline" / f, "x\n")
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        g(d, "add", "-A"); g(d, "commit", "-qm", "i")
+        approve(d, "P1-1 P1-2")
+        return d
+
+    d = mk()
+    try:
+        # rl_allow_baseline 출력 꼴
+        allow(d, "p1-1 P1-2 # 이번 묶음\n")
+        out, err = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.2 출력: OPEN + 카드 경로(./ 뗌)", out == "OPEN P1-1 P1-2\ntests/baseline/money.test.ts\ntests/baseline/golden/d.json\n", repr(out) + err)
+        allow(d, "P1-3\n")
+        out, _ = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.2 출력: 승인 안 된 단계 → SHUT", out == "SHUT P1-3\n", repr(out))
+        allow(d, "P9-9\n")
+        out, _ = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.2 출력: 계획서와 맞는 카드 없음(오타) → UNKNOWN", out == "UNKNOWN P9-9\n", repr(out))
+        allow(d, " \n\r\n")
+        out, _ = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.2 출력: 공백만 → ALL", out == "ALL\n", repr(out))
+        for title, data in [("주석만", "# P1-1\n"), ("별표", "*\n"), ("한글만", "전부\n")]:
+            allow(d, data)
+            out, _ = libcall(d, 'rl_allow_baseline "$R"')
+            check(f"0.3.2 출력(W2b c2): {title} → UNKNOWN ?", out == "UNKNOWN ?\n", repr(out))
+        allow(d, "P1-1\n")
+        out, _ = libcall(d, 'rl_allow_baseline "$R" approved')
+        check("0.3.2 출력: approved 꼴(열린 단계도 경로)", out == "OPEN P1-1\ntests/baseline/money.test.ts\n", repr(out))
+        (d / "docs/refactor/.allow-baseline-edit").unlink()
+        out, _ = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.2 출력: 파일 없음 → NONE", out == "NONE\n", repr(out))
+
+        # 11 rl_protected_dirty: 열린 단계 카드의 파일(끝 경로 맞춤 포함)만 빼고 나머지 기준선 변경은 보고
+        for f in ("money.test.ts", "other.test.ts", "golden/d.json"):
+            lf(d / "tests/baseline" / f, "바뀜\n")
+        dirty = lambda: libcall(d, 'rl_protected_dirty "$P" "$R" | cut -f1')[0]
+        out = dirty()
+        check("0.3.2 11 허용 파일 없음 → 셋 다 보고", all(f in out for f in ("money.test.ts", "other.test.ts", "golden/d.json")), out)
+        allow(d, "P1-1\n")
+        out = dirty()
+        check("0.3.2 11 P1-1 열림 → money 만 빠짐", "money.test.ts" not in out and "other.test.ts" in out and "golden/d.json" in out, out)
+        allow(d, "P1-1 P1-2\n")
+        out = dirty()
+        check("0.3.2 11 P1-1·P1-2 열림 → other 만 보고(./ 붙은 카드 경로)", "other.test.ts" in out and "money.test.ts" not in out and "golden/d.json" not in out, out)
+        allow(d, "P9-9\n")
+        out = dirty()
+        check("0.3.2 11 열린 단계 없음 → 셋 다 보고", all(f in out for f in ("money.test.ts", "other.test.ts", "golden/d.json")), out)
+        allow(d, "")
+        check("0.3.2 11 빈 파일 → 기준선 전부 빠짐", dirty() == "", dirty())
+        # post-check 도 같은 눈으로: 턴 시작 뒤 열린 단계 밖 기준선이 바뀌면 알림
+        for f in ("money.test.ts", "other.test.ts", "golden/d.json"):
+            lf(d / "tests/baseline" / f, "x\n")
+        allow(d, "P1-1\n")
+        hook("turn", d, {"session_id": "s1", "prompt": "이어서 고쳐 줘"})
+        lf(d / "tests/baseline/money.test.ts", "새 동작\n")
+        _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+        check("0.3.2 11 post-check: 카드에 적힌 파일 변경은 조용", rc == 0, f"{rc} {se}")
+        lf(d / "tests/baseline/other.test.ts", "몰래\n")
+        _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+        check("0.3.2 11 post-check: 카드 밖 기준선 변경은 알림", rc == 2 and "other.test.ts" in se and "money.test.ts" not in se, f"{rc} {se}")
+        lf(d / "tests/baseline/money.test.ts", "x\n"); lf(d / "tests/baseline/other.test.ts", "x\n")
+
+        # 현황 문구: 단계 ID 가 적혀 있으면 "지우세요" 대신 "단계 … 동안 열림", 빈 파일이면 예전 문구
+        st = sh("refactor-status", d)
+        check("0.3.2 현황: 단계 동안 열림", "단계 P1-1 동안 열림(끝나면 저절로 닫힘)" in st and "허용 파일이 남아 있음" not in st, st[-400:])
+        bd = sh("refactor-board", d, str(d))
+        check("0.3.2 현황표: 🔓단계 표시", "🔓단계 P1-1 동안 열림" in bd and "⚠허용파일" not in bd, bd[-400:])
+        allow(d, "")
+        st = sh("refactor-status", d)
+        check("0.3.2 현황: 빈 파일은 예전 문구", "허용 파일이 남아 있음: .allow-baseline-edit" in st and "동안 열림" not in st, st[-400:])
+        bd = sh("refactor-board", d, str(d))
+        check("0.3.2 현황표: 빈 파일은 ⚠허용파일", "⚠허용파일" in bd, bd[-400:])
+        # W2b c5: 상태별 문구(SHUT·UNKNOWN — DONE 은 아래 3 에서)
+        allow(d, "P1-3\n")
+        st, bd = sh("refactor-status", d), sh("refactor-board", d, str(d))
+        check("0.3.2 현황(c5): SHUT 문구", "🔒 허용 파일의 단계 P1-3 가 승인 대기·카드 바뀜 — 지금은 닫힘." in st and "동안 열림" not in st
+              and "🔒허용파일 단계 P1-3" in bd, st[-300:] + bd[-300:])
+        allow(d, "P9-9\n")
+        st, bd = sh("refactor-status", d), sh("refactor-board", d, str(d))
+        check("0.3.2 현황(c5): UNKNOWN 문구", "⚠️ 허용 파일의 단계 P9-9 가 계획서에 없음(오타?) — 고치거나 지우세요" in st and "동안 열림" not in st
+              and "⚠허용파일 단계 P9-9 계획서에 없음" in bd, st[-300:] + bd[-300:])
+        allow(d, "")
+
+        # 3 저절로 닫힘: 빈 파일·아직 안 끝난 단계는 지우지 않는다
+        hook("turn", d, {"session_id": "s1", "prompt": "이어서"})
+        check("0.3.2 3 빈 파일은 지우지 않음", (d / "docs/refactor/.allow-baseline-edit").exists())
+        allow(d, "P1-1 P1-3\n")
+        hook("turn", d, {"session_id": "s1", "prompt": "이어서"})
+        check("0.3.2 3 안 끝난 단계가 있으면 지우지 않음", (d / "docs/refactor/.allow-baseline-edit").exists())
+        # P1-1 완료 → P1-1 만 적힌 허용 파일은 다음 입력 때 지워지고, 그 턴의 셸 명령 뒤 한 번 알린다
+        pp = d / "docs/refactor/REFACTOR_PLAN.md"
+        t = pp.read_text(encoding="utf-8")
+        i = t.index("### [P1-1]")
+        lf(pp, t[:i] + t[i:].replace("- **완료**: [ ] 완료", "- **완료**: [x] 완료 (2026-10-03)", 1))
+        allow(d, "P1-1\n")
+        st, bd = sh("refactor-status", d), sh("refactor-board", d, str(d))
+        check("0.3.2 현황(c5): DONE 문구", "✅ 허용 파일의 단계가 모두 끝남 — 다음 입력 때 지워짐." in st and "✅허용파일 단계 모두 끝남" in bd, st[-300:] + bd[-300:])
+        hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+        check("0.3.2 3 끝난 단계의 허용 파일은 지움", not (d / "docs/refactor/.allow-baseline-edit").exists())
+        _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+        check("0.3.2 3 post-check 한 번 알림(c6 계속하라는 말)", rc == 2 and "허용 파일(.allow-baseline-edit)의 단계(P1-1)가 모두 끝나 지웠습니다." in se
+              and "하던 일을 계속하세요" in se, f"{rc} {se}")
+        _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+        check("0.3.2 3 알림은 한 번만", rc == 0, f"{rc} {se}")
+        # 오타만 적힌 파일(계획서 카드와 맞는 ID 0 = UNKNOWN)은 지우지도 알리지도 않는다
+        allow(d, "P9-9\n")
+        hook("turn", d, {"session_id": "s1", "prompt": "이어서"})
+        _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+        check("0.3.2 3 오타만 → 파일 남음·알림 없음",
+              (d / "docs/refactor/.allow-baseline-edit").exists() and rc == 0 and "지웠습니다" not in se, f"{rc} {se}")
+        # 맞는 카드가 끝났고 나머지는 계획서에 없음 → DONE(지움) · 셸 명령 없이 끝난 턴의 알림 표시는 다음 입력 때 사라진다
+        allow(d, "P1-1 P9-9\n")
+        out, _ = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.2 출력: 끝난 카드 + 계획서에 없는 ID → DONE", out == "DONE P1-1 P9-9\n", repr(out))
+        hook("turn", d, {"session_id": "s1", "prompt": "이어서"})
+        gone = not (d / "docs/refactor/.allow-baseline-edit").exists() and (d / "docs/refactor/.turn-allowgone.s1").exists()
+        hook("turn", d, {"session_id": "s1", "prompt": "이어서"})
+        check("0.3.2 3 끝난 카드 + 없는 ID → 지움, 지난 알림 표시는 다음 입력에 사라짐",
+              gone and not (d / "docs/refactor/.turn-allowgone.s1").exists(), str(sorted(p.name for p in (d / "docs/refactor").iterdir())))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    def done(d, cid):
+        pp = d / "docs/refactor/REFACTOR_PLAN.md"
+        t = pp.read_text(encoding="utf-8")
+        i = t.index(f"### [{cid}]")
+        lf(pp, t[:i] + t[i:].replace("- **완료**: [ ] 완료", "- **완료**: [x] 완료 (2026-10-03)", 1))
+
+    # W2b c1: 같은 턴에 카드 파일을 고친 뒤 완료 표시를 해도 post-check 가 헛경보하지 않는다(허용 파일이 남아 있는 동안)
+    for ids, files in [("P1-1", ["money.test.ts"]), ("P1-1 P1-2", ["money.test.ts", "golden/d.json"])]:
+        d = mk()
+        try:
+            allow(d, ids + "\n")
+            hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+            for f in files:
+                lf(d / "tests/baseline" / f, "새 동작\n")
+            _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+            r1 = rc
+            for cid in ids.split():
+                done(d, cid)
+            _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+            check(f"0.3.2 c1 [{ids}] 카드 파일 고친 뒤 완료 표시 → post-check 조용", r1 == 0 and rc == 0, f"{r1} {rc} {se}")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    # W2b c3: 프로젝트가 저장소 하위 폴더(모노레포)여도 카드 경로(프로젝트 기준)와 맞춘다
+    root = pathlib.Path(tempfile.mkdtemp(prefix="scripttest-mono-"))
+    try:
+        d = root / "apps/web"
+        (d / "docs/refactor").mkdir(parents=True)
+        lf(d / "docs/refactor/REFACTOR_PLAN.md", PLAN_032)
+        lf(d / "docs/refactor/BASELINE.md", BASELINE)
+        lf(d / "docs/refactor/STATE.md", STATE)
+        (d / "tests/baseline/golden").mkdir(parents=True)
+        for f in ("money.test.ts", "other.test.ts", "golden/d.json"):
+            lf(d / "tests/baseline" / f, "x\n")
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        g(root, "add", "-A"); g(root, "commit", "-qm", "i")
+        approve(d, "P1-1 P1-2")
+        allow(d, "P1-1\n")
+        for f in ("money.test.ts", "other.test.ts"):
+            lf(d / "tests/baseline" / f, "바뀜\n")
+        out, err = libcall(d, 'rl_protected_dirty "$P" "$R" | cut -f1')
+        check("0.3.2 c3 모노레포: 카드 파일만 빠짐", "apps/web/tests/baseline/other.test.ts" in out and "money.test.ts" not in out, out + err)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # 보완 d3: 같은 꼬리의 다른 폴더(x/tests/baseline/money.test.ts)는 카드 경로(tests/baseline/money.test.ts)와 다른 파일 — 끝 맞춤으로 빼면 안 된다
+    d = mk()
+    try:
+        (d / "x/tests/baseline").mkdir(parents=True)
+        lf(d / "x/tests/baseline/money.test.ts", "x\n")
+        g(d, "add", "-A"); g(d, "commit", "-qm", "x")
+        allow(d, "P1-1\n")
+        lf(d / "x/tests/baseline/money.test.ts", "바뀜\n")
+        lf(d / "tests/baseline/money.test.ts", "바뀜\n")
+        out, err = libcall(d, 'rl_protected_dirty "$P" "$R" | cut -f1')
+        lines = [ln.split()[-1] for ln in out.split("\n") if ln.strip()]   # 줄 꼴 " M <경로>" 의 경로만
+        check("0.3.2 d3 같은 꼬리 다른 폴더는 보고에 남음(카드 파일만 빠짐)",
+              "x/tests/baseline/money.test.ts" in lines and "tests/baseline/money.test.ts" not in lines, out + err)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

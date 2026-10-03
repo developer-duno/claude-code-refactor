@@ -832,6 +832,10 @@ def main():
     check_firstgo_030(res)
     check_secretnames_030(res)
     check_bracket_assign_031(res)
+    check_qredir_032(res)
+    check_psassign_032(res)
+    check_switch_032(res)
+    check_allow_steps_032(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -3138,6 +3142,327 @@ def check_bracket_assign_031(res):
                     res["fails"].append((f"0.3.1 #7 {phase} " + title, want, code, "Bash", cmd, err.strip()[:200]))
         finally:
             rmtree_rw(proj)
+
+
+def check_qredir_032(res):
+    """0.3.2 ①: echo·printf·write-output 뒤 따옴표 붙은 리다이렉트 대상(echo x >> "docs/refactor/APPROVALS.log")이
+    문구로 비워져 사람 전용·기준선·마이그 쓰기 판정을 빠져나가던 구멍. 첫 인자 문구 비우기(echo "git reset --hard")는 그대로."""
+    A = "docs/refactor/APPROVALS.log"
+    r1 = [  # (기대, 이름, 명령) — 세 상태(EXECUTE 평소·EXECUTE+go·PLAN 평소) 모두 같은 기대
+        (B, "1 직접 경로", f"echo x >> {A}"),
+        (B, "2 직접 경로 따옴표", f"echo x >> \"{A}\""),
+        (B, "3 변수 큰따옴표", f"F=\"{A}\"; echo x >> \"$F\""),
+        (B, "4 변수 따옴표 없음", f"F={A}; echo x >> $F"),
+        (B, "5 변수 작은따옴표", f"F='{A}'; echo x >> \"$F\""),
+        (B, "6 변수 && printf", f"F=\"{A}\" && printf x >> \"$F\""),
+        (B, "7 변수 cat 리다이렉트", f"F=\"{A}\"; cat /dev/null >> \"$F\""),
+        (B, "8 변수 tee", f"F=\"{A}\"; echo x | tee -a \"$F\""),
+        (B, "9 변수 touch 허용파일", "F=\"docs/refactor/.allow-baseline-edit\"; touch \"$F\""),
+        (B, "10 변수 echo > 허용파일", "F=\"docs/refactor/.allow-baseline-edit\"; echo x > \"$F\""),
+        (OK, "11 대조 echo 변수 다른 파일", "F=\"notes.txt\"; echo x >> \"$F\""),
+        (OK, "12 대조 echo 리다이렉트 없음", f"F=\"{A}\"; echo \"$F\""),
+        (B, "13 변수 중괄호", f"F=\"{A}\"; echo x >> \"${{F}}\""),
+        (B, "14 변수 echo -e", f"F=\"{A}\"; echo -e 'x' >> \"$F\""),
+        (B, "15 2> 따옴표 대상", f"echo x 2> \"{A}\""),
+        (OK, "16 대조 첫 인자 문구 비우기 유지", "echo \"git reset --hard\" > notes.txt"),
+        (OK, "17 대조 grep 검색어 비우기 유지", "grep \"vercel --prod\" src"),
+    ]
+    r1b = [  # (기대, 이름, 단계, go 표시, 명령)
+        (OK, "1 PLAN 프로젝트 파일 직접", "PLAN", (), "echo x >> src/app.ts"),
+        (OK, "2 PLAN 프로젝트 파일 따옴표", "PLAN", (), "echo x >> \"src/app.ts\""),
+        (OK, "3 PLAN 프로젝트 파일 변수", "PLAN", (), "F=\"src/app.ts\"; echo x >> \"$F\""),
+        (B, "4 기준선 직접", "EXECUTE", (".turn",), "echo x >> tests/baseline/money.test.ts"),
+        (B, "5 기준선 따옴표", "EXECUTE", (".turn",), "echo x >> \"tests/baseline/money.test.ts\""),
+        (B, "6 마이그 따옴표", "EXECUTE", (".turn",), "echo x >> \"supabase/migrations/0001_init.sql\""),
+        (B, "7 마이그 직접", "EXECUTE", (".turn",), "echo x >> supabase/migrations/0001_init.sql"),
+        (OK, "8 STATE 따옴표", "EXECUTE", (".turn",), "echo x >> \"docs/refactor/STATE.md\""),
+        (OK, "9 STATE 직접", "EXECUTE", (".turn",), "echo x >> docs/refactor/STATE.md"),
+        (B, "10 .turn 따옴표", "EXECUTE", (".turn",), "echo 'go t' > \"docs/refactor/.turn.t\""),
+        (B, "11 .turn 두번째 따옴표", "EXECUTE", (".turn",), "echo go t > \"docs/refactor/.turn.t\""),
+        (B, "12 printf 허용파일", "EXECUTE", (".turn",), "printf '' > \"docs/refactor/.allow-migration-edit\""),
+        (B, "13 printf 허용파일 b", "EXECUTE", (".turn",), "printf x > \"docs/refactor/.allow-migration-edit\""),
+        (B, "14 write-output 허용파일", "EXECUTE", (".turn",), "write-output x > \"docs/refactor/.allow-baseline-edit\""),
+    ]
+    projs = {}
+
+    def proj_for(phase, allow):
+        if (phase, allow) not in projs:
+            projs[(phase, allow)] = make_project(phase=phase, allow=allow)
+        return projs[(phase, allow)]
+
+    def one(title, want, p, cmd):
+        code, err = run(p, *bash(cmd))
+        res["total"] += 1
+        if code != want:
+            res["fails"].append(("0.3.2 ① " + title, want, code, "Bash", cmd, err.strip()[:200]))
+
+    try:
+        for label, phase, allow in (("EXECUTE 평소", "EXECUTE", ()), ("EXECUTE+go", "EXECUTE", (".turn",)), ("PLAN 평소", "PLAN", ())):
+            for want, title, cmd in r1:
+                one(f"{label} {title}", want, proj_for(phase, allow), cmd)
+        for want, title, phase, allow, cmd in r1b:
+            one(f"{phase} {title}", want, proj_for(phase, allow), cmd)
+    finally:
+        for p in projs.values():
+            rmtree_rw(p)
+
+
+def check_psassign_032(res):
+    """0.3.2 ②: PowerShell 따옴표 값 대입 뒤 읽기($R = 'app/x.ts'; Get-Content $R)가 go 턴에 '실행'으로 헛막히던 것.
+    원인 둘 — 대입 왼쪽 $R 까지 값으로 바꿈(app/x.ts = …) · 빈 변수를 지운 사본에서 '= 값' 의 = 를 대입으로 건너뛰어 값이 명령 자리.
+    따옴표 없는 값($R = app/x.ts · $R = npm test)은 PowerShell 이 명령으로 실행하므로 막힌 채 둔다. EXECUTE+go."""
+    cases = [
+        (OK, "1 대입 작은따옴표 읽기", "PowerShell", "$R = 'app/x.ts'; Get-Content $R"),
+        (OK, "2 대입 큰따옴표 읽기", "PowerShell", "$R = \"app/x.ts\"; Get-Content $R"),
+        (B, "3 대입 따옴표 없음 — 따옴표 없는 오른쪽은 명령 실행이라 차단 유지", "PowerShell", "$R = app/x.ts; Get-Content $R"),
+        (OK, "4 대입 공백 없음", "PowerShell", "$R='app/x.ts'; Get-Content $R"),
+        (OK, "5 대조 직접 읽기", "PowerShell", "Get-Content app/x.ts"),
+        (OK, "6 대입 뒤 cat", "PowerShell", "$R = 'app/x.ts'; cat $R"),
+        (OK, "7 대입 .md", "PowerShell", "$R = 'README.md'; Get-Content $R"),
+        (B, "8 대입 뒤 node 실행", "PowerShell", "$R = 'app/x.ts'; node $R"),
+        (OK, "9 대입 뒤 Select-String", "PowerShell", "$R = 'app/x.ts'; Select-String -Path $R -Pattern foo"),
+        (OK, "10 대소문자 다른 참조", "PowerShell", "$r = 'app/x.ts'; Get-Content $R"),
+        (B, "11 대입 뒤 & 실행", "PowerShell", "$R = 'x.ts'; & $R"),
+        (B, "12 따옴표 없는 오른쪽 = 명령", "PowerShell", "$R = npm test"),
+        (B, "13 명령 치환 값", "PowerShell", "$R = \"$(node x.js)\""),
+        (B, "14 승인 기록 쓰기 유지", "PowerShell", "$R = 'docs/refactor/APPROVALS.log'; Add-Content $R x"),
+        (OK, "15 bash 대조 같은 꼴", "Bash", "R='app/x.ts'; cat $R"),
+        (B, "16 bash 대조 실행", "Bash", "R='app/x.ts'; node $R"),
+        # 다시 대입할 때 왼쪽 $T 를 앞 값(node·vitest)으로 바꾸면 'node = …' 가 실행으로 읽힌다
+        (OK, "17 다시 대입 왼쪽은 참조 아님(node)", "PowerShell", "$T = 'node'; $T = Get-Date; Write-Output $T"),
+        (OK, "18 다시 대입 왼쪽은 참조 아님(vitest)", "PowerShell", "$T = 'vitest'; $T = 3"),
+    ]
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        (proj / "app").mkdir(exist_ok=True)
+        lf(proj / "app/x.ts", "x\n")
+        for want, title, tool, cmd in cases:
+            code, err = run(proj, tool, {"command": cmd, "description": "t"})
+            res["total"] += 1
+            if code != want:
+                res["fails"].append(("0.3.2 ② " + title, want, code, tool, cmd, err.strip()[:200]))
+    finally:
+        rmtree_rw(proj)
+
+
+def check_switch_032(res):
+    """0.3.2 ③: 리팩토링 중(STATE 있음) 다른 가지·커밋으로 옮기기 차단. 옮긴 곳에 기록 폴더가 없으면 안전장치가 통째로 꺼진다.
+    통과 = 지금 위치에서 새 가지 만들기(-c·-b, 시작점 없음·HEAD·@) · checkout --orphan(시작점 없음) · 인자 없는 --detach ·
+    파일 되돌리기(-- 뒤 경로 · -p · 비옵션 2개 이상 · 작업 폴더 기준 디스크에 있는 이름) · switch/checkout <지금 가지>.
+    강제 만들기(-C·-B)는 막음. 꺼짐(STATE 없음·마무리 확인)이면 판정 안 함."""
+    NEED = "다른 가지·커밋으로 옮기지 않습니다"
+
+    def case(title, want, d, cmd, need=None, tool="Bash", cwd=None):
+        tin = {"command": cmd, "description": "t"}
+        code, err = run(d, tool, tin, extra={"cwd": str(cwd or d)})
+        res["total"] += 1
+        if code != want or (need is not None and need not in err):
+            res["fails"].append(("0.3.2 ③ " + title, want, code, tool, cmd, err.strip()[:200]))
+
+    p = make_project(phase="EXECUTE")
+    off1 = make_project()
+    off2 = make_project(phase="DONE", done_confirmed=True)
+    det = make_project(phase="EXECUTE")
+    wt = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-wt-")) / "wt"
+    try:
+        git(p, "branch", "feat")
+        git(p, "branch", "docs")   # 루트 폴더 이름과 같은 가지(하위 폴더에서는 가지 이동)
+        cur = subprocess.run(["git", "-C", str(p), "rev-parse", "--abbrev-ref", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+        blocked = [
+            "git switch feat", "git switch -", "git switch --quiet feat", "git switch --no-guess feat",
+            "git checkout feat", "git checkout -q feat", "git checkout -m feat", "git checkout -", "git checkout @{-1}",
+            "git switch --detach feat", "git switch -d feat", "git switch --det feat", "git checkout --detach feat",
+            "git checkout a1b2c3d", "git checkout tags/v1",
+            "git switch --orphan new1", "git switch --orph new1", "git switch -c new1 feat", "git switch -qc new1 feat",
+            "git checkout -b new1 feat", "git switch -t origin/feat", "git checkout --track origin/feat",
+            f"git -C {p} switch feat", f"cd {p} && git switch feat", "B=feat; git switch $B", "git switch $B",
+            "git switch \"feature/x\"", "git fetch && git switch feat", "git switch feat 2>&1", "bash -c \"git switch feat\"",
+            "gh pr checkout 12",
+            # 덤: = 꼴·줄임·명령 치환·switch -- 뒤 이름
+            "git switch --create=new1 feat", "git switch --orphan=new1", "git checkout $(echo feat)", "git checkout `echo feat` src/app.ts",
+            "git switch -- feat", "git switch feat > /tmp/o.txt",
+            # 보완 b1: -- 뒤가 비면 가지 이동
+            "git checkout feat --", "git checkout feat -- ",
+            "git checkout HEAD~1 -- $F",   # 정의 안 된 $F 는 사라져 'checkout HEAD~1 --' 가 된다
+            # 보완 d1: 따옴표 없는 # 부터는 주석 — 인자로 세면 '경로 모드'로 오해해 통과했다
+            "git checkout feat # x", "git checkout feat -- #x", "git switch feat #",
+            # 보완 b5: 강제 만들기(-C·-B)는 있는 가지를 덮고 옮긴다 — 늘 막음(앞의 통과 시험 -C new1·-B new1 두 건을 여기로 옮김)
+            "git switch -C new1", "git switch -C feat", "git checkout -B new1", "git switch --force-create new1",
+        ]
+        for cmd in blocked:
+            case("막음 " + cmd, B, p, cmd, need=NEED)
+        for cmd in ("git switch feat", "git checkout feat", "Git switch feat", "GIT checkout feat", "Gh pr checkout 12"):
+            case("막음 PowerShell " + cmd, B, p, cmd, need=NEED, tool="PowerShell")
+        case("막음 디스크에 없는 이름(문구 확인)", B, p, "git checkout src/gone.ts", need="git restore")
+        case("막음 강제 만들기 문구", B, p, "git switch -C new1", need="-c·-b 로 만드세요")
+        case("막음 하위 폴더에서 루트 폴더 이름과 같은 가지(작업 폴더 기준)", B, p, "git checkout docs", need=NEED, cwd=p / "src")
+        allowed = [
+            "git switch -c new1", "git switch --create new1", "git switch -qc new1",
+            "git switch -c new1 HEAD", "git switch -c new1 @", "git checkout -b new1",
+            "git checkout --orphan new1", "git switch --detach", "git checkout --detach",
+            "git checkout -- src/app.ts", "git checkout feat -- src/app.ts", "git checkout HEAD~1 -- src/app.ts",
+            "git checkout src/app.ts", "git checkout -p", "git checkout feat src/app.ts",
+            f"git switch {cur}", f"git checkout {cur}", "git worktree add ../wt feat", "git branch feat2", "git log feat --oneline",
+            "git diff feat -- src", "echo \"git switch main\"", "grep -rn \"git checkout main\" src",
+            "git switch -cnew1", "git checkout -bnew1", "git checkout -b new1 HEAD",
+            "git switch -c new1 -- ",   # 만들기 + 빈 -- 는 만들기 예외 그대로
+            # -- 경로 모드(디스크에 없는 파일·여럿·변수 이름도 경로)
+            "git checkout -- src/gone.ts", "git checkout -- src/app.ts src/gone.ts", "git checkout -- \"$F\"",
+            "git checkout -- \"$F\" \"$G\"", "git checkout HEAD~1 -- src/gone.ts", "git checkout -p feat",
+            "git checkout -- src/app.ts # 되돌림", "git checkout feat -- src/app.ts # x", "git checkout -- 'a#b'",   # 보완 d1
+        ]
+        for cmd in allowed:
+            case("통과 " + cmd, OK, p, cmd)
+        case("통과 하위 폴더 작업 폴더 기준 파일", OK, p, "git checkout app.ts", cwd=p / "src")
+        case("꺼짐 STATE 없음", OK, off1, "git switch feat")
+        case("꺼짐 마무리 확인", OK, off2, "git switch feat")
+        # b7: 분리 HEAD 면 '지금 가지'가 없다 → 같은 이름으로 옮기기도 막힘(닫힌 쪽)
+        git(det, "checkout", "-q", "--detach")
+        case("막음 분리 HEAD 에서 원래 가지로", B, det, f"git switch {cur}", need=NEED)
+        # b7: 워크트리(.git 이 gitdir: 파일) 에서 지금 가지는 통과, 다른 가지는 막음
+        git(p, "worktree", "add", "-q", str(wt), "-b", "wtb")
+        lf(wt / "docs/refactor/STATE.md", (p / "docs/refactor/STATE.md").read_text(encoding="utf-8"))
+        case("통과 워크트리 지금 가지", OK, wt, "git switch wtb")
+        case("막음 워크트리 다른 가지", B, wt, "git switch feat", need=NEED)
+    finally:
+        for d in (p, off1, off2, det, wt.parent):
+            rmtree_rw(d)
+PLAN_032 = """# 계획서
+
+### [P1-1] 첫 단계
+- **종류**: 🔧 리팩토링
+- **깨질 것으로 예상되는 기준선**: 없음
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-2] 둘째 단계
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/money.test.ts` 중 "금액" 항목
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+"""
+
+
+def project_032(approve_ids="P1-1 P1-2"):
+    """0.3.2 #10 시험용: EXECUTE · 계획서(PLAN_032) · 커밋된 기준선 두 개(money·other). approve_ids 를 사람이 승인한 상태."""
+    proj = make_project(phase="EXECUTE")
+    lf(proj / "docs/refactor/REFACTOR_PLAN.md", PLAN_032)
+    lf(proj / "tests/baseline/other.test.ts", "expect(2).toBe(2)\n")
+    (proj / "x/tests/baseline").mkdir(parents=True)
+    lf(proj / "x/tests/baseline/money.test.ts", "expect(3).toBe(3)\n")   # 같은 꼬리의 다른 폴더(끝 맞춤으로 열리면 안 됨)
+    git(proj, "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A")
+    git(proj, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "plan032")
+    if approve_ids:
+        approve(proj, approve_ids)
+    return proj
+
+
+def check_allow_steps_032(res):
+    """0.3.2 #10: 기준선 허용 파일에 단계 ID — 열린 단계(승인·미완료) 카드의 '깨질 것으로 예상되는 기준선' 칸에 백틱으로 적힌 파일만 고친다.
+    빈 파일은 예전처럼 전부 허용. 셸(스냅숏 갱신·기준선 폴더 쓰기)은 단계 수준. 단계가 끝나면 저절로 닫힘(turn.sh 삭제는 test_scripts)."""
+    ed = lambda f: ("Edit", {"file_path": f, "old_string": "expect", "new_string": "expect"})
+    MONEY, OTHER = "tests/baseline/money.test.ts", "tests/baseline/other.test.ts"
+    W_FILE, W_SHUT = "카드에 적힌 파일만", "계획서에 없거나 승인·실행 대기 상태가 아닙니다"
+
+    def case(proj, title, want, call, need=None):
+        code, err = run(proj, *call)
+        res["total"] += 1
+        if code != want or (need and need not in err):
+            res["fails"].append(("0.3.2 #10 " + title, want, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+
+    def allow(proj, data):
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
+
+    made = []
+    try:
+        proj = project_032()
+        made.append(proj)
+        # 1·2 열린 단계 + 카드에 적힌 파일만
+        allow(proj, "P1-2\n")
+        case(proj, "1 카드에 적힌 파일 Edit", OK, ed(MONEY))
+        case(proj, "1 절대경로로 적힌 파일 Edit", OK, ed(str(proj / MONEY)))
+        case(proj, "2 카드에 없는 기준선 Edit", B, ed(OTHER), need=W_FILE)
+        # 6 소문자·CRLF·BOM·UTF-16·주석
+        for title, data in [("소문자", "p1-2\n"), ("CRLF", "P1-2\r\n"), ("UTF-8 BOM", b"\xef\xbb\xbfP1-2\n"),
+                            ("UTF-16(BOM+NUL)", "P1-2\r\n".encode("utf-16")), ("주석·여러 ID", "# 이번 묶음\nP1-1 P1-2 # 끝\n")]:
+            allow(proj, data)
+            case(proj, "6 " + title + " → 열림", OK, ed(MONEY))
+            case(proj, "6 " + title + " → 다른 파일 차단", B, ed(OTHER), need=W_FILE)
+        # 7 카드 칸 "없음" 인 단계만
+        allow(proj, "P1-1\n")
+        case(proj, "7 칸 없음 단계 → 차단", B, ed(MONEY), need=W_FILE)
+        # W2b c4: 칸 "없음" 카드만 열려 있으면 셸도 닫힘
+        W_NONE = "적혀 있지 않습니다"
+        case(proj, "c4 칸 없음 단계 → sed -i 차단", B, bash(f"sed -i 's/1/2/' {MONEY}"), need=W_NONE)
+        case(proj, "c4 칸 없음 단계 → vitest -u 차단", B, bash("npx vitest run -u"), need=W_NONE)
+        # W2b c3: 프로젝트 기준 정확히 같은 경로만 — 같은 꼬리의 다른 폴더는 차단, ./ 붙인 같은 파일은 통과
+        allow(proj, "P1-2\n")
+        case(proj, "c3 같은 꼬리 다른 폴더 → 차단", B, ed("x/" + MONEY), need=W_FILE)
+        case(proj, "c3 ./ 붙인 같은 파일 → 통과", OK, ed("./" + MONEY))
+        # W2b c2: 공백 아닌 글자가 있는데 ID 가 0개(별표·주석만) → UNKNOWN(닫힘)
+        for title, data in [("별표", "*\n"), ("주석만", "# P1-2\n"), ("한글만", "전부\n")]:
+            allow(proj, data)
+            case(proj, "c2 " + title + " → 차단 ⓐ", B, ed(OTHER), need=W_SHUT)
+        # 8 빈 파일(0바이트·공백만) = 예전처럼 전부 허용
+        for title, data in [("0바이트", ""), ("공백만", "   \n\r\n"), ("BOM 만", b"\xef\xbb\xbf\n")]:
+            allow(proj, data)
+            case(proj, "8 빈 파일 " + title + " → 다른 기준선도 허용", OK, ed(OTHER))
+            case(proj, "8 빈 파일 " + title + " → 셸 쓰기 허용", OK, bash(f"sed -i 's/2/3/' {OTHER}"))
+        # 4 계획서에 없는 단계
+        allow(proj, "P9-9\n")
+        case(proj, "4 계획서에 없는 단계 → 차단", B, ed(MONEY), need=W_SHUT)
+        allow(proj, "P9-9 X1\n")
+        case(proj, "4 오타만 여러 개(UNKNOWN) → 차단 ⓐ", B, ed(MONEY), need=W_SHUT)
+        case(proj, "4 오타만 여러 개(UNKNOWN) → 셸 -u 차단 ⓐ", B, bash("npx vitest run -u"), need=W_SHUT)
+        # 9 셸: 열린 단계 있으면 단계 수준 허용, 없으면 차단
+        allow(proj, "P1-2\n")
+        case(proj, "9 열림 · sed -i 다른 기준선(단계 수준)", OK, bash(f"sed -i 's/2/3/' {OTHER}"))
+        case(proj, "9 열림 · vitest -u", OK, bash("npx vitest run -u"))
+        allow(proj, "P9-9\n")
+        case(proj, "9 닫힘 · sed -i", B, bash(f"sed -i 's/1/2/' {MONEY}"), need=W_SHUT)
+        case(proj, "9 닫힘 · vitest -u", B, bash("npx vitest run -u"), need=W_SHUT)
+        # 허용 파일 없음은 예전 그대로
+        (proj / "docs/refactor/.allow-baseline-edit").unlink()
+        case(proj, "허용 파일 없음 → 차단", B, ed(MONEY))
+        # 10 Claude 가 카드 칸에 파일을 더함 → 지문이 달라져 승인이 풀림 → 닫힘
+        allow(proj, "P1-2\n")
+        pp = proj / "docs/refactor/REFACTOR_PLAN.md"
+        lf(pp, pp.read_text(encoding="utf-8").replace("`tests/baseline/money.test.ts` 중", f"`tests/baseline/money.test.ts`·`{OTHER}` 중"))
+        case(proj, "10 카드 칸 늘림 → 다른 기준선 차단", B, ed(OTHER), need=W_SHUT)
+        case(proj, "10 카드 칸 늘림 → 원래 파일도 차단", B, ed(MONEY), need=W_SHUT)
+
+        # 3 단계가 끝남(완료 표시) → 닫힘
+        proj = project_032()
+        made.append(proj)
+        allow(proj, "P1-2\n")
+        pp = proj / "docs/refactor/REFACTOR_PLAN.md"
+        t = pp.read_text(encoding="utf-8")
+        i = t.index("### [P1-2]")
+        lf(pp, t[:i] + t[i:].replace("- **완료**: [ ] 완료", "- **완료**: [x] 완료 (2026-10-03)", 1))
+        case(proj, "3 완료된 단계 → 차단", B, ed(MONEY), need="저절로 닫힌 것")
+        case(proj, "3 완료된 단계 → 셸 -u 차단", B, bash("npx vitest run -u"), need="저절로 닫힌 것")
+        # 보완 d2: 끝난 단계(P1-2) + 열린 단계(P1-1, 칸 "없음") 함께 적힘 → 끝난 카드의 파일은 열린 단계 기준으로 막힘(경비원은 완료 포함 경로를 쓰지 않는다)
+        allow(proj, "P1-1 P1-2\n")
+        case(proj, "d2 끝난 단계 카드 파일 Edit → 차단 ⓑ", B, ed(MONEY), need=W_FILE)
+        case(proj, "d2 끝난 단계 + 열린 단계 칸 없음 → 셸 -u 차단", B, bash("npx vitest run -u"), need="적혀 있지 않습니다")
+        case(proj, "d2 카드에 없는 기준선 Edit → 차단", B, ed(OTHER), need=W_FILE)
+
+        # 5 승인 안 된 단계(pending)
+        proj = project_032(approve_ids="")
+        made.append(proj)
+        allow(proj, "P1-2\n")
+        case(proj, "5 승인 기록 없음 → 차단", B, ed(MONEY), need=W_SHUT)
+
+        # W2b c8: go 턴의 차단 안내에는 이번 실행 대기 단계 ID 가 들어간다(.turn 의 ready = P1-2)
+        proj = make_project(phase="EXECUTE", allow=(".turn",))
+        made.append(proj)
+        case(proj, "c8 go 턴 안내에 실행 대기 ID", B, ed(MONEY), need="printf 'P1-2\\n' >")
+        proj = make_project(phase="EXECUTE")
+        made.append(proj)
+        case(proj, "c8 go 턴 아니면 예시 ID", B, ed(MONEY), need="printf 'P1-1 P1-2\\n' >")
+    finally:
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
 
 
 if __name__ == "__main__":
