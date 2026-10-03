@@ -561,7 +561,7 @@ def main():
     # 입력 훅(turn.sh)은 승인 기록 지문을 자체 판으로 잰다 — 라이브러리 rl_log_sum 과 같아야 post-check 가 헛경보를 내지 않는다
     libsh = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
     def lib_sum():
-        return subprocess.run([BASH, "-c", 'eval "$(tr -d \'\\r\' < "$1")"; rl_log_sum "$2"', "x", libsh, lg.as_posix()],
+        return subprocess.run([BASH, "-c", 'LC_ALL=C; export LC_ALL; eval "$(tr -d \'\\r\' < "$1")"; rl_log_sum "$2"', "x", libsh, lg.as_posix()],
                               capture_output=True, env=env(), timeout=90).stdout.decode().strip()
     hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
     tt = (d / "docs/refactor/.turn.s1").read_text(encoding="utf-8")
@@ -839,7 +839,7 @@ def main():
     #   (카드 목록이 파이프 버퍼보다 커야 드러나므로 3000장. 승인 전체를 돌리면 느려서 카드 본문 읽기만 직접 부른다)
     d = project(plan=PLAN + "".join(f"\n### [P5-{i}] 단계 {i}\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n" for i in range(3000)))
     lib = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
-    r = subprocess.run([BASH, "-c", 'eval "$(tr -d \'\\r\' < "$1")"; rl_card_text "$2" P1-1', "x", lib,
+    r = subprocess.run([BASH, "-c", 'LC_ALL=C; export LC_ALL; eval "$(tr -d \'\\r\' < "$1")"; rl_card_text "$2" P1-1', "x", lib,
                         (d / "docs/refactor/REFACTOR_PLAN.md").as_posix()], capture_output=True, env=env(), timeout=120)
     err = r.stderr.decode("utf-8", "replace")
     check("큰 계획서: awk 소음 없음", "결제 금액 확인" in r.stdout.decode("utf-8", "replace") and err == "", err[-300:])
@@ -1017,6 +1017,11 @@ def main():
         check("판 번호 일치: plugin/marketplace/README/bug.yml", False, f"예외: {e}")
 
     check_allow_steps_032(check)
+    check_allow_current_033(check)
+    check_approve_allow_033(check)
+    check_approve_push_033(check)
+    check_lib_lc_all_033(check)
+    check_commit_docs_033(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -1066,6 +1071,8 @@ def check_allow_steps_032(check):
 
     def mk():
         d = project(plan=PLAN_032)
+        # 0.3.3: 허용은 STATE.md current_step 에 적힌 단계만 열린다 — 0.3.2 시험의 뜻(적힌 단계 둘 다 실행 중)을 살린다
+        lf(d / "docs/refactor/STATE.md", STATE.replace("updated:", 'current_step: "P1-1 P1-2 (진행 중)"\nupdated:'))
         (d / "tests/baseline/golden").mkdir(parents=True)
         for f in ("money.test.ts", "other.test.ts", "golden/d.json"):
             lf(d / "tests/baseline" / f, "x\n")
@@ -1131,13 +1138,14 @@ def check_allow_steps_032(check):
         lf(d / "tests/baseline/money.test.ts", "x\n"); lf(d / "tests/baseline/other.test.ts", "x\n")
 
         # 현황 문구: 단계 ID 가 적혀 있으면 "지우세요" 대신 "단계 … 동안 열림", 빈 파일이면 예전 문구
+        # (0.3.3 G6 으로 문구가 바뀜: "동안 열림" → "실행 중 — 열림" · 빈 파일은 예전 범용 문구 대신 전용 경고)
         st = sh("refactor-status", d)
-        check("0.3.2 현황: 단계 동안 열림", "단계 P1-1 동안 열림(끝나면 저절로 닫힘)" in st and "허용 파일이 남아 있음" not in st, st[-400:])
+        check("0.3.2 현황: 단계 동안 열림", "단계 P1-1 실행 중 — 열림(끝나면 저절로 닫힘)" in st and "허용 파일이 남아 있음" not in st, st[-400:])
         bd = sh("refactor-board", d, str(d))
-        check("0.3.2 현황표: 🔓단계 표시", "🔓단계 P1-1 동안 열림" in bd and "⚠허용파일" not in bd, bd[-400:])
+        check("0.3.2 현황표: 🔓단계 표시", "🔓단계 P1-1 실행 중 — 열림" in bd and "⚠허용파일" not in bd, bd[-400:])
         allow(d, "")
         st = sh("refactor-status", d)
-        check("0.3.2 현황: 빈 파일은 예전 문구", "허용 파일이 남아 있음: .allow-baseline-edit" in st and "동안 열림" not in st, st[-400:])
+        check("0.3.2 현황: 빈 파일은 예전 문구", "⚠️ 빈 기준선 허용 파일 — 기준선 전부가 열려 있고 저절로 닫히지 않습니다." in st and "실행 중 — 열림" not in st, st[-400:])
         bd = sh("refactor-board", d, str(d))
         check("0.3.2 현황표: 빈 파일은 ⚠허용파일", "⚠허용파일" in bd, bd[-400:])
         # W2b c5: 상태별 문구(SHUT·UNKNOWN — DONE 은 아래 3 에서)
@@ -1250,6 +1258,783 @@ def check_allow_steps_032(check):
               "x/tests/baseline/money.test.ts" in lines and "tests/baseline/money.test.ts" not in lines, out + err)
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def check_allow_current_033(check):
+    """0.3.3: 기준선 허용은 지금 실행 중인 단계(STATE.md current_step)만 · 도우미 rl_allow_ids / rl_card_bl_paths(c6)."""
+    lib = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
+
+    def libcall(d, expr):
+        # check_allow_steps_032 와 같은 꼴 — LC_ALL=C 를 먼저(맥의 awk 가 지문을 다르게 잰다)
+        r = subprocess.run([BASH, "-c", 'LC_ALL=C; export LC_ALL; eval "$(tr -d \'\\r\' < "$1")"; P=$2; R=$2/docs/refactor; ' + expr, "x", lib, d.as_posix()],
+                           capture_output=True, env=env(), timeout=90)
+        return r.stdout.decode("utf-8", "replace").replace("\r", ""), r.stderr.decode("utf-8", "replace")
+
+    def allow(d, data):
+        (d / "docs/refactor/.allow-baseline-edit").write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
+
+    # c6 도우미 rl_allow_ids: 0.3.2 의 ID 뽑기와 같은 결과
+    d = project(plan=PLAN_032)
+    try:
+        out, err = libcall(d, 'rl_allow_ids "$R"')
+        check("0.3.3 c6 rl_allow_ids: 파일 없음 → 빈 출력", out == "", repr(out) + err)
+        for title, data, want in [
+            ("대소문자·주석", "p1-2  P1-1 # 메모\n", "P1-2 P1-1\n"),
+            ("중복 제거", "P1-1 p1-1\nP1-1\n", "P1-1\n"),
+            ("쉼표·줄바꿈 구분", "P1-1,P1-2\nP1-3\n", "P1-1 P1-2 P1-3\n"),
+            ("UTF-8 BOM", b"\xef\xbb\xbfP1-1\r\n", "P1-1\n"),
+            ("UTF-16(NUL·BOM)", "P1-1 P1-2\r\n".encode("utf-16"), "P1-1 P1-2\n"),
+            ("주석만 → ?", "# P1-1\n", "?\n"),
+            ("한글만 → ?", "전부\n", "?\n"),
+            ("공백만 → 빈 출력", " \n\r\n", ""),
+            ("0바이트 → 빈 출력", "", ""),
+        ]:
+            allow(d, data)
+            out, err = libcall(d, 'rl_allow_ids "$R"')
+            check(f"0.3.3 c6 rl_allow_ids: {title}", out == want, repr(out) + err)
+
+        # c6 도우미 rl_card_bl_paths: 기본(전체 중복 제거) / -n(파일마다 · ? · 없음)
+        cd = d / "cards"
+        cd.mkdir()
+        lf(cd / "c3", "### [P1-1] 가\n- **깨질 것으로 예상되는 기준선**: `tests/baseline/a.test.ts` 와 `.\\tests\\baseline\\b.json`\n"
+                      "  `tests/baseline/a.test.ts` 다시\n- **승인**: [ ] 승인\n`tests/baseline/밖.ts`\n")
+        lf(cd / "c4", "### [P1-2] 나\n- **깨질 것으로 예상되는 기준선**: ` ./tests/baseline/a.test.ts `\n### 다음\n`tests/baseline/z.ts`\n")
+        lf(cd / "c5", "### [P1-3] 다\n- **깨질 것으로 예상되는 기준선**: tests/baseline 의 금액 항목\n- **승인**: [ ] 승인\n")
+        lf(cd / "c6", "### [P1-4] 라\n- **깨질 것으로 예상되는 기준선**:\n  금액 테스트 일부\n- **승인**: [ ] 승인\n")
+        lf(cd / "c7", "### [P1-5] 마\n- **깨질 것으로 예상되는 기준선**: 없음 (기준선 그대로)\n- **승인**: [ ] 승인\n")
+        lf(cd / "c8", "### [P1-6] 바\n- **종류**: 🛠 개선\n- **승인**: [ ] 승인\n")
+        lf(cd / "c9", "### [P1-7] 사\n- **깨질 것으로 예상되는 기준선**:\n- **승인**: [ ] 승인\n")
+        out, err = libcall(d, 'rl_card_bl_paths "$P/cards/c3" "$P/cards/c4" "$P/cards/c5" "$P/cards/c7"')
+        check("0.3.3 c6 rl_card_bl_paths 기본: 전체 중복 제거·\\ → /·./ 뗌·칸 밖 무시",
+              out == "tests/baseline/a.test.ts\ntests/baseline/b.json\n", repr(out) + err)
+        out, err = libcall(d, 'rl_card_bl_paths -n "$P/cards/c3" "$P/cards/c4" "$P/cards/c5" "$P/cards/c6" "$P/cards/c7" "$P/cards/c8" "$P/cards/c9"')
+        check("0.3.3 c6 rl_card_bl_paths -n: 파일마다 · 백틱 0 은 ? · 없음·칸 없음·빈 칸은 줄 없음",
+              out == "c3\ttests/baseline/a.test.ts\nc3\ttests/baseline/b.json\nc4\ttests/baseline/a.test.ts\nc5\t?\nc6\t?\n", repr(out) + err)
+        out, err = libcall(d, 'rl_card_bl_paths -n "$P/cards/c5"')
+        check("0.3.3 c6 rl_card_bl_paths -n: 파일 하나·마지막 파일의 ?", out == "c5\t?\n", repr(out) + err)
+        out, err = libcall(d, 'rl_card_bl_paths; rl_card_bl_paths -n; echo "rc=$?"')
+        check("0.3.3 c6 rl_card_bl_paths: 파일 없이 부르면 빈 출력", out == "rc=0\n", repr(out) + err)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # c1~c4 rl_allow_baseline: 허용 파일의 열린 단계 중 STATE.md 앞머리 current_step 에 적힌 단계만 OPEN, 없으면 WAIT
+    g = lambda d, *a: subprocess.run(["git", "-C", str(d), "-c", "user.email=t@example.com", "-c", "user.name=t", *a], check=True, capture_output=True)
+    head = STATE.rstrip("\n").rsplit("---", 1)[0]   # 앞머리 끝 --- 앞까지
+
+    def state(d, cs=None, crlf=False, body="", raw=None):
+        t = raw if raw is not None else head + (f"current_step: {cs}\n" if cs is not None else "") + "---\n" + body
+        (d / "docs/refactor/STATE.md").write_bytes((t.replace("\n", "\r\n") if crlf else t).encode("utf-8"))
+
+    M, G = "tests/baseline/money.test.ts\n", "tests/baseline/golden/d.json\n"
+    d = project(plan=PLAN_032)
+    try:
+        (d / "tests/baseline/golden").mkdir(parents=True)
+        for f in ("money.test.ts", "other.test.ts", "golden/d.json"):
+            lf(d / "tests/baseline" / f, "x\n")
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        g(d, "add", "-A"); g(d, "commit", "-qm", "i")
+        approve(d, "P1-1 P1-2")
+        allow(d, "P1-1 P1-2\n")
+        ab = lambda: libcall(d, 'rl_allow_baseline "$R"')
+        state(d, '"P1-1 (진행 중)"')
+        out, err = ab()
+        check("0.3.3 c1 실행 중 단계만: OPEN P1-1 + P1-1 경로만", out == "OPEN P1-1\n" + M, repr(out) + err)
+        state(d, '"P1-2 (진행 중)"')
+        out, err = ab()
+        check("0.3.3 c1 실행 중 단계만: OPEN P1-2 + P1-2 경로만", out == "OPEN P1-2\n" + G, repr(out) + err)
+        for title, kw in [("current_step \"-\"", dict(cs='"-"')), ("허용 밖 단계 P1-9", dict(cs='"P1-9 (진행 중)"')),
+                          ("P1-10(앞부분만 같음)", dict(cs='"P1-10 (진행 중)"')), ("값 빈 칸", dict(cs='')),
+                          ("앞머리에 current_step 없음", dict()), ("본문에만 current_step", dict(body='\ncurrent_step: "P1-1"\n')),
+                          ("앞머리 없음", dict(raw='current_step: "P1-1"\n')), ("앞머리 안 닫힘", dict(raw='---\nphase: EXECUTE\n'))]:
+            state(d, **kw)
+            out, err = ab()
+            check(f"0.3.3 c2·c3 WAIT: {title}", out == "WAIT P1-1 P1-2\n", repr(out) + err)
+        (d / "docs/refactor/STATE.md").unlink()
+        out, err = ab()
+        check("0.3.3 c2 WAIT: STATE.md 없음", out == "WAIT P1-1 P1-2\n", repr(out) + err)
+        for title, kw, want in [("묶음 P1-1~P1-2", dict(cs='"P1-1~P1-2 (묶음)"'), "OPEN P1-1 P1-2\n" + M + G),
+                                ("따옴표 없음·소문자", dict(cs='p1-1 (진행 중)'), "OPEN P1-1\n" + M),
+                                ("CRLF", dict(cs='"P1-1 (진행 중)"', crlf=True), "OPEN P1-1\n" + M),
+                                ("값 앞뒤 공백", dict(cs='   "P1-1 (진행 중)"   '), "OPEN P1-1\n" + M),
+                                ("쉼표 구분", dict(cs='P1-2,P1-1'), "OPEN P1-1 P1-2\n" + M + G),
+                                ("첫 줄 BOM", dict(raw="﻿" + head + 'current_step: "P1-2"\n---\n'), "OPEN P1-2\n" + G)]:
+            state(d, **kw)
+            out, err = ab()
+            check(f"0.3.3 c3 열림: {title}", out == want, repr(out) + err)
+        # 허용 파일에 없는 단계가 실행 중이면 그 단계는 열리지 않는다(허용 파일 ∩ 열린 단계 ∩ current_step)
+        allow(d, "P1-2\n")
+        state(d, '"P1-1 (진행 중)"')
+        out, err = ab()
+        check("0.3.3 c2 허용 파일 밖 단계가 실행 중 → WAIT P1-2", out == "WAIT P1-2\n", repr(out) + err)
+        # 다른 상태는 그대로(SHUT·UNKNOWN·ALL·NONE)
+        for data, want in [("P1-3\n", "SHUT P1-3\n"), ("P9-9\n", "UNKNOWN P9-9\n"), (" \n", "ALL\n")]:
+            allow(d, data)
+            out, err = ab()
+            check(f"0.3.3 c2 다른 상태 그대로: {data.strip() or '공백'}", out == want, repr(out) + err)
+
+        # c4 approved 꼴 · rl_protected_dirty: 경로는 0.3.2 와 같다(승인된 카드 전부), 상태 줄만 새 규칙
+        allow(d, "P1-1 P1-2\n")
+        state(d, '"-"')
+        out, err = libcall(d, 'rl_allow_baseline "$R" approved')
+        check("0.3.3 c4 approved 꼴: WAIT 여도 승인된 카드 경로 전부", out == "WAIT P1-1 P1-2\n" + M + G, repr(out) + err)
+        state(d, '"P1-1 (진행 중)"')
+        out, err = libcall(d, 'rl_allow_baseline "$R" approved')
+        check("0.3.3 c4 approved 꼴: OPEN P1-1 이어도 경로는 좁히지 않음", out == "OPEN P1-1\n" + M + G, repr(out) + err)
+        for f in ("money.test.ts", "other.test.ts", "golden/d.json"):
+            lf(d / "tests/baseline" / f, "바뀜\n")
+        for cs in ('"-"', '"P1-1 (진행 중)"'):
+            state(d, cs)
+            out, err = libcall(d, 'rl_protected_dirty "$P" "$R" | cut -f1')
+            check(f"0.3.3 c4 rl_protected_dirty({cs}): 0.3.2 와 같이 other 만 보고",
+                  "other.test.ts" in out and "money.test.ts" not in out and "golden/d.json" not in out, out + err)
+        for f in ("money.test.ts", "other.test.ts", "golden/d.json"):
+            lf(d / "tests/baseline" / f, "x\n")
+
+        # d2 현황(status·board) 문구: WAIT · OPEN · 빈 파일(0바이트·공백만 = ALL)
+        allow(d, "P1-1 P1-2\n")
+        state(d, '"-"')
+        st, bd = sh("refactor-status", d), sh("refactor-board", d, str(d))
+        check("0.3.3 d2 현황 WAIT 문구", "🔒 기준선 허용: 단계 P1-1 P1-2 — 그 단계를 실행하는 동안만 열림(지금은 닫힘)." in st
+              and "실행 중 — 열림" not in st and "허용 파일이 남아 있음" not in st, st[-400:])
+        check("0.3.3 d2 현황표 WAIT 표시", "🔒허용파일 단계 P1-1 P1-2 실행 중일 때만 열림(지금은 닫힘)" in bd and "⚠허용파일" not in bd, bd[-400:])
+        state(d, '"P1-2 (진행 중)"')
+        st, bd = sh("refactor-status", d), sh("refactor-board", d, str(d))
+        check("0.3.3 d2 현황 OPEN 문구(실행 중 단계만)", "🔓 기준선 허용 파일(.allow-baseline-edit): 단계 P1-2 실행 중 — 열림(끝나면 저절로 닫힘)." in st, st[-400:])
+        check("0.3.3 d2 현황표 OPEN 표시", "🔓단계 P1-2 실행 중 — 열림(끝나면 저절로 닫힘)" in bd, bd[-400:])
+        for title, data in [("0바이트", ""), ("공백만", " \n\r\n")]:
+            allow(d, data)
+            st, bd = sh("refactor-status", d), sh("refactor-board", d, str(d))
+            check(f"0.3.3 d2 현황 빈 파일({title}) 전용 경고",
+                  "⚠️ 빈 기준선 허용 파일 — 기준선 전부가 열려 있고 저절로 닫히지 않습니다. 단계 목록으로 바꾸기: /refactor:approve 허용 <ID> · 닫기: /refactor:approve 허용 닫기" in st
+                  and "허용 파일이 남아 있음" not in st, st[-400:])
+            check(f"0.3.3 d2 현황표 빈 파일({title}) 표시", "⚠허용파일 비어 있음(기준선 전부 열림·저절로 안 닫힘)" in bd, bd[-400:])
+        # 다른 허용 파일(.allow-migration-edit)은 예전 범용 문구 그대로
+        (d / "docs/refactor/.allow-baseline-edit").unlink()
+        lf(d / "docs/refactor/.allow-migration-edit", "")
+        st = sh("refactor-status", d)
+        check("0.3.3 d2 현황 마이그레이션 허용 파일은 예전 문구", "허용 파일이 남아 있음: .allow-migration-edit" in st and "빈 기준선" not in st, st[-400:])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # f1(검사 보완 F1): current_step 의 같은 묶음 숫자 범위 "P1-1~P1-5" 는 사이 단계까지 펼친다(묶음 다름·끝이 숫자 아님·거꾸로·99칸 넘음은 안 펼침)
+    plan5 = "# 계획서\n" + "".join(
+        f"\n### [P1-{i}] 단계 {i}\n- **종류**: 🛠 개선\n- **깨질 것으로 예상되는 기준선**: `tests/baseline/s{i}.test.ts`\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n"
+        for i in range(1, 6))
+    d = project(plan=plan5)
+    try:
+        (d / "tests/baseline").mkdir(parents=True)
+        for i in range(1, 6):
+            lf(d / f"tests/baseline/s{i}.test.ts", "x\n")
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        g(d, "add", "-A"); g(d, "commit", "-qm", "i")
+        approve(d, "P1-1 P1-2 P1-3 P1-4 P1-5")
+        allow(d, "P1-1 P1-2 P1-3 P1-4 P1-5\n")
+        state(d, '"P1-1~P1-5 (코드 커밋 완료 · 기준선 갱신 대기)"')
+        out, err = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.3 f1 범위 P1-1~P1-5 → 5장 열림 + 경로 5개",
+              out == "OPEN P1-1 P1-2 P1-3 P1-4 P1-5\n" + "".join(f"tests/baseline/s{i}.test.ts\n" for i in range(1, 6)), repr(out) + err)
+        for title, cs, want in [("물결 앞뒤 공백 P1-2 ~ P1-4", '"P1-2 ~ P1-4"', "OPEN P1-2 P1-3 P1-4"),
+                                ("소문자 p1-1~p1-3", '"p1-1~p1-3"', "OPEN P1-1 P1-2 P1-3"),
+                                ("범위 + 낱말 P1-1~P1-2, P1-5", '"P1-1~P1-2, P1-5 (진행 중)"', "OPEN P1-1 P1-2 P1-5"),
+                                ("묶음 다름 P1-1~P2-3 → 안 펼침", '"P1-1~P2-3"', "OPEN P1-1"),
+                                ("거꾸로 P1-3~P1-1 → 안 펼침", '"P1-3~P1-1"', "OPEN P1-1 P1-3"),
+                                ("끝이 숫자 아님 P1-1~P1-3A → 안 펼침", '"P1-1~P1-3A"', "OPEN P1-1"),
+                                ("99칸 넘음 P1-1~P1-200 → 안 펼침", '"P1-1~P1-200"', "OPEN P1-1"),
+                                ("끝 없음 P1-1~", '"P1-1~"', "OPEN P1-1"),
+                                ("앞 없음 ~P1-3", '"~P1-3"', "OPEN P1-3"),
+                                ("범위 밖만 P1-6~P1-9 → WAIT", '"P1-6~P1-9"', "WAIT P1-1 P1-2 P1-3 P1-4 P1-5")]:
+            state(d, cs)
+            out, err = libcall(d, 'rl_allow_baseline "$R" | head -n 1')
+            check(f"0.3.3 f1 {title}", out == want + "\n", repr(out) + err)
+        # K6①: 99칸 경계 — P1-1~P1-100(차 99) 은 펼침, P1-1~P1-101(차 100) 은 안 펼침
+        for cs, want in [('"P1-1~P1-100"', "OPEN P1-1 P1-2 P1-3 P1-4 P1-5"), ('"P1-1~P1-101"', "OPEN P1-1")]:
+            state(d, cs)
+            out, err = libcall(d, 'rl_allow_baseline "$R" | head -n 1')
+            check(f"0.3.3 K6① 범위 경계 {cs}", out == want + "\n", repr(out) + err)
+        # K6②: 앞자리 0(P1-08~P1-10)은 8진수로 읽지 않는다 — 표준오류 0바이트 + 열린 단계와 안 맞아 WAIT
+        state(d, '"P1-08~P1-10"')
+        out, err = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.3 K6② P1-08~P1-10 → 오류 없이 WAIT", out == "WAIT P1-1 P1-2 P1-3 P1-4 P1-5\n" and err == "", repr(out) + repr(err))
+        allow(d, "P1-1 P1-3\n")
+        state(d, '"P1-1~P1-3"')
+        out, err = libcall(d, 'rl_allow_baseline "$R"')
+        check("0.3.3 f1 허용 P1-1 P1-3 + 범위 P1-1~P1-3 → 허용 파일에 있는 것만",
+              out == "OPEN P1-1 P1-3\ntests/baseline/s1.test.ts\ntests/baseline/s3.test.ts\n", repr(out) + err)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+PLAN_033 = """# 계획서
+
+### [P1-1] 금액 계산
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/money.test.ts` 중 "금액" 항목
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-2] 주문 주소
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `./tests/baseline/golden/d.json`
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-3] 아직 승인 안 함
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/x.test.ts`
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-4] 기준선 안 바꿈
+- **종류**: 🔧 리팩토링
+- **깨질 것으로 예상되는 기준선**: 없음
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-5] 경로를 안 적음
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: 금액 테스트 일부
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-6] 끝난 단계
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/done.test.ts`
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P2-1] 같은 번호
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/a.ts`
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P2-1] 같은 번호 둘째
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/b.ts`
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+"""
+
+
+def _lib033(d, expr, extra_env=None):
+    """lib 를 직접 불러 expr 실행(LC_ALL=C 먼저 — 맥의 awk). P=프로젝트 R=docs/refactor"""
+    lib = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
+    e = env()
+    if extra_env:
+        e.update(extra_env)
+    r = subprocess.run([BASH, "-c", 'LC_ALL=C; export LC_ALL; eval "$(tr -d \'\\r\' < "$1")"; P=$2; R=$2/docs/refactor; ' + expr, "x", lib, d.as_posix()],
+                       capture_output=True, env=e, timeout=90)
+    return r.stdout.decode("utf-8", "replace").replace("\r", ""), r.stderr.decode("utf-8", "replace")
+
+
+def _log033(d):
+    p = d / "docs/refactor/APPROVALS.log"
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def _done033(d, cid):
+    pp = d / "docs/refactor/REFACTOR_PLAN.md"
+    t = pp.read_text(encoding="utf-8")
+    i = t.index(f"### [{cid}]")
+    lf(pp, t[:i] + t[i:].replace("- **완료**: [ ] 완료", "- **완료**: [x] 완료 (2026-10-03)", 1))
+
+
+def check_approve_allow_033(check):
+    """0.3.3 A: /refactor:approve 허용 …(A1~A4 · a1~a9) · 승인 화면의 고칠 기준선 안내(A5 · b1) · 마무리·다시 때 허용 파일 정리(A6·A7 · d1) ·
+    허용·푸시 줄이 승인 상태 계산에 영향 없음(a10)."""
+    af = lambda d: d / "docs/refactor/.allow-baseline-edit"
+    ab = lambda d: af(d).read_bytes() if af(d).exists() else None   # 허용 파일 내용(없으면 None — 빨강일 때 예외로 죽지 않게)
+    intact = lambda d: _lib033(d, 'rl_log_intact "$R" && echo yes')[0] == "yes\n"
+    done_ok = lambda d: _lib033(d, 'rl_done_confirmed "$R" && echo yes')[0] == "yes\n"
+
+    def states(d, log="$R/APPROVALS.log"):
+        out, _ = _lib033(d, f'rl_cards "$R/REFACTOR_PLAN.md" "{log}"')
+        return out
+
+    def mk():
+        d = project(plan=PLAN_033)
+        out = approve(d, "P1-1 P1-2 P1-4 P1-5 P1-6")
+        _done033(d, "P1-6")
+        return d, out
+
+    def sec(out, cid):   # 승인 화면에서 그 카드의 줄들
+        key = f"승인함: [{cid}]"
+        return out.split(key, 1)[1].split("✅ 승인함")[0].split("📋")[0] if key in out else ""
+
+    # b1 승인 화면: 경로 있는 카드 → 🔓 / "없음" → 줄 없음 / 글만 있고 백틱 0 → ⚠️ · 허용 파일은 안 생김
+    d, out = mk()
+    try:
+        check("0.3.3 b1 승인 화면: 경로 있는 카드 → 🔓 줄",
+              "   🔓 고칠 기준선: `tests/baseline/money.test.ts` — 실행 전에 /refactor:approve 허용 P1-1" in sec(out, "P1-1")
+              and "🔓 고칠 기준선: `tests/baseline/golden/d.json` — 실행 전에 /refactor:approve 허용 P1-2" in sec(out, "P1-2"), out)
+        check("0.3.3 b1 승인 화면: '없음' 카드 → 줄 없음", sec(out, "P1-4") != "" and "🔓" not in sec(out, "P1-4") and "⚠️" not in sec(out, "P1-4"), out)
+        check("0.3.3 b1 승인 화면: 백틱 경로 0 → ⚠️ 줄",
+              "   ⚠️ '깨질 것으로 예상되는 기준선' 칸에 백틱 경로가 없어 이 단계는 기준선을 고칠 수 없습니다 — 필요하면 계획서를 고치게 하세요" in sec(out, "P1-5")
+              and "🔓" not in sec(out, "P1-5"), out)
+        check("0.3.3 b1 승인은 허용을 열지 않음", not af(d).exists() and " | 허용 | " not in _log033(d), _log033(d)[-300:])
+
+        # a1 허용 P1-1
+        before = states(d)
+        out = approve(d, "허용 P1-1")
+        lt = _log033(d)
+        check("0.3.3 a1 허용 P1-1: 파일 'P1-1\\n'", af(d).exists() and ab(d) == b"P1-1\n", out)
+        check("0.3.3 a1 기록에 허용 줄 1개", lt.count(" | 허용 | ") == 1 and lt.endswith(" KST | 허용 | P1-1 | - | 사용자가 /refactor:approve 로 실행\n"), lt[-300:])
+        check("0.3.3 a1 봉인 일치", intact(d))
+        check("0.3.3 a1 승인 상태 그대로", states(d) == before, states(d) + "\n---\n" + before)
+        check("0.3.3 a1 출력", "🔓 기준선 허용: P1-1 — 이 단계를 실행하는 동안 카드에 적힌 기준선만 고칠 수 있습니다(단계가 모두 끝나면 저절로 닫힘)" in out
+              and "   [P1-1] 고칠 기준선: `tests/baseline/money.test.ts`" in out and "다음: /refactor:go" in out, out)
+        # a3 이미 있는 ID 에 더함
+        out = approve(d, "허용 P1-2")
+        check("0.3.3 a3 'P1-1' 에 허용 P1-2 → 'P1-1 P1-2'", ab(d) == b"P1-1 P1-2\n" and _log033(d).count(" | 허용 | ") == 2
+              and _log033(d).endswith(" | 허용 | P1-1 P1-2 | - | 사용자가 /refactor:approve 로 실행\n") and intact(d), out)
+        snap = rdir_files(d)
+        out = approve(d, "허용 P1-2")
+        check("0.3.3 a3 이미 허용된 것을 다시 → 아무것도 안 바뀜", rdir_files(d) == snap and "이미 허용돼 있습니다: P1-1 P1-2" in out, out)
+        # a4 빈 파일(전부 허용)에서 좁힘
+        af(d).write_bytes(b"")
+        out = approve(d, "허용 P1-1")
+        check("0.3.3 a4 빈 파일 → 'P1-1' 로 좁혀짐 + 알림", ab(d) == b"P1-1\n" and "이 단계들로 좁혔습니다" in out, out)
+        # 지금 대상이 아닌 ID(승인 안 됨)는 빼고 알림
+        af(d).write_bytes(b"P1-3 p1-1 # memo\n")
+        out = approve(d, "허용 P1-2")
+        check("0.3.3 a3 대상이 아닌 옛 ID 는 빠짐", ab(d) == b"P1-1 P1-2\n" and "허용 파일에 있던 P1-3 은(는) 지금 허용 대상이 아니라 뺐습니다" in out, out)
+
+        # a6 닫기: ID 파일 / 빈 파일 / 없음 — 기록 줄 수 그대로
+        n0 = _log033(d).count("\n")
+        out = approve(d, "허용 닫기")
+        check("0.3.3 a6 허용 닫기(ID 파일) → 지워짐", not af(d).exists() and "기준선 허용을 닫았습니다" in out, out)
+        af(d).write_bytes(b"")
+        out = approve(d, "ALLOW close")
+        check("0.3.3 a6 ALLOW close(빈 파일) → 지워짐", not af(d).exists() and "기준선 허용을 닫았습니다" in out, out)
+        out = approve(d, "허용 닫기")
+        check("0.3.3 a6 허용 닫기(없음) → 이미 닫혀", not af(d).exists() and "이미 닫혀 있습니다" in out, out)
+        check("0.3.3 a6 닫기는 기록에 줄을 남기지 않음", _log033(d).count("\n") == n0 and intact(d), _log033(d)[-300:])
+
+        # a7 섞어 쓰기 거절(아무것도 안 바뀜)
+        af(d).write_bytes(b"P1-1\n")
+        for args in ["P1-1 허용", "허용 baseline", "허용 마무리", "허용 확인", "허용 닫기 P1-1", "닫기", "닫기 허용", "허용 보류 P1-1",
+                     "보류 허용 P1-1", "허용 허용 P1-1", "허용 닫기 닫기", "P1-1 닫기"]:
+            snap = rdir_files(d)
+            out = approve(d, args)
+            check(f"0.3.3 a7 거절: {args!r}", rdir_files(d) == snap and "아무것도 바꾸지 않았습니다" in out, out)
+
+        # a8 같은 결과 다른 철자
+        for args, want in [("allow p1-1", b"P1-1\n"), ("ALLOW P1-1", b"P1-1\n"), ("Allow P1-1", b"P1-1\n"), ("  허용   p1-1  ", b"P1-1\n"),
+                           ("허용 P1-1,P1-2", b"P1-1 P1-2\n"), ("허용\nP1-1\nP1-2", b"P1-1 P1-2\n"), ("허용 P1-1 P1-1", b"P1-1\n"),
+                           ("허용 P1", b"P1-1 P1-2\n"), ("허용 P1-2 P1-1", b"P1-2 P1-1\n")]:
+            af(d).unlink(missing_ok=True)
+            out = approve(d, args)
+            got = ab(d) if af(d).exists() else None
+            check(f"0.3.3 a8 {args!r} → {want!r}", got == want and intact(d), f"{got!r} {out}")
+        # a9 ID 없이 '허용' → 대상 조건을 만족하는 카드 전부(P1-6 완료·P1-4 없음·P1-5 백틱 0·P1-3 미승인·P2-1 같은 번호는 빠짐)
+        af(d).unlink(missing_ok=True)
+        out = approve(d, "허용")
+        check("0.3.3 a9 '허용'(ID 없음) → 대상 전부", af(d).exists() and ab(d) == b"P1-1 P1-2\n", out)
+        # 승인 뒤 카드가 바뀐 단계는 대상이 아님(파일에 있던 그 ID 도 빠짐)
+        pp = d / "docs/refactor/REFACTOR_PLAN.md"
+        lf(pp, pp.read_text(encoding="utf-8").replace("### [P1-2] 주문 주소", "### [P1-2] 주문 주소 바뀜"))
+        snap = rdir_files(d)
+        out = approve(d, "허용 P1-2")
+        check("0.3.3 a2 카드 바뀐 단계 → 거절", rdir_files(d) == snap and "승인 뒤 카드가 바뀐 단계라 허용하지 않았습니다: [P1-2]" in out, out)
+        out = approve(d, "허용 P1-1")
+        check("0.3.3 a2 카드 바뀐 단계는 다음 쓰기 때 빠짐", ab(d) == b"P1-1\n" and "P1-2 은(는) 지금 허용 대상이 아니라 뺐습니다" in out, out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # a2 대상이 아닌 ID: 파일 안 생김 · 기록 안 바뀜 · 까닭 문구 각각
+    d, _ = mk()
+    try:
+        for args, msg in [("허용 P1-3", "승인되지 않은 단계라 허용하지 않았습니다: [P1-3]"),
+                          ("허용 P9-9", "계획서에 없는 단계 번호: P9-9"),
+                          ("허용 P1-6", "이미 완료된 단계라 허용이 필요 없습니다: [P1-6]"),
+                          ("허용 P1-4", "[P1-4] 기준선 안 바꿈 — 기준선을 바꾸지 않는 단계라 허용이 필요 없습니다"),
+                          ("허용 P1-5", "[P1-5] 경로를 안 적음 — '깨질 것으로 예상되는 기준선' 칸에 백틱 경로가 없어 허용하지 않았습니다"),
+                          ("허용 P2-1", "[P2-1] 같은 번호의 단계가 2개"),
+                          ("허용 P3", "계획서에 P3 묶음의 단계가 없습니다"),
+                          ("허용 엉뚱", "알아듣지 못한 입력: 엉뚱")]:
+            snap = rdir_files(d)
+            out = approve(d, args)
+            check(f"0.3.3 a2 {args!r} → 안 바뀜 + 까닭", not af(d).exists() and rdir_files(d) == snap and msg in out, out)
+        # A3 H9 알아듣지 못한 입력은 한 번만 알린다(ID 없음·ID 있음 둘 다)
+        for args in ("허용 엉뚱", "허용 엉뚱 P1-1"):
+            out = approve(d, args)
+            check(f"0.3.3 A3 H9 {args!r} → '알아듣지 못한 입력' 한 번", out.count("알아듣지 못한 입력") == 1, out)
+        af(d).unlink(missing_ok=True)
+        out = approve(d, "허용 P1-1 P1-3")
+        check("0.3.3 a2 섞이면 대상만 적고 나머지는 까닭", ab(d) == b"P1-1\n" and "승인되지 않은 단계라 허용하지 않았습니다: [P1-3]" in out, out)
+        af(d).unlink(missing_ok=True)
+
+        # a5 --from-hook 없음 · 봉인 깨짐 → 아무것도 안 바뀜
+        snap = rdir_files(d)
+        out, rc = approve_rc(d, "허용 P1-1", from_hook=False)
+        check("0.3.3 a5 --from-hook 없음 → 안 바뀜", rc == 0 and rdir_files(d) == snap and not af(d).exists(), out)
+        lg = d / "docs/refactor/APPROVALS.log"
+        lg.write_bytes(lg.read_bytes() + "2026-10-03 10:00 KST | 승인 | P1-3 | card=1.2 | 손으로\n".encode("utf-8"))
+        snap = rdir_files(d)
+        out = approve(d, "허용 P1-1")
+        check("0.3.3 a5 봉인 깨짐 → 안 바뀜", rdir_files(d) == snap and not af(d).exists() and "처리하지 않았습니다" in out, out)
+        out = approve(d, "허용")
+        check("0.3.3 a5 봉인 깨짐 + '허용'(ID 없음) → 안 바뀜", rdir_files(d) == snap and not af(d).exists(), out)
+        af(d).write_bytes(b"P1-1\n")
+        out = approve(d, "허용 닫기")
+        check("0.3.3 a6 봉인이 깨져 있어도 닫기는 됨(안전한 쪽)", not af(d).exists() and lg.read_bytes() == snap["APPROVALS.log"], out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # a9 대상 0개: 파일 안 만들고 까닭
+    d = project(plan=PLAN_033)
+    try:
+        for title in ("승인 기록 없음", "기준선 안 바꾸는 단계만 승인"):
+            if title != "승인 기록 없음":
+                approve(d, "P1-4")
+            snap = rdir_files(d)
+            out = approve(d, "허용")
+            check(f"0.3.3 a9 '허용' 대상 0개({title}) → 안 만듦", not af(d).exists() and rdir_files(d) == snap
+                  and "지금 승인돼 있고 기준선을 고치는 단계가 없습니다" in out, out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # a10 허용·푸시 줄이 든 기록으로 계산한 승인 상태 = 그 줄이 없을 때와 같음(0.3.2 의 읽기 규칙 그대로)
+    d, _ = mk()
+    try:
+        approve(d, "보류 P1-5")
+        approve(d, "허용 P1-1")
+        lg = d / "docs/refactor/APPROVALS.log"
+        lg.write_bytes(lg.read_bytes() + "2026-10-03 11:00 KST | 푸시 | feat/x | - | 사용자가 /refactor:approve 로 실행\n".encode("utf-8"))
+        lines = lg.read_text(encoding="utf-8").splitlines(keepends=True)
+        lf(d / "docs/refactor/log-filtered", "".join(l for l in lines if " | 허용 | " not in l and " | 푸시 | " not in l))
+        full, filt = states(d), states(d, "$R/log-filtered")
+        check("0.3.3 a10 허용·푸시 줄은 승인 상태 계산에 영향 없음", full == filt and "\x1fapproved" in full and "\x1fheld" in full
+              and len(lines) - (d / "docs/refactor/log-filtered").read_text(encoding="utf-8").count("\n") == 2, full + "\n---\n" + filt)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # d1 마무리: 허용 파일(ID·빈 파일)을 지우고 알림 · 기록 마지막 줄 = 마무리 · 마이그레이션 허용 파일은 남기고 알림 · .allow-env 는 그대로
+    d = project(plan=PLAN_033)
+    try:
+        approve(d, "P1-1")
+        approve(d, "허용 P1-1")
+        _done033(d, "P1-1")
+        (d / "docs/refactor/.allow-migration-edit").write_bytes(b"")
+        lf(d / "docs/refactor/.allow-env", "DATABASE_URL=db.dev.example\n")
+        out = approve(d, "마무리")
+        last = _log033(d).splitlines()[-1]
+        check("0.3.3 d1 마무리 → 허용 파일 지움 + 알림", not af(d).exists() and "🔒 리팩토링이 끝나 기준선 허용 파일(.allow-baseline-edit)을 지웠습니다." in out, out)
+        check("0.3.3 d1 마무리 줄이 기록의 마지막 줄 · 마무리 인정", last.endswith(" KST | 마무리 | PROJECT | - | 사용자가 /refactor:approve 로 실행") and done_ok(d), last)
+        check("0.3.3 d1 마이그레이션 허용 파일은 남기고 알림", (d / "docs/refactor/.allow-migration-edit").exists()
+              and "마이그레이션 허용 파일(.allow-migration-edit)이 남아 있습니다" in out, out)
+        check("0.3.3 d1 .allow-env 는 건드리지도 알리지도 않음", (d / "docs/refactor/.allow-env").exists() and ".allow-env" not in out, out)
+        # 마무리 뒤: 허용은 대상이 없어 안 씀, 닫기는 기록에 줄을 남기지 않음 → 마무리 인정 그대로
+        n0 = _log033(d).count("\n")
+        approve(d, "허용 P1-1")
+        af(d).write_bytes(b"P1-1\n")
+        approve(d, "허용 닫기")
+        check("0.3.3 d1 마무리 뒤 허용·닫기 → 기록 그대로, 마무리 인정 그대로", _log033(d).count("\n") == n0 and done_ok(d) and not af(d).exists(), _log033(d)[-300:])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    d = project(plan=PLAN_033)
+    try:
+        af(d).write_bytes(b"")
+        out = approve(d, "마무리")
+        check("0.3.3 d1 마무리 → 빈 허용 파일도 지움", not af(d).exists() and "기준선 허용 파일(.allow-baseline-edit)을 지웠습니다" in out
+              and "마이그레이션" not in out and done_ok(d), out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # d1 /refactor:go 다시 → 허용 파일 지움 + 표준출력 한 줄(재설정 줄을 남길 때)
+    d = project(plan=PLAN_033)
+    try:
+        approve(d, "P1-1")
+        approve(d, "허용 P1-1")
+        line = "[Vibe Refactor] 승인이 재설정되어 지난 기준선 허용 파일(.allow-baseline-edit)을 지웠습니다."
+        so, se, rc, _ = hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go 다시 plan"})
+        check("0.3.3 d1 go 다시 → 허용 파일 지움 + 한 줄", rc == 0 and not af(d).exists() and line in so.splitlines(), so + se)
+        af(d).write_bytes(b"")
+        so, se, rc, _ = hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go 다시 plan"})
+        check("0.3.3 d1 go 다시 → 빈 허용 파일도 지움", rc == 0 and not af(d).exists() and line in so, so + se)
+        so, se, rc, _ = hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go 다시 plan"})
+        check("0.3.3 d1 go 다시(허용 파일 없음) → 알림 없음", rc == 0 and "기준선 허용 파일" not in so and "마이그레이션 허용 파일" not in so, so)
+        # A3 H8 다시 때 마이그레이션 허용 파일은 지우지 않고 한 줄 알림
+        (d / "docs/refactor/.allow-migration-edit").write_bytes(b"")
+        so, se, rc, _ = hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go 다시 plan"})
+        check("0.3.3 A3 H8 go 다시 → 마이그레이션 허용 파일은 남기고 한 줄",
+              rc == 0 and (d / "docs/refactor/.allow-migration-edit").exists()
+              and "[Vibe Refactor] 마이그레이션 허용 파일(.allow-migration-edit)이 남아 있습니다 — 필요 없으면 사람이 지웁니다." in so.splitlines(), so + se)
+        (d / "docs/refactor/.allow-migration-edit").unlink()
+        af(d).write_bytes(b"P1-1\n")
+        so, se, rc, _ = hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+        check("0.3.3 d1 그냥 go 는 허용 파일을 지우지 않음", af(d).exists() and "기준선 허용 파일" not in so, so)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def check_approve_push_033(check):
+    """0.3.3 A: /refactor:approve 푸시(A8 · p6·p7) · 입력 훅이 허락을 그 차례에만 두는 것(A9 · p8)."""
+    g = lambda d, *a: subprocess.run(["git", "-C", str(d), "-c", "user.email=t@example.com", "-c", "user.name=t", *a],
+                                     check=True, capture_output=True)
+    pf = lambda d, sid="s1": d / "docs/refactor" / f".turn-push.{sid}"
+
+    def ap(d, args, sid="s1", from_hook=True):
+        e = env()
+        e["GIT_CEILING_DIRECTORIES"] = str(d.parent)   # 임시 폴더 위가 우연히 git 저장소여도 "저장소 아님" 시험이 흔들리지 않게
+        e.pop("REFACTOR_TURN_SID", None)
+        if sid is not None:
+            e["REFACTOR_TURN_SID"] = sid
+        r = subprocess.run([BASH, str(RUN), "refactor-approve", str(d), *(("--from-hook",) if from_hook else ())],
+                           input=args.encode("utf-8"), capture_output=True, env=e, timeout=90)
+        return r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+
+    def mkgit(branch="feat/x"):
+        d = project(plan=PLAN_033)
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        g(d, "symbolic-ref", "HEAD", "refs/heads/main")
+        g(d, "add", "-A"); g(d, "commit", "-qm", "i")
+        bare = pathlib.Path(tempfile.mkdtemp(prefix="scripttest-origin-"))
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        g(d, "remote", "add", "origin", str(bare))
+        g(d, "push", "-q", "origin", "main")
+        if branch:
+            g(d, "checkout", "-q", "-b", branch)
+        return d, bare
+
+    intact = lambda d: _lib033(d, 'rl_log_intact "$R" && echo yes')[0] == "yes\n"
+    done_ok = lambda d: _lib033(d, 'rl_done_confirmed "$R" && echo yes')[0] == "yes\n"
+
+    # p7 작업 가지 위 푸시·push·PUSH → .turn-push.<세션ID> 2줄 · 기록 1줄 · 봉인 일치
+    d, bare = mkgit()
+    try:
+        for args in ("푸시", "push", "PUSH", " 푸시 "):
+            n0 = _log033(d).count("\n")
+            out = ap(d, args)
+            lines = pf(d).read_text(encoding="utf-8").split("\n") if pf(d).exists() else []
+            ok_file = len(lines) == 3 and lines[0] == "push feat/x" and lines[1].isdigit() and abs(int(lines[1]) - time.time()) < 600 and lines[2] == ""
+            check(f"0.3.3 p7 {args!r} → 허락 파일 2줄", ok_file, f"{lines!r} {out}")
+            check(f"0.3.3 p7 {args!r} → 기록 1줄 · 봉인 일치", _log033(d).count("\n") == n0 + 1
+                  and _log033(d).endswith(" KST | 푸시 | feat/x | - | 사용자가 /refactor:approve 로 실행\n") and intact(d), _log033(d)[-300:])
+            check(f"0.3.3 p7 {args!r} → 출력", "✅ push 허락: 작업 가지 feat/x 를 이번 차례에만 올릴 수 있습니다(다음 입력부터 다시 막힘 · 30분 안). "
+                  "올리는 명령: git push -u origin feat/x" in out, out)
+            pf(d).unlink(missing_ok=True)
+        out = ap(d, "푸시", sid="other-sid_2")
+        check("0.3.3 p7 세션 ID 가 파일 이름에", pf(d, "other-sid_2").exists() and not pf(d).exists(), out)
+        pf(d, "other-sid_2").unlink(missing_ok=True)
+
+        # A3 H3 허락 화면에 올라갈 것: 원격 origin 에 없는 커밋(최근 것부터 최대 5줄) · 커밋 안 된 변경(docs/refactor 는 빼고 셈)
+        def commits_shown(o):
+            tail = o.split("올라갈 커밋", 1)[1] if "올라갈 커밋" in o else ""
+            return [ln.strip() for ln in tail.split("\n")[1:] if ln.startswith("     ") and ln.strip()]
+        g(d, "add", "-A"); g(d, "commit", "-qm", "기록")   # 위에서 쌓인 승인 기록 줄을 커밋
+        g(d, "push", "-q", "origin", "feat/x")              # 지금까지는 원격에 있음 → 새 커밋 0개
+        out = ap(d, "푸시")
+        check("0.3.3 A3 H3 새 커밋 0개 → '올릴 새 커밋이 없습니다'", "   (올릴 새 커밋이 없습니다)" in out and "올라갈 커밋" not in out
+              and "커밋 안 된 변경" not in out, out)
+        for i in (1, 2):
+            g(d, "commit", "--allow-empty", "-qm", f"P1-{i} 단계 {i}")
+        out = ap(d, "푸시")
+        shown = commits_shown(out)
+        check("0.3.3 A3 H3 새 커밋 2개 → 머리 줄 + 최근 것부터 2줄", "   올라갈 커밋 2개:" in out and len(shown) == 2
+              and shown[0].endswith("P1-2 단계 2") and shown[1].endswith("P1-1 단계 1") and "올릴 새 커밋이 없습니다" not in out, out)
+        for i in range(3, 8):
+            g(d, "commit", "--allow-empty", "-qm", f"P1-{i} 단계 {i}")
+        lf(d / "src.txt", "커밋 안 함\n")
+        lf(d / "PLAN-note.md", "커밋 안 함\n")
+        out = ap(d, "푸시")
+        shown = commits_shown(out)
+        check("0.3.3 A3 H3 새 커밋 7개 → 머리 줄 7 + 5줄만(최근 것부터)", "   올라갈 커밋 7개:" in out and len(shown) == 5
+              and shown[0].endswith("P1-7 단계 7") and shown[4].endswith("P1-3 단계 3"), out)
+        check("0.3.3 A3 H3 커밋 안 된 변경 2개 → 경고(docs/refactor 의 기록 변경은 세지 않음)",
+              "   ⚠️ 커밋 안 된 변경 2개는 올라가지 않습니다." in out, out)
+        (d / "src.txt").unlink(); (d / "PLAN-note.md").unlink()
+        out = ap(d, "푸시")
+        check("0.3.3 A3 H3 기록(docs/refactor)만 바뀜 → 경고 없음", "커밋 안 된 변경" not in out and "   올라갈 커밋 7개:" in out, out)
+        pf(d).unlink(missing_ok=True)
+
+        # A4 L3 허락 전에 안전장치와 같은 저장소 설정을 본다 — 허락 파일·기록 안 바뀜 · 주소 값은 출력하지 않음
+        W_CFG = "푸시 허락으로는 올릴 수 없는 저장소 설정입니다("
+        for title, setup, undo, why in [
+            ("remote.origin.push 있음", ("config", "remote.origin.push", "refs/heads/feat/x:refs/heads/main"), ("config", "--unset", "remote.origin.push"), "remote.origin.push"),
+            ("push.default=upstream", ("config", "push.default", "upstream"), ("config", "--unset", "push.default"), "push.default 가 upstream"),
+            # git 은 push.default 값의 대소문자를 가린다 — 'Tracking' 이면 git 명령이 모두 설정 오류(128)로 멈추므로 승인 스크립트는 git 단계에서 거절한다
+            ("push.default=Tracking(대문자 — git 설정 오류)", ("config", "push.default", "Tracking"), ("config", "--unset", "push.default"), None),
+            ("push.default=tracking", ("config", "push.default", "tracking"), ("config", "--unset", "push.default"), "push.default 가 tracking"),
+            ("origin 주소 없음", ("remote", "remove", "origin"), ("remote", "add", "origin", str(bare)), "origin 원격 주소가 없음"),
+        ]:
+            g(d, *setup)
+            snap = _log033(d)
+            out = ap(d, "푸시")
+            check(f"0.3.3 A4 L3 {title} → 거절 · 허락 파일·기록 안 바뀜 · 주소 안 보임",
+                  (W_CFG in out and why in out if why else "push 허락을 만들지 않았습니다" in out)
+                  and not pf(d).exists() and _log033(d) == snap and str(bare) not in out, out)
+            g(d, *undo)
+        g(d, "config", "push.default", "simple")
+        out = ap(d, "푸시")
+        check("0.3.3 A4 L3 push.default=simple → 허락", pf(d).exists() and W_CFG not in out and "✅ push 허락" in out, out)
+        g(d, "config", "--unset", "push.default")
+        pf(d).unlink(missing_ok=True)
+
+        # p6 거절: 파일 안 생김 + 까닭 · 기록 안 바뀜
+        def refused(title, args, msg, sid="s1", from_hook=True):
+            snap = _log033(d)
+            out = ap(d, args, sid=sid, from_hook=from_hook)
+            check(f"0.3.3 p6 {title} → 안 만듦 + 까닭", not any(p.name.startswith(".turn-push") for p in (d / "docs/refactor").iterdir())
+                  and _log033(d) == snap and msg in out, out)
+
+        refused("--from-hook 없음", "푸시", "아무것도 바꾸지 않았습니다", from_hook=False)
+        refused("푸시 P1-1(섞음)", "푸시 P1-1", "'푸시'는 단독으로 입력하세요")
+        refused("P1-1 푸시(섞음)", "P1-1 푸시", "단독으로만 쓸 수 있습니다")
+        refused("허용 푸시(섞음)", "허용 푸시", "단독으로만 쓸 수 있습니다")
+        refused("세션 ID 없음", "푸시", "세션) 정보를 받지 못해", sid=None)
+        refused("세션 ID 꼴이 이상함", "푸시", "세션) 정보를 받지 못해", sid="../x")
+        g(d, "checkout", "-q", "-b", "feat+x")
+        refused("가지 이름에 허용 밖 글자", "푸시", "글자가 있어 push 허락을 만들지 않았습니다")
+        # 첫 글자 조건(안전장치가 허락 파일을 읽는 꼴 ^push [A-Za-z0-9_][A-Za-z0-9._/-]*$ 와 같게): '-x' 는 거절, '_x' 는 통과
+        # ('.x' 는 git 이 가지로 만들지 못해 시험 불가 — symbolic-ref 가 거부. '-x' 는 symbolic-ref 로 만들 수 있다)
+        g(d, "symbolic-ref", "HEAD", "refs/heads/-x")
+        refused("가지 이름 첫 글자가 -", "푸시", "이 가지 이름(-x)은 허락할 수 없습니다")
+        g(d, "symbolic-ref", "HEAD", "refs/heads/_x")
+        out = ap(d, "푸시")
+        lines = pf(d).read_text(encoding="utf-8").split("\n") if pf(d).exists() else []
+        check("0.3.3 p7 가지 이름 첫 글자가 _ → 허락", lines[:1] == ["push _x"], f"{lines!r} {out}")
+        pf(d).unlink(missing_ok=True)
+        g(d, "checkout", "-q", "main")
+        refused("기본 가지 main", "푸시", "기본 가지는 올리지 않습니다 — 작업 가지에서")
+        g(d, "checkout", "-q", "-b", "master")
+        refused("기본 가지 master", "push", "기본 가지는 올리지 않습니다 — 작업 가지에서")
+        g(d, "checkout", "-q", "-b", "develop")
+        g(d, "push", "-q", "origin", "develop")
+        g(d, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+        refused("origin/HEAD 가 가리키는 가지", "PUSH", "기본 가지는 올리지 않습니다 — 작업 가지에서")
+        g(d, "checkout", "-q", "--detach")
+        refused("떨어진 HEAD", "푸시", "지금 가지가 없습니다")
+        g(d, "checkout", "-q", "feat/x")
+        lg = d / "docs/refactor/APPROVALS.log"
+        keep = lg.read_bytes()
+        lg.write_bytes(keep + "2026-10-03 10:00 KST | 승인 | P1-3 | card=1.2 | 손으로\n".encode("utf-8"))
+        refused("봉인 깨짐", "푸시", "처리하지 않았습니다")
+        lg.write_bytes(keep)
+        out = ap(d, "마무리")
+        check("0.3.3 p6 준비: 마무리", done_ok(d), out)
+        refused("마무리 확인 뒤", "푸시", "이미 마무리되어 안전장치가 꺼져 있습니다 — 허락 없이 올릴 수 있습니다")
+        check("0.3.3 p6 마무리 확인 뒤 푸시 → 마무리 인정 그대로", done_ok(d))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+    d = project(plan=PLAN_033)
+    try:
+        snap = _log033(d)
+        out = ap(d, "푸시")
+        check("0.3.3 p6 git 저장소 아님 → 안 만듦 + 까닭", not pf(d).exists() and _log033(d) == snap and "git 저장소가 아니라" in out, out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # p8 입력 훅: 허락은 그 세션의 다음 사람 입력 때 지움 · 알림 입력·다른 세션은 그대로 · 승인 스크립트에 세션 ID 를 넘김
+    d, bare = mkgit()
+    try:
+        mkp = lambda: hook("turn", d, {"session_id": "s1", "prompt": "/refactor:approve 푸시"})
+        so, se, rc, _ = mkp()
+        check("0.3.3 p8 입력 훅의 /refactor:approve 푸시 → 허락 파일", rc == 0 and pf(d).exists() and "✅ push 허락" in so, so + se)
+        hook("turn", d, {"session_id": "s1", "prompt": "고마워, 계속해 줘"})
+        check("0.3.3 p8 다음 사람 입력(보통 문장) → 지워짐", not pf(d).exists())
+        mkp()
+        hook("turn", d, {"session_id": "s1", "prompt": "/refactor:status"})
+        check("0.3.3 p8 다음 사람 입력(다른 슬래시 명령) → 지워짐", not pf(d).exists())
+        mkp()
+        hook("turn", d, {"session_id": "s1", "prompt": "<task-notification>\n<task-id>x</task-id>\n</task-notification>"})
+        check("0.3.3 p8 알림 입력 → 그대로", pf(d).exists())
+        hook("turn", d, {"session_id": "s2", "prompt": "안녕"})
+        check("0.3.3 p8 다른 세션의 입력 → 그대로", pf(d).exists())
+        n0 = _log033(d).count("\n")
+        mkp()
+        so, se, rc, _ = mkp()
+        check("0.3.3 p8 /refactor:approve 푸시 두 번 연달아 → 두 번째 뒤에도 있음", pf(d).exists() and "✅ push 허락" in so
+              and pf(d).read_text(encoding="utf-8").startswith("push feat/x\n") and _log033(d).count("\n") == n0 + 2, so + se)
+        so, se, rc, _ = hook("turn", d, {"session_id": "s1", "prompt": "/refactor:approve"})
+        check("0.3.3 p8 /refactor:approve(현황) 입력도 사람 입력 → 지워짐", not pf(d).exists(), so)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+
+
+def check_lib_lc_all_033(check):
+    """0.3.3 e1: 시험 파일(tests/*.py)에서 lib 를 bash -c 로 직접 읽어 들이는 명령 문자열은 LC_ALL=C 를 앞에(맥의 UTF-8 awk 가 지문을 다르게 잰다)."""
+    pat = re.compile(r"ev" r"al\s+\\?\"\$\(\s*(?:tr|cat)\b")
+    # lib 를 읽는 줄 = 위 꼴 + 같은 줄에 lib 함수(rl_…)나 lib 변수 — 안전장치 시험의 입력 문자열(x.md 를 읽어 실행하는 꼴 등)은 대상이 아니다
+    uses_lib = re.compile(r"\brl_[a-z_]+|\blib(?:sh)?\b")
+
+    def offenders(text):
+        bad, seen = [], 0
+        for i, line in enumerate(text.splitlines(), 1):
+            m = pat.search(line)
+            if m and uses_lib.search(line):
+                seen += 1
+                if "LC_ALL=C" not in line[:m.start()]:
+                    bad.append(i)
+        return bad, seen
+
+    found, seen = {}, 0
+    for f in sorted((ROOT / "tests").glob("*.py")):
+        b, s = offenders(f.read_text(encoding="utf-8"))
+        seen += s
+        if b:
+            found[f.name] = b
+    check("0.3.3 e1 시험 파일의 lib 직접 읽기는 모두 LC_ALL=C 를 앞에", not found and seen >= 4, f"{found} seen={seen}")
+    fake = "    r = subprocess.run([BASH, \"-c\", '" + "ev" + "al \"$(tr -d \\'\\\\r\\' < \"$1\")\"; rl_card_text \"$2\" P1-1', \"x\", lib])"
+    check("0.3.3 e1 LC_ALL=C 를 뺀 가짜 문자열은 잡힘", offenders(fake) == ([1], 1), repr(offenders(fake)))
+    fake2 = "    x = 'P=1; " + "ev" + "al \"$(cat \"$1\")\"; LC_ALL=C; rl_x'"
+    check("0.3.3 e1 LC_ALL=C 가 뒤에만 있으면 잡힘", offenders(fake2) == ([1], 1), repr(offenders(fake2)))
+    good = "    x = 'LC_ALL=C; export LC_ALL; " + "ev" + "al \"$(tr -d \\'\\\\r\\' < \"$1\")\"; rl_x'"
+    check("0.3.3 e1 LC_ALL=C 가 앞에 있으면 통과", offenders(good) == ([], 1), repr(offenders(good)))
+    other = "    (B, bash(_MD_RESET + \"" + "ev" + "al \\\"$(cat x.md)\\\"\")),"
+    check("0.3.3 e1 lib 를 읽지 않는 안전장치 시험 입력(x.md 를 읽어 실행)은 대상 아님", offenders(other) == ([], 0), repr(offenders(other)))
+
+
+def check_commit_docs_033(check):
+    """0.3.3 A2 C9: 단계 커밋은 Claude 가(7-execute 규칙 4·순서 5-1) · 사람 명령은 그 터미널에 맞게(go/SKILL.md 의 wsl -d 문단) — 지침 글자 검사."""
+    sk = ROOT / "plugins/refactor/skills/go"
+    ex = (sk / "phases/7-execute.md").read_text(encoding="utf-8")
+    check("0.3.3 A2 7-execute: 'commit·push' 금지 문구 없음·규칙 4 는 push·merge·deploy",
+          "commit·push" not in ex and "**하지 않는 것**: push·merge·deploy" in ex, ex[:0])
+    i = ex.find("5-1. **커밋**")
+    j = ex.find("6. **보고하고 멈춘다.**", i)
+    step = ex[i:j] if i >= 0 and j > i else ""
+    need = ["refactor-safe-run -- git commit", "git add --", "git diff --cached --stat", "--no-verify",
+            "`git add -A`·`git add .`·`git commit -a` 는 쓰지 않는다", "⚠️ 부분 완료·⛔ 중단·❓ 검증 불가면 커밋하지 않고"]
+    check("0.3.3 A2 7-execute 5-1 커밋 절차: 안전 실행기·이름 지정 add·--cached --stat·조건",
+          step != "" and all(n in step for n in need), str([n for n in need if n not in step]) + step[:300])
+    check("0.3.3 A2 7-execute: 사람에게 'git add -A && git commit' 명령을 주지 않음", "git add -A &&" not in ex, "")
+    gs = (sk / "SKILL.md").read_text(encoding="utf-8")
+    # A3 H1: 늘 실리는 규칙(세션 시작 훅 · go 스킬 원칙 3)에 "커밋은 사람이"가 남지 않는다
+    ss = (ROOT / "plugins/refactor/hooks/session-start.sh").read_text(encoding="utf-8")
+    check("0.3.3 A3 H1 session-start.sh: 옛 '커밋·푸시·배포·운영 DB는 사람이' 0 · 새 규칙 있음",
+          "커밋·푸시·배포·운영 DB는 사람이" not in ss
+          and "푸시·합치기·배포·운영 DB는 사람이 한다(단계 커밋은 /refactor:go 가 단계 끝에 그 단계 파일만 · 작업 가지 push 는 사용자가 /refactor:approve 푸시 로 허락한 차례에만)" in ss, "")
+    check("0.3.3 A3 H1 go/SKILL.md 원칙 3: 옛 'commit·push·merge는 사람이' 0 · 새 문장 있음",
+          "commit·push·merge는 사람이" not in gs and "커밋 명령 초안만 준다" not in gs
+          and "push·merge는 사람이 한다. 단계 커밋은 7-execute 순서 5-1 대로 그 단계 파일만 한다(기준선 커밋은 사람이)." in gs, "")
+    # A3 H2·H7·H10: 되돌리기 문장 · 허용 대기 뒤 묻지 않고 이어 가기 · PROFILE 의 터미널 칸
+    # A4 L1(A3 H2 를 대신함): revert 는 마지막 단계만 깨끗 — 앞 단계는 기록 파일이 겹쳐 "코드만 되돌려" 부탁 · 다시 실행 대기가 되면 보류
+    sev = next((l for l in ex.splitlines() if l.startswith("- ⑦")), "")
+    check("0.3.3 A4 L1 7-execute ⑦: 마지막 단계 revert(+보류) · 앞 단계는 '코드만 되돌려' 부탁",
+          all(n in sev for n in ("**마지막 단계**", "git revert --no-edit <해시>", "/refactor:approve 보류 <ID>", "**앞 단계**", "코드만 되돌려"))
+          and "이 단계만 되돌리는 새 커밋" not in ex and "아직 올리지 않았으면 새 되돌림 커밋" not in ex, sev[:300])
+    check("0.3.3 A4 L1 7-execute 기록: 되돌리는 법 칸에 커밋 찾는 법", "git log --grep \"^refactor: <ID> \"" in ex, "")
+    check("0.3.3 A3 H7 7-execute: 기준선 허용 대기로 멈춘 단계는 묻지 않고 이어 감",
+          "`기준선 허용 대기: <ID…>`" in ex and "기준선 허용을 기다리며 멈춘 경우" in ex, "")
+    prof = (sk / "templates/PROFILE.md").read_text(encoding="utf-8")
+    check("0.3.3 A3 H10 PROFILE 서식에 사람 터미널 칸 · go/SKILL.md 가 그 칸을 가리킴",
+          "- 사람이 명령을 치는 터미널:" in prof and "\"사람이 명령을 치는 터미널\" 칸" in gs, "")
+    para = next((l for l in gs.splitlines() if "wsl -d" in l), "")
+    check("0.3.3 A2 go/SKILL.md: 사람 명령 wsl -d 문단(WSL 감지·한 번 묻기·절대경로·입력창 명령 먼저)",
+          all(n in para for n in ("WSL_DISTRO_NAME", "/proc/version", "PROFILE.md", "wsl -d <배포판 이름> --cd <프로젝트 절대경로> -- <명령>", "절대경로", "/refactor:approve 푸시")),
+          para[:400])
+    # A4 L2: wsl 틀에는 작업 폴더(--cd)가 있고, Windows 꼴(wsl -d …) 명령 예시는 && 로 잇지 않는다 · WSL1 의 Microsoft 도 판정
+    wins = [m for f in (sk / "SKILL.md", sk / "phases/0-setup.md", sk / "phases/7-execute.md", ROOT / "README.md")
+            for m in re.findall(r"`(wsl -d [^`]*)`", f.read_text(encoding="utf-8"))]
+    check("0.3.3 A4 L2 Windows 꼴 명령: 모두 --cd 있음 · && 없음",
+          len(wins) >= 3 and all("--cd" in w and "&&" not in w for w in wins), repr(wins))
+    check("0.3.3 A4 L2 go/SKILL.md: 명령마다 한 줄 · WSL1 Microsoft 판정 · :117 예시에 && 없음",
+          "**명령마다 한 줄**" in para and "WSL1 은 `Microsoft`" in para
+          and "`git add -A && git commit" not in gs, para[:300])
+    st = (sk / "phases/0-setup.md").read_text(encoding="utf-8")
+    check("0.3.3 A4 L4 0-setup: WSL 이면 터미널 질문 · PROFILE 칸에 적고 다시 묻지 않음",
+          "어느 터미널에서 치시나요" in st and "\"사람이 명령을 치는 터미널\" 칸" in st and "다시 묻지 않는다" in st, "")
 
 
 if __name__ == "__main__":

@@ -836,6 +836,10 @@ def main():
     check_psassign_032(res)
     check_switch_032(res)
     check_allow_steps_032(res)
+    check_allow_current_033(res)
+    check_push_grant_033(res)
+    check_commit_msg_033(res)
+    check_commit_flow_033(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -3343,9 +3347,13 @@ PLAN_032 = """# 계획서
 """
 
 
-def project_032(approve_ids="P1-1 P1-2"):
-    """0.3.2 #10 시험용: EXECUTE · 계획서(PLAN_032) · 커밋된 기준선 두 개(money·other). approve_ids 를 사람이 승인한 상태."""
+def project_032(approve_ids="P1-1 P1-2", current_step='"P1-1 P1-2 (진행 중)"'):
+    """0.3.2 #10 시험용: EXECUTE · 계획서(PLAN_032) · 커밋된 기준선 두 개(money·other). approve_ids 를 사람이 승인한 상태.
+    0.3.3: 허용은 STATE.md current_step 에 적힌 단계만 열린다 — 기본값은 0.3.2 시험의 뜻(적힌 단계 둘 다 실행 중). None 이면 줄 없음."""
     proj = make_project(phase="EXECUTE")
+    if current_step is not None:
+        sp = proj / "docs/refactor/STATE.md"
+        lf(sp, sp.read_text(encoding="utf-8").replace("gate: none\n", f"gate: none\ncurrent_step: {current_step}\n"))
     lf(proj / "docs/refactor/REFACTOR_PLAN.md", PLAN_032)
     lf(proj / "tests/baseline/other.test.ts", "expect(2).toBe(2)\n")
     (proj / "x/tests/baseline").mkdir(parents=True)
@@ -3463,6 +3471,457 @@ def check_allow_steps_032(res):
     finally:
         for p in made:
             rmtree_rw(p) if p.exists() else None
+
+
+PLAN_033 = """# 계획서
+
+### [P1-1] 금액
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/money.test.ts` 중 "금액" 항목
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-2] 주문
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/other.test.ts` 의 주문 항목
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-3] 이름만
+- **종류**: 🔧 리팩토링
+- **깨질 것으로 예상되는 기준선**: 없음
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+"""
+
+
+def check_allow_current_033(res):
+    """0.3.3: 기준선 허용은 지금 실행 중인 단계(STATE.md 앞머리 current_step 에 적힌 단계)의 카드에 적힌 파일만.
+    current_step 에 열린 단계가 안 적혀 있으면 WAIT(닫힘) — 막는 문구가 적는 법을 알려 준다. 안내 문구는 슬래시 명령을 먼저."""
+    ed = lambda f: ("Edit", {"file_path": f, "old_string": "expect", "new_string": "expect"})
+    MONEY, OTHER = "tests/baseline/money.test.ts", "tests/baseline/other.test.ts"
+    W_FILE = "지금 실행 중인 단계"
+    W_WAIT = "지금 실행 중으로 적힌 단계가 아닙니다 — 그 단계를 시작할 때 STATE.md 의 current_step 을 \"<ID> (진행 중)\" 으로 먼저 적습니다(7-execute 순서 1)."
+    W_NONE = "적혀 있지 않습니다"
+
+    def case(proj, title, want, call, need=None):
+        code, err = run(proj, *call)
+        res["total"] += 1
+        if code != want or (need and need not in err):
+            res["fails"].append(("0.3.3 " + title, want, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+
+    def state(proj, cs=None, crlf=False, body=""):
+        t = "---\nrefactor_state: 1\nproject: \"t\"\nphase: EXECUTE\ngate: none\n" + (f"current_step: {cs}\n" if cs is not None else "") + "---\n" + body
+        (proj / "docs/refactor/STATE.md").write_bytes((t.replace("\n", "\r\n") if crlf else t).encode("utf-8"))
+
+    proj = make_project(phase="EXECUTE")
+    try:
+        lf(proj / "docs/refactor/REFACTOR_PLAN.md", PLAN_033)
+        lf(proj / "tests/baseline/other.test.ts", "expect(2).toBe(2)\n")
+        git(proj, "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A")
+        git(proj, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "plan033")
+        approve(proj, "P1-1 P1-2 P1-3")
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-1 P1-2\n")
+
+        # c1 실행 중 단계의 카드 파일만
+        state(proj, '"P1-1 (진행 중)"')
+        case(proj, "c1 실행 중 P1-1 → P1-1 카드 파일 Edit 통과", OK, ed(MONEY))
+        case(proj, "c1 실행 중 P1-1 → P1-2 카드 파일 Edit 차단", B, ed(OTHER), need=W_FILE + "(P1-1)")
+        state(proj, '"P1-2 (진행 중)"')
+        case(proj, "c1 실행 중 P1-2 → P1-2 카드 파일 Edit 통과", OK, ed(OTHER))
+        case(proj, "c1 실행 중 P1-2 → P1-1 카드 파일 Edit 차단", B, ed(MONEY), need=W_FILE + "(P1-2)")
+
+        # c2 실행 중으로 적힌 열린 단계가 없음 → WAIT(차단 + 적는 법)
+        for title, kw in [("current_step \"-\"", dict(cs='"-"')), ("허용 밖 단계 P1-9", dict(cs='"P1-9 (진행 중)"')),
+                          ("current_step 줄 없음", dict()), ("본문에만 current_step", dict(body='\ncurrent_step: "P1-1"\n'))]:
+            state(proj, **kw)
+            case(proj, f"c2 WAIT {title} → Edit 차단", B, ed(MONEY), need="허용 파일의 단계(P1-1 P1-2)는 " + W_WAIT)
+
+        # c3 같은 결과 다른 철자
+        for title, kw, ok_files in [("묶음 P1-1~P1-2", dict(cs='"P1-1~P1-2 (묶음)"'), (MONEY, OTHER)),
+                                    ("따옴표 없음·소문자", dict(cs='p1-1 (진행 중)'), (MONEY,)),
+                                    ("CRLF", dict(cs='"P1-1 (진행 중)"', crlf=True), (MONEY,)),
+                                    ("값 앞뒤 공백", dict(cs='   "P1-1 (진행 중)"  '), (MONEY,))]:
+            state(proj, **kw)
+            for f in ok_files:
+                case(proj, f"c3 {title} → {f} 통과", OK, ed(f))
+            if OTHER not in ok_files:
+                case(proj, f"c3 {title} → 다른 카드 파일 차단", B, ed(OTHER), need=W_FILE)
+
+        # c5 셸(스냅숏 갱신·기준선 폴더 쓰기): (가) 실행 중 단계 카드에 경로 있음 (나) 칸 "없음" (다) WAIT
+        shells = [("vitest -u", "npx vitest -u"), ("vitest run -u", "npx vitest run -u"), ("sed -i", f"sed -i 's/1/2/' {MONEY}")]
+        state(proj, '"P1-1 (진행 중)"')
+        for title, cmd in shells:
+            case(proj, f"c5(가) 경로 있는 단계 실행 중 → {title} 통과", OK, bash(cmd))
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-3\n")
+        state(proj, '"P1-3 (진행 중)"')
+        for title, cmd in shells:
+            case(proj, f"c5(나) 칸 없음 단계 실행 중 → {title} 차단", B, bash(cmd), need=W_NONE)
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-1 P1-2\n")
+        state(proj, '"-"')
+        for title, cmd in shells:
+            case(proj, f"c5(다) WAIT → {title} 차단", B, bash(cmd), need=W_WAIT)
+
+        # G5 안내 문구: 슬래시 명령을 먼저, 터미널 printf 는 뒤에 대안으로(허용 파일이 없을 때의 안내 — F2 뒤로 WAIT 의 안내는 아래 f2)
+        (proj / "docs/refactor/.allow-baseline-edit").unlink()
+        case(proj, "G5 기준선 차단 안내 = 슬래시 명령 먼저", B, ed(MONEY),
+             need="사용자에게 입력창에 /refactor:approve 허용 P1-1 P1-2 를 입력해 달라고 요청하세요(터미널이 없어도 됩니다 — 원격·VS Code). 터미널에서는 printf 'P1-1 P1-2\\n' >")
+        case(proj, "G5 사람 전용 파일 안내 = 슬래시 명령 먼저", B, ("Write", {"file_path": "docs/refactor/.allow-baseline-edit", "content": "P1-1\n"}),
+             need="사용자에게 입력창에 /refactor:approve 허용 P1-1 P1-2 를 입력해 달라고 요청하세요(터미널이 없어도 됩니다 — 원격·VS Code). 터미널에서는 printf 'P1-1 P1-2\\n' >")
+
+        # f2(검사 보완 F2): 허용이 이미 있는데 실행 중 단계가 안 맞아 막힐 때(WAIT · OPEN 인데 다른 단계 파일)는 "사용자에게 허용 부탁" 대신 current_step 을 고치라는 안내
+        W_CS = "허용은 이미 있습니다 — STATE.md 의 current_step 을 지금 실행할 단계 \"<ID> (진행 중)\" 으로 먼저 고친 뒤 다시 하세요(사람에게 부탁할 것 없음). 카드에 없는 기준선 파일은 고치지 않습니다."
+        W_ASK = "사용자에게 입력창에 /refactor:approve 허용"
+
+        def case_hint(title, call, want_cs):
+            code, err = run(proj, *call)
+            res["total"] += 1
+            ok = code == B and ((W_CS in err and W_ASK not in err) if want_cs else (W_ASK in err and W_CS not in err))
+            if not ok:
+                res["fails"].append(("0.3.3 " + title, B, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-1 P1-2\n")
+        state(proj, '"-"')
+        case_hint("f2 WAIT Edit → current_step 안내", ed(MONEY), True)
+        case_hint("f2 WAIT 셸 -u → current_step 안내", bash("npx vitest -u"), True)
+        case_hint("f2 WAIT 셸 sed -i → current_step 안내", bash(f"sed -i 's/1/2/' {MONEY}"), True)
+        state(proj, '"P1-1 (진행 중)"')
+        case_hint("f2 OPEN 인데 다른 단계 파일 Edit → current_step 안내", ed(OTHER), True)
+        (proj / "docs/refactor/.allow-baseline-edit").unlink()
+        case_hint("f2 허용 파일 없음(NONE) Edit → 허용 부탁 안내 그대로", ed(MONEY), False)
+        case_hint("f2 허용 파일 없음(NONE) 셸 -u → 허용 부탁 안내 그대로", bash("npx vitest -u"), False)
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P9-9\n")
+        case_hint("f2 UNKNOWN Edit → 허용 부탁 안내 그대로", ed(MONEY), False)
+        # K5: current_step 은 맞는데 그 단계가 허용 파일에 없을 때를 위해 F2 안내 끝에 "그 단계 허용을 부탁" 한 문장
+        W_K5 = "current_step 이 맞는데도 막히면 그 단계가 허용 파일에 없는 것입니다 — 사용자에게 /refactor:approve 허용 <그 ID> 를 부탁하세요."
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-2\n")
+        state(proj, '"P1-1 (진행 중)"')
+        case(proj, "K5 실행 중 단계가 허용 파일에 없음 → 안내 끝에 허용 부탁 한 문장", B, ed(MONEY), need=W_CS + " " + W_K5)
+        # M3(R3): K5 문장은 WAIT 일 때만 — OPEN(실행 중 단계는 열렸는데 카드 밖 파일)에는 붙이지 않는다
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-1 P1-2\n")
+        code, err = run(proj, *ed(OTHER))
+        res["total"] += 1
+        if code != B or W_CS not in err or W_K5 in err:
+            res["fails"].append(("0.3.3 M3 OPEN 카드 밖 파일 → current_step 안내만(K5 문장 없음)", B, code, "Edit", OTHER, err.strip()[:300]))
+        # K6④: SHUT(승인이 풀린 단계)·DONE(끝난 단계)의 안내는 예전(허용 부탁)
+        pp = proj / "docs/refactor/REFACTOR_PLAN.md"
+        t = pp.read_text(encoding="utf-8")
+        i = t.index("### [P1-2]")
+        lf(pp, t[:i] + t[i:].replace("의 주문 항목", "의 주문 항목(바뀜)", 1))
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-2\n")
+        case_hint("K6④ SHUT(카드 바뀜) Edit → 허용 부탁 안내 그대로", ed(OTHER), False)
+        t = pp.read_text(encoding="utf-8")
+        i = t.index("### [P1-1]")
+        lf(pp, t[:i] + t[i:].replace("- **완료**: [ ] 완료", "- **완료**: [x] 완료 (2026-10-04)", 1))
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-1\n")
+        case_hint("K6④ DONE(끝난 단계) Edit → 허용 부탁 안내 그대로", ed(MONEY), False)
+    finally:
+        rmtree_rw(proj)
+
+    # f1g(검사 보완 F1): current_step 의 같은 묶음 범위 "P1-1~P1-3" 은 가운데 단계도 연다
+    proj = make_project(phase="EXECUTE")
+    try:
+        lf(proj / "docs/refactor/REFACTOR_PLAN.md", "# 계획서\n" + "".join(
+            f"\n### [P1-{i}] 단계 {i}\n- **종류**: 🛠 개선\n- **깨질 것으로 예상되는 기준선**: `tests/baseline/s{i}.test.ts`\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n"
+            for i in (1, 2, 3)))
+        for i in (1, 2, 3):
+            lf(proj / f"tests/baseline/s{i}.test.ts", f"expect({i}).toBe({i})\n")
+        git(proj, "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A")
+        git(proj, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "plan033r")
+        approve(proj, "P1-1 P1-2 P1-3")
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-1 P1-2 P1-3\n")
+        state(proj, '"P1-1~P1-3 (묶음)"')
+        case(proj, "f1g 범위 P1-1~P1-3 → 가운데 P1-2 카드 파일 Edit 통과", OK, ed("tests/baseline/s2.test.ts"))
+        case(proj, "f1g 범위 P1-1~P1-3 → 끝 P1-3 카드 파일 Edit 통과", OK, ed("tests/baseline/s3.test.ts"))
+        state(proj, '"P1-1~P1-2"')
+        case(proj, "f1g 범위 P1-1~P1-2 → 범위 밖 P1-3 카드 파일 차단", B, ed("tests/baseline/s3.test.ts"), need=W_FILE)
+    finally:
+        rmtree_rw(proj)
+
+
+def check_push_grant_033(res):
+    """0.3.3 외출 중 push: 사람이 /refactor:approve 푸시 로 허락한 턴(docs/refactor/.turn-push.<세션ID> — 1줄 "push <가지>" · 2줄 만든 시각 초)이면
+    정확한 꼴(git push [-u|--set-upstream] origin <허락된 가지>)만 통과. 그 밖·다른 저장소로 새는 꼴·허락이 낡거나 다른 세션 것이면 지금처럼 차단."""
+    W_HINT = "원격이라 터미널이 없으면 사용자에게 /refactor:approve 푸시 를 입력해 달라고 하세요(작업 가지만 · 그 차례에만)."
+    W_FORM = "허락된 꼴은 git push -u origin feat 뿐입니다."
+    W_FORCE = "강제 push·원격 브랜치 삭제는"
+    W_PUSH = "리팩토링 진행 중에는 push를 사람이 직접 합니다"
+
+    def case(proj, title, want, call, need=None):
+        code, err = run(proj, *call)
+        res["total"] += 1
+        if code != want or (need and need not in err):
+            res["fails"].append(("0.3.3 push " + title, want, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+
+    def grant(proj, line1="push feat", ago=0, sid="t", raw=None):
+        for p in (proj / "docs/refactor").glob(".turn-push.*"):
+            p.unlink()
+        if raw is None:
+            raw = f"{line1}\n{int(time.time()) - ago}\n"
+        (proj / f"docs/refactor/.turn-push.{sid}").write_bytes(raw.encode("utf-8"))
+
+    def nogrant(proj):
+        for p in (proj / "docs/refactor").glob(".turn-push.*"):
+            p.unlink()
+
+    made = []
+    try:
+        proj = make_project(phase="EXECUTE")
+        made.append(proj)
+        # 검사 보완 F4: 허락 push 는 origin 주소가 보이는 git 저장소에서만 통과 — 준비에 origin 주소를 더한다(설정만, 네트워크 없음)
+        git(proj, "remote", "add", "origin", (proj.parent / (proj.name + "-origin.git")).as_posix())
+        # p1 허락 없음
+        nogrant(proj)
+        case(proj, "p1 허락 없음 → 차단 + 슬래시 명령 안내", B, bash("git push origin feat"), need=W_HINT)
+        case(proj, "p1 허락 없음 -u → 차단", B, bash("git push -u origin feat"), need=W_PUSH)
+
+        # p2 허락(feat) + 정확한 꼴 → 통과
+        grant(proj)
+        for cmd in ["git push origin feat", "git push -u origin feat", "git push --set-upstream origin feat",
+                    "git push origin \"feat\"", "git push -u origin 'feat'"]:
+            case(proj, "p2 통과 " + cmd, OK, bash(cmd))
+        grant(proj, "push refactor/2026-10-03-2")
+        case(proj, "p2 통과 가지 이름에 /", OK, bash("git push -u origin refactor/2026-10-03-2"))
+        case(proj, "p2 가지 이름에 / — 다른 가지는 차단", B, bash("git push -u origin refactor/2026-10-03-3"), need="허락된 꼴은 git push -u origin refactor/2026-10-03-2 뿐입니다.")
+        grant(proj, "push v1.2_x")
+        case(proj, "p2 통과 가지 이름에 . _", OK, bash("git push origin v1.2_x"))
+        case(proj, "p2 . 는 아무 글자가 아님", B, bash("git push origin v1x2_x"))
+
+        # p3 허락(feat) + 다른 꼴 → 차단(허락된 꼴 안내)
+        grant(proj)
+        for cmd in ["git push origin main", "git push origin feat:main", "git push origin HEAD", "git push upstream feat", "git push",
+                    "git push origin", "git push origin feat --tags", "git push --all origin feat", "git -C x push origin feat",
+                    "git push origin feat; git push origin main", "git push origin feat other", "git push origin feat && git push origin feat",
+                    "git push origin Feat", "git push origin feat2", "git push origin fea", "git push -q origin feat", "git push --dry-run origin feat",
+                    "git push -u -u origin feat", "git push origin -u feat"]:
+            case(proj, "p3 차단 " + cmd, B, bash(cmd), need=W_FORM)
+
+        # p4 강제 push 류 → 고가치 규칙 문구로 차단(허락과 무관)
+        for cmd in ["git push --force origin feat", "git push origin +feat", "git push -f origin feat", "git push origin :feat"]:
+            case(proj, "p4 차단(고가치) " + cmd, B, bash(cmd), need=W_FORCE)
+
+        # p5 허락 파일이 무효 → 차단(허락 없음과 같은 안내, 허락된 꼴 안내 없음)
+        for title, kw in [("1801초 전", dict(ago=1801)), ("미래 시각(+600)", dict(ago=-600)),
+                          ("2줄이 글자", dict(raw="push feat\nabc\n")), ("2줄 없음", dict(raw="push feat\n")),
+                          ("1줄이 go x", dict(line1="go x")), ("다른 세션 ID 의 파일만", dict(sid="other")),
+                          ("가지에 ;", dict(line1="push feat;x")), ("가지에 공백", dict(line1="push feat x")),
+                          ("가지에 $", dict(line1="push fe$t")), ("가지가 - 로 시작", dict(line1="push -f")),
+                          ("1줄 앞 공백", dict(line1=" push feat")), ("빈 파일", dict(raw=""))]:
+            grant(proj, **kw)
+            code, err = run(proj, *bash("git push origin feat"))
+            res["total"] += 1
+            if code != B or W_HINT not in err or "허락된 꼴은" in err:
+                res["fails"].append(("0.3.3 push p5 무효 허락 " + title, B, code, "Bash", "git push origin feat", err.strip()[:300]))
+        grant(proj, ago=1799)
+        case(proj, "p5 경계 1799초 전 → 통과", OK, bash("git push origin feat"))
+        grant(proj, raw=f"push feat\r\n{int(time.time())}\r\n")
+        case(proj, "p5 CRLF 허락 파일 → 통과", OK, bash("git push origin feat"))
+
+        # p9 준비 단계 자가 시험은 허락이 있어도 없어도 차단
+        for title in ("허락 있음", "허락 없음"):
+            grant(proj) if title == "허락 있음" else nogrant(proj)
+            case(proj, "p9 자가 시험 " + title, B, bash("git push --dry-run __selftest__ HEAD"), need=W_PUSH)
+
+        # p10 같은 결과 다른 철자(보고 표와 같은 판정)
+        grant(proj)
+        for cmd, want in [("git  push origin feat", OK), ("GIT PUSH origin feat", B), ("\"git\" push origin feat", B),
+                          ("git push origin feat # x", B), ("bash -c 'git push origin feat'", B), ("git push \\\n origin feat", B),
+                          ("git push origin feat 2>&1 | tail -3", OK), ("cd . && git push -u origin feat", B),
+                          ("git add a && git commit -m x && git push -u origin feat", OK), ("git push\torigin feat", OK),
+                          ("git push origin feat\necho 끝", OK), ("git p\\ush origin feat", B), ("git push origin fe''at", B)]:
+            case(proj, "p10 " + ("통과 " if want == OK else "차단 ") + cmd.replace("\n", "⏎"), want, bash(cmd))
+
+        # p12 다른 저장소로 새는 꼴(허락 feat 있음) → 전부 차단
+        for cmd in ["cd ../other && git push origin feat", "git -C ../other push origin feat",
+                    "git -c remote.origin.pushurl=https://example.invalid/x.git push origin feat", "GIT_DIR=/x/.git git push origin feat",
+                    "env GIT_DIR=/x/.git git push origin feat", "git --git-dir=/x/.git push origin feat", "/usr/bin/git push origin feat",
+                    "git push origin $B", "git push origin $(echo main)", "git push origin fe*", "git push -uf origin feat",
+                    "git push --no-verify origin feat", "git push origin refs/heads/feat", "timeout 60 git push origin feat",
+                    "git push origin feat & git push origin main", "pushd ../other && git push origin feat", "git.exe push origin feat",
+                    "eval 'git push origin feat'", "echo origin feat | xargs git push", "sudo git push origin feat",
+                    "git push origin `echo feat`", "git push origin {feat,main}", "B=feat; git push origin $B",
+                    "GIT_SSH_COMMAND=x git push origin feat", "git push origin feat; popd", "Set-Location .. ; git push origin feat"]:
+            case(proj, "p12 차단 " + cmd, B, bash(cmd))
+        case(proj, "p12 PowerShell Set-Location 뒤 → 차단", B, ("PowerShell", {"command": "Set-Location ..; git push origin feat"}))
+        case(proj, "p12 PowerShell 정확한 꼴 → 통과", OK, ("PowerShell", {"command": "git push -u origin feat"}))
+
+        # f3(검사 보완 F3): 허락이 있어도 훅 입력의 작업 폴더가 프로젝트 밖·빈 값이면 차단(앞 호출의 cd 로 다른 저장소에 있을 때)
+        W_OUT = "(지금 작업 폴더가 리팩토링 프로젝트 밖입니다)"
+        other = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-other-"))
+        made.append(other)
+        git(other, "init", "-q")
+        plain = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-plain-"))
+        made.append(plain)
+        sib = pathlib.Path(str(proj) + "-2")
+        sib.mkdir()
+        made.append(sib)
+        grant(proj)
+        for tool, cmd in (("Bash", "git push origin feat"), ("PowerShell", "git push -u origin feat")):
+            tin = {"command": cmd, "description": "t"} if tool == "Bash" else {"command": cmd}
+            for title, cwd, want in [("다른 git 저장소", str(other), B), ("git 아닌 폴더", str(plain), B), ("빈 값", "", B),
+                                     ("프로젝트", str(proj), OK), ("프로젝트/src", str(proj / "src"), OK), ("접두만 같은 형제(-2)", str(sib), B)]:
+                code, err = run(proj, tool, tin, extra={"cwd": cwd})
+                res["total"] += 1
+                if code != want or (want == B and W_OUT not in err):
+                    res["fails"].append(("0.3.3 push f3 " + tool + " cwd=" + title, want, code, tool, cmd, err.strip()[:300]))
+        # f4(검사 보완 F4): 저장소 설정에 remote.origin.push(올리기 규칙)가 있으면 허락이 있어도 차단
+        W_RS = "원격에 올리기 규칙(remote.origin.push)이 설정돼 있어 허락 push 를 쓸 수 없습니다 — 사람이 터미널에서 올립니다."
+        git(proj, "config", "--add", "remote.origin.push", "refs/heads/feat:refs/heads/main")
+        case(proj, "f4 remote.origin.push 있음 → 차단", B, bash("git push origin feat"), need=W_RS)
+        case(proj, "f4 remote.origin.push 있음 -u → 차단", B, bash("git push -u origin feat"), need=W_RS)
+        git(proj, "config", "--unset-all", "remote.origin.push")
+        case(proj, "f4 remote.origin.push 없음 → 통과", OK, bash("git push origin feat"))
+        # origin 주소가 안 보이면(origin 없음 · git 저장소 아님) 차단 — 설정이 없을 때와 git 종료 코드가 같아 주소로 가린다
+        git(proj, "remote", "remove", "origin")
+        case(proj, "f4 origin 없음 → 차단", B, bash("git push origin feat"), need="(origin 원격 주소를 확인하지 못했습니다")
+        git(proj, "remote", "add", "origin", (proj.parent / (proj.name + "-origin.git")).as_posix())
+
+        # K3 까닭별 → 안내: ② 작업 폴더가 밖 ③ 저장소 설정 ① 허락 없음(옛 문장 정리)
+        W_CWD = "프로젝트 폴더로 옮긴 뒤(cd 는 따로 한 번 실행) 같은 꼴로 다시 — 허락은 그대로입니다."
+        W_CFG = "푸시 허락으로는 올릴 수 없는 저장소 설정입니다 — 사람이 터미널에서 올립니다."
+        grant(proj)
+        code, err = run(proj, *bash("git push origin feat"), extra={"cwd": str(other)})
+        res["total"] += 1
+        if code != B or W_CWD not in err or "/refactor:approve 푸시" in err:
+            res["fails"].append(("0.3.3 push K3② 작업 폴더 밖 → cd 안내(푸시 입력 안내 없음)", B, code, "Bash", "git push origin feat", err.strip()[:300]))
+        git(proj, "config", "--add", "remote.origin.push", "refs/heads/feat:refs/heads/main")
+        code, err = run(proj, *bash("git push origin feat"))
+        res["total"] += 1
+        if code != B or W_CFG not in err or "/refactor:approve 푸시" in err:
+            res["fails"].append(("0.3.3 push K3③ 저장소 설정 → 사람이 올림 안내", B, code, "Bash", "git push origin feat", err.strip()[:300]))
+        git(proj, "config", "--unset-all", "remote.origin.push")
+        nogrant(proj)
+        case(proj, "K3① 허락 없음 → 단계 커밋 그대로 + 그 차례에만", B, bash("git push origin feat"), need="단계 커밋은 그대로 두고")
+        case(proj, "K3 stash 안내 정리", B, bash("git stash"), need="커밋이 필요하면 7-execute 5-1 대로 그 단계 파일만 — 단계 밖 변경이면 멈추고 사람에게 알리세요")
+
+        # K1 리눅스(대소문자를 가리는 파일 시스템)에서 대소문자만 다른 다른 저장소는 프로젝트 밖
+        up = proj.parent / proj.name.upper()
+        if not up.exists():
+            up.mkdir()
+            made.append(up)
+            if not os.path.samefile(up, proj):
+                git(up, "init", "-q")
+                grant(proj)
+                code, err = run(proj, *bash("git push origin feat"), extra={"cwd": str(up)})
+                res["total"] += 1
+                if code != B or W_OUT not in err:
+                    res["fails"].append(("0.3.3 push K1 대소문자만 다른 저장소(" + up.name + ") → 차단", B, code, "Bash", "git push origin feat", err.strip()[:300]))
+
+        # K4 push.default = upstream·tracking + 가지의 upstream 이 main 이면 허락된 git push origin feat 가 main 으로 간다 → 차단
+        bare = proj.parent / (proj.name + "-bare.git")
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
+        made.append(bare)
+        git(proj, "remote", "set-url", "origin", bare.as_posix())
+        git(proj, "config", "branch.feat.merge", "refs/heads/main")
+        git(proj, "config", "branch.feat.remote", "origin")
+        grant(proj)
+        for val, want in (("upstream", B), ("tracking", B), ("Upstream", B), ("simple", OK), ("current", OK), (None, OK)):
+            if val is None:
+                git(proj, "config", "--unset-all", "push.default")
+            else:
+                git(proj, "config", "push.default", val)
+            case(proj, f"K4 push.default={val} → {'차단' if want == B else '통과'}", want, bash("git push origin feat"), need=W_CFG if want == B else None)
+
+        # K6③ 전역 설정(HOME 의 .gitconfig)에 remote.origin.push → 차단
+        hm = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-home-"))
+        made.append(hm)
+        lf(hm / ".gitconfig", "[remote \"origin\"]\n\tpush = refs/heads/feat:refs/heads/main\n")
+        e = env_for(proj)
+        e["HOME"] = str(hm)
+        e.pop("GIT_CONFIG_GLOBAL", None)
+        e.pop("XDG_CONFIG_HOME", None)
+        payload = {"session_id": "t", "cwd": str(proj), "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                   "tool_input": {"command": "git push origin feat", "description": "t"}}
+        r = run_hook([BASH, (HOOKS / "run.sh").as_posix(), "guard"], input=json.dumps(payload).encode("utf-8"), capture_output=True, env=e)
+        res["total"] += 1
+        if r.returncode != B or "remote.origin.push" not in r.stderr.decode("utf-8", "replace"):
+            res["fails"].append(("0.3.3 push K6③ 전역 .gitconfig 의 remote.origin.push → 차단", B, r.returncode, "Bash", "git push origin feat", r.stderr.decode("utf-8", "replace")[:300]))
+        lf(hm / ".gitconfig", "")
+        r = run_hook([BASH, (HOOKS / "run.sh").as_posix(), "guard"], input=json.dumps(payload).encode("utf-8"), capture_output=True, env=e)
+        res["total"] += 1
+        if r.returncode != OK:
+            res["fails"].append(("0.3.3 push K6③ 전역 설정 없음 → 통과", OK, r.returncode, "Bash", "git push origin feat", r.stderr.decode("utf-8", "replace")[:300]))
+
+        # p11 리팩토링이 꺼진 상태(STATE 없음·마무리 확인됨) → 지금처럼 통과
+        off1 =pathlib.Path(tempfile.mkdtemp(prefix="guardtest-off-"))
+        made.append(off1)
+        (off1 / "docs/refactor").mkdir(parents=True)
+        git(off1, "init", "-q")
+        r = run_hook([BASH, (HOOKS / "run.sh").as_posix(), "guard"],
+                     input=json.dumps({"session_id": "t", "cwd": str(off1), "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                       "tool_input": {"command": "git push origin main", "description": "t"}}).encode("utf-8"),
+                     capture_output=True, env={k: v for k, v in env_for(off1).items() if k != "REFACTOR_GUARD_ALWAYS"})
+        res["total"] += 1
+        if r.returncode != OK:
+            res["fails"].append(("0.3.3 push p11 STATE 없음(스위치 꺼짐) → 통과", OK, r.returncode, "Bash", "git push origin main", r.stderr.decode("utf-8", "replace")[:300]))
+        done = make_project(phase="DONE", done_confirmed=True)
+        made.append(done)
+        case(done, "p11 마무리 확인됨 → 통과", OK, bash("git push origin main"))
+    finally:
+        for p in made:
+            rmtree_rw(p) if p.exists() else None
+
+
+def check_commit_flow_033(res):
+    """0.3.3 A2 C10: 단계 커밋은 Claude 가(7-execute 5-1) — /refactor:go 턴·EXECUTE·실행 대기 단계가 있는 프로젝트에서
+    파일 이름을 지정한 git add · 안전 실행기로 감싼 git commit · git diff --cached --stat 을 안전장치가 막지 않는다.
+    --no-verify 는 절차가 쓰지 않는 꼴이라 지금 판정을 그대로 적어 둔다(바뀌면 이 시험이 알린다)."""
+    run_sh = (HOOKS / "run.sh").as_posix()
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        approve(proj, "P1-2")
+        for want, cmd in [
+            (OK, "git add -- src/a.ts docs/refactor/STATE.md"),
+            (OK, f'bash "{run_sh}" refactor-safe-run -- git commit -m "refactor: P1-2 둘째 단계"'),
+            (OK, "git diff --cached --stat"),
+            (OK, "git status --porcelain -- . ':!docs/refactor'"),
+            (OK, "git commit --no-verify -m x"),   # 지금 판정(통과) — 절차는 이 옵션을 쓰지 않는다
+            (B, "npm test"),                       # 대조군: 이 프로젝트에서 안전장치가 켜져 있다(안전 실행기 강제) — 위 통과가 헛초록이 아님
+            (B, "git push origin feat"),           # 대조군: push 는 계속 사람(또는 /refactor:approve 푸시)
+        ]:
+            code, err = run(proj, *bash(cmd))
+            res["total"] += 1
+            if code != want:
+                res["fails"].append(("0.3.3 A2 단계 커밋 절차 " + cmd, want, code, "Bash", cmd[:120], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj) if proj.exists() else None
+
+
+
+def check_commit_msg_033(res):
+    """0.3.3 K2: 7-execute 5-1 의 감싼 커밋(bash "…/run.sh" refactor-safe-run -- git commit -m "…")도 그냥 git commit 처럼 커밋 메시지를 명령으로 보지 않는다.
+    감싼 꼴과 그냥 꼴의 판정이 같아야 한다(메시지 속 낱말 git push·supabase db reset·vercel --prod 로 단계 커밋이 막히지 않게)."""
+    run_sh = (HOOKS / "run.sh").as_posix()
+    proj = make_project(phase="EXECUTE")
+    try:
+        for title, want in [("refactor: P2-1 git push 전 확인", OK), ("refactor: P2-2 supabase db reset 금지", OK),
+                            ("refactor: P2-14 vercel --prod 배포 막기", OK), ("a; rm -rf docs/refactor", None)]:
+            plain = f'git commit -m "{title}"'
+            wrapped = f'bash "{run_sh}" refactor-safe-run -- git commit -m "{title}"'
+            pc, perr = run(proj, *bash(plain))
+            wc, werr = run(proj, *bash(wrapped))
+            res["total"] += 1
+            if wc != pc or (want is not None and wc != want):
+                res["fails"].append(("0.3.3 K2 감싼 커밋 = 그냥 커밋 판정: " + title, pc if want is None else want, wc, "Bash", wrapped[-80:], werr.strip()[:300]))
+        # M2(R3): 감싼 꼴의 문구 빼기가 "safe-run 뒤 아무 명령"·"따옴표 안의 safe-run 글자"로 번지면 안 된다 — 전부 그냥 꼴과 같이 차단
+        pre = f'bash "{run_sh}" refactor-safe-run -- '
+        for inner in ['git commit -m "x" && git push --force', 'git commit -m "$(git push -f)"', 'sh -c "git commit -m x; git push -f"',
+                      "git commit -m 'a' ; rm -rf ~", 'bash -c "git push -f"', "git commit -m 'a' 'b; git push -f'"]:
+            pc, perr = run(proj, *bash(inner))
+            wc, werr = run(proj, *bash(pre + inner))
+            res["total"] += 1
+            if pc != B or wc != B:
+                res["fails"].append(("0.3.3 M2 감싼 꼴도 그냥 꼴처럼 차단: " + inner, B, f"그냥 {pc} · 감싼 {wc}", "Bash", (pre + inner)[-80:], werr.strip()[:300]))
+        for cmd in ["sed -n '/refactor-safe-run -- git commit -m/p' a.md && git push -f origin 'feat'",
+                    "cat 'refactor-safe-run -- git commit -m x'; git push -f; cat 'y'",
+                    "cat 'refactor-safe-run -- git commit -m x'; rm -rf docs/refactor; cat 'y'",
+                    "cat 'refactor-safe-run -- git commit -m x'; git reset --hard; cat 'y'"]:
+            code, err = run(proj, *bash(cmd))
+            res["total"] += 1
+            if code != B:
+                res["fails"].append(("0.3.3 M2 따옴표 안 safe-run 글자 뒤 위험 명령 → 차단: " + cmd, B, code, "Bash", cmd[:80], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
 
 
 if __name__ == "__main__":

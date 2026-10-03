@@ -52,11 +52,14 @@ for st in "$root"/docs/refactor/STATE.md "$root"/*/docs/refactor/STATE.md "$root
   allow=0; allow_steps=""
   for f in "$pdir"/docs/refactor/.allow-*; do
     [ -e "$f" ] || continue
-    # 기준선 허용 파일에 단계 ID 가 적혀 있으면(0.3.2) 그 단계 동안만 열린다(끝나면 저절로 닫힘) — ⚠허용파일 대신 따로 표시
-    if [ "$have_lib" = 1 ] && [ "${f##*/}" = .allow-baseline-edit ] && [ -s "$f" ]; then
+    # 기준선 허용 파일에 단계 ID 가 적혀 있으면(0.3.2) 그 단계를 실행하는 동안만(0.3.3 — STATE.md current_step) 열린다(끝나면 저절로 닫힘) —
+    # ⚠허용파일 대신 따로 표시. 빈(0바이트·공백만) 파일은 기준선 전부가 열려 저절로 안 닫힘(0.3.3)
+    if [ "$have_lib" = 1 ] && [ "${f##*/}" = .allow-baseline-edit ]; then
       a=$(rl_allow_baseline "$pdir/docs/refactor"); a=${a%%$'\n'*}
       case "$a" in
-        OPEN\ *) allow_steps="🔓단계 ${a#* } 동안 열림(끝나면 저절로 닫힘)"; continue ;;
+        ALL) allow_steps="⚠허용파일 비어 있음(기준선 전부 열림·저절로 안 닫힘)"; continue ;;
+        OPEN\ *) allow_steps="🔓단계 ${a#* } 실행 중 — 열림(끝나면 저절로 닫힘)"; continue ;;
+        WAIT\ *) allow_steps="🔒허용파일 단계 ${a#* } 실행 중일 때만 열림(지금은 닫힘)"; continue ;;
         SHUT\ *) allow_steps="🔒허용파일 단계 ${a#* } 승인 대기·카드 바뀜(지금은 닫힘)"; continue ;;
         DONE\ *) allow_steps="✅허용파일 단계 모두 끝남(다음 입력 때 지워짐)"; continue ;;
         UNKNOWN\ *) allow_steps="⚠허용파일 단계 ${a#* } 계획서에 없음(오타?)"; continue ;;

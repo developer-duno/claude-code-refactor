@@ -22,6 +22,8 @@
 
 STATE 없는 폴더에서 guard 를 손으로 부르면 늘 0 입니다(0.3.0부터 리팩토링 중에만 판정) — 재현할 때는 `REFACTOR_GUARD_ALWAYS=1` 을 주거나 `docs/refactor/STATE.md` 가 있는 폴더에서 부르세요.
 
+시험에서 lib(`refactor-lib.sh`)를 `bash -c` 로 직접 불러 쓸 때는 명령 맨 앞에 `LC_ALL=C; export LC_ALL;` 을 붙이세요 — 플러그인 진입점은 모두 그렇게 돌고, 빼면 macOS 의 awk 가 카드 지문을 다르게 잽니다(스크립트 시험이 빠진 줄을 찾아 실패시킵니다).
+
 ## Pull Request
 
 PR 을 올릴 때는 [PR 양식](.github/PULL_REQUEST_TEMPLATE.md)의 항목을 채워 주세요.

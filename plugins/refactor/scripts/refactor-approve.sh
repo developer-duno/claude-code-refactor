@@ -6,7 +6,11 @@
 # 스킬의 ! 명령(훅보다 먼저 돈다)도 이 스크립트를 부르지만 --from-hook 이 없으므로 아무것도 바꾸지 않고 현황만 보여 준다.
 # Claude가 직접 부르는 것은 안전장치 훅이 막는다. 사용자가 입력한 인자는 표준입력으로 받는다(셸 주입 방지).
 #   $1 = 프로젝트 폴더, $2 = --from-hook (입력 훅이 부를 때만)
-#   표준입력 = 인자 (예: "P0-1 P1-2" / "P1" / "baseline" / "보류 P1-2" / "확인" / "마무리" / 비움=현황)
+#   표준입력 = 인자 (예: "P0-1 P1-2" / "P1" / "baseline" / "보류 P1-2" / "확인" / "마무리" / "허용 P1-1" / "허용 닫기" / "푸시" / 비움=현황)
+#   환경변수 REFACTOR_TURN_SID = 입력 훅이 넘기는 세션 ID("푸시"의 허락 파일 이름에 쓴다)
+# "허용"(0.3.3)은 승인된 🛠 단계의 기준선 허용 파일(.allow-baseline-edit)에 단계 ID 를 적는다(승인과는 따로 — 승인은 허용을 열지 않는다).
+# "허용 닫기"는 그 파일을 지운다(기록에 줄을 남기지 않는다 — 닫는 쪽은 안전한 방향이고, 마무리 뒤에 닫아도 "마지막 줄 = 마무리"가 그대로).
+# "푸시"(0.3.3)는 지금 작업 가지를 이번 차례에만 올리도록 허락하는 표시(docs/refactor/.turn-push.<세션ID>)를 만든다(기본 가지는 거절).
 # --from-hook 이 없으면 인자가 있어도 파일을 하나도 바꾸지 않고, 안내 한 줄 + 현황을 출력하고 exit 0.
 # 인자 없는 현황 보기도 파일을 바꾸지 않는다.
 # 승인 기록을 남길 때마다 기록의 지문을 approved/.log-sum 에 봉인한다. 기록이 이 스크립트 밖에서 바뀌면(봉인과 다르면)
@@ -75,7 +79,7 @@ case "$raw" in *[![:space:]]*) rw=1 ;; esac
 
 # ── 인자 해석 ────────────────────────────────────────────────────────────────
 # '보류'는 맨 앞에만 쓴다(P1-1 보류 P1-2 처럼 섞으면 무엇을 보류하려는지 모호하므로 거절).
-mode="approve"; want_base=0; ids=""; phases=""; bad=""; pos=0; conflict=""; special=""
+mode="approve"; want_base=0; ids=""; phases=""; bad=""; pos=0; conflict=""; special=""; close=0
 # 영문 소문자만 대문자로(tr '[:lower:]' '[:upper:]' 를 LC_ALL=C 에서 쓴 것과 같게, 외부 명령 없이)
 upper_ascii() {
   local s=$1 o="" c lo=abcdefghijklmnopqrstuvwxyz UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ p i
@@ -97,6 +101,12 @@ for tok in $raw; do
       if [ "$pos" = 1 ]; then mode="hold"; else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다"; fi ;;
     APPROVE|승인)
       if [ "$pos" != 1 ]; then conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다"; fi ;;
+    ALLOW|허용)
+      if [ "$pos" = 1 ]; then mode="allow"; else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다"; fi ;;
+    CLOSE|닫기)
+      if [ "$pos" = 2 ] && [ "$mode" = "allow" ]; then close=1; else conflict="'$tok'은(는) '허용' 바로 뒤에만 쓸 수 있습니다(예: /refactor:approve 허용 닫기)"; fi ;;
+    PUSH|푸시)
+      if [ "$pos" = 1 ]; then mode="push"; else conflict="'$tok'은(는) 단독으로만 쓸 수 있습니다(예: /refactor:approve 푸시)"; fi ;;
     확인|CONFIRM|SEAL) special=confirm ;;
     마무리|DONE|FINISH|끝|완료) special=done ;;
     ALL|전체|모두) bad="$bad $tok(전체 승인은 지원하지 않음 — P0·P1 같은 묶음이나 단계 번호로)" ;;
@@ -107,11 +117,19 @@ for tok in $raw; do
       fi ;;
   esac
 done
+# '푸시'는 단독으로만, '허용 닫기'는 뒤에 아무것도 없이, '허용'은 단계 번호하고만(기준선 계획·확인·마무리와 섞지 않음)
+if [ -z "$conflict" ]; then
+  if [ "$mode" = "push" ] && [ "$pos" -gt 1 ]; then conflict="'푸시'는 단독으로 입력하세요(뒤에 아무것도 붙이지 않습니다)"
+  elif [ "$close" = 1 ] && [ "$pos" -gt 2 ]; then conflict="'허용 닫기' 뒤에는 아무것도 붙이지 않습니다"
+  elif [ "$mode" = "allow" ] && { [ "$want_base" = 1 ] || [ -n "$special" ]; }; then conflict="'허용'은 단계 번호하고만 함께 씁니다(baseline·확인·마무리와 섞지 않음)"
+  fi
+fi
 
 say "== /refactor:approve 결과 ($now KST) =="
 if [ -n "$conflict" ]; then
   say "❓ $conflict — 아무것도 바꾸지 않았습니다."
   say "   승인: /refactor:approve P1-1 P1-2    ·    승인 취소: /refactor:approve 보류 P1-2"
+  say "   기준선 허용: /refactor:approve 허용 P1-1    ·    허용 닫기: /refactor:approve 허용 닫기    ·    올리기 허락: /refactor:approve 푸시"
   exit 0
 fi
 [ -n "$bad" ] && say "❓ 알아듣지 못한 입력:$bad"
@@ -137,6 +155,33 @@ set_state_front() { # $1 awk 변수 이름=값들 — STATE.md 앞머리 칸 갱
   if [ -e "$tmp" ]; then rm -f "$tmp"; fi
 }
 
+# rl_card_bl_paths -n 의 출력(BLP)에서 카드 순번 $1(본문 파일 c<순번>)의 기준선 경로 → BLV = "`a` `b`" / "?"(칸에 글은 있는데 백틱 경로 0) / ""(칸 없음·"없음")
+BLP=""
+bl_of() {
+  local rest="$BLP$RL_NL" line f p
+  BLV=""
+  while [ -n "$rest" ]; do
+    line=${rest%%"$RL_NL"*}; rest=${rest#*"$RL_NL"}
+    f=${line%%"$RL_TAB"*}; p=${line#*"$RL_TAB"}
+    [ "$f" = "c$1" ] && [ "$f" != "$line" ] || continue
+    if [ "$p" = "?" ]; then BLV="?"; else BLV="$BLV \`$p\`"; fi
+  done
+  BLV=${BLV# }
+}
+
+# ── 기준선 허용 닫기(0.3.3): 허용 파일을 지운다. 닫는 쪽은 안전한 방향이라 봉인이 깨져 있어도 하고, 기록에는 남기지 않는다 ──
+if [ "$close" = 1 ]; then
+  if [ -f "$dir/.allow-baseline-edit" ]; then
+    rm -f "$dir/.allow-baseline-edit"
+    if [ -f "$dir/.allow-baseline-edit" ]; then say "⚠️ 기준선 허용 파일(.allow-baseline-edit)을 지우지 못했습니다 — 터미널에서 rm \"$dir/.allow-baseline-edit\""
+    else say "🔒 기준선 허용을 닫았습니다(.allow-baseline-edit 를 지움). 이제 기준선 테스트는 고칠 수 없습니다."
+    fi
+  else
+    say "ℹ️ 기준선 허용은 이미 닫혀 있습니다(.allow-baseline-edit 없음)."
+  fi
+  exit 0
+fi
+
 # ── 승인 기록 봉인 확인 ──────────────────────────────────────────────────────
 intact=1
 rl_log_intact "$dir" || intact=0
@@ -156,7 +201,192 @@ if [ "$intact" = 0 ]; then
     say "$chg"
     say "   👤 직접 한 승인이 아니면 그 줄을 지운 뒤 /refactor:approve 확인 을 입력하세요."
   fi
-  if [ -n "$ids$phases$special" ] || [ "$want_base" = 1 ]; then say "   (그래서 이번 요청은 처리하지 않았습니다.)"; exit 0; fi
+  if [ -n "$ids$phases$special" ] || [ "$want_base" = 1 ] || [ "$mode" = "allow" ] || [ "$mode" = "push" ]; then say "   (그래서 이번 요청은 처리하지 않았습니다.)"; exit 0; fi
+fi
+
+# ── 푸시 허락(0.3.3): 이번 차례에만 작업 가지를 올려도 된다는 표시 docs/refactor/.turn-push.<세션ID> ─────────
+#   2줄: "push <가지>" / 만든 시각(초). 입력 훅이 그 세션의 다음 사람 입력 때 지우고, 안전장치는 30분이 지난 것을 무시한다.
+#   기본 가지(main·master·origin/HEAD 가 가리키는 가지)·떨어진 HEAD·git 저장소 밖·마무리 확인 뒤는 거절(아무것도 안 씀)
+if [ "$mode" = "push" ]; then
+  if rl_done_confirmed "$dir"; then
+    say "ℹ️ 이미 마무리되어 안전장치가 꺼져 있습니다 — 허락 없이 올릴 수 있습니다(아무것도 바꾸지 않았습니다)."
+    exit 0
+  fi
+  psid=${REFACTOR_TURN_SID:-}
+  if ! [[ $psid =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then
+    say "⚠️ 대화(세션) 정보를 받지 못해 push 허락을 만들지 않았습니다 — 입력창에 /refactor:approve 푸시 를 다시 쳐 주세요."
+    exit 0
+  fi
+  br=$(git -C "$proj" symbolic-ref -q --short HEAD 2>/dev/null); grc=$?
+  if [ "$grc" -gt 1 ]; then
+    say "❓ 이 폴더는 git 저장소가 아니라(또는 git 이 저장소 설정을 읽지 못해) push 허락을 만들지 않았습니다: $proj"; exit 0
+  fi
+  if [ "$grc" = 1 ] || [ -z "$br" ]; then
+    say "❓ 지금 가지가 없습니다(특정 커밋에 떨어진 상태) — 작업 가지로 옮긴 뒤 다시 입력하세요. push 허락을 만들지 않았습니다."; exit 0
+  fi
+  # 안전장치가 허락 파일을 읽는 조건과 같게: 첫 글자는 영문·숫자·_, 나머지는 영문·숫자·._/-
+  if ! [[ $br =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    say "❓ 가지 이름($br)에 영문·숫자·._/- 밖의 글자가 있어 push 허락을 만들지 않았습니다 — 사람이 터미널에서 올려 주세요."; exit 0
+  fi
+  if ! [[ $br =~ ^[A-Za-z0-9_] ]]; then
+    say "❓ 이 가지 이름($br)은 허락할 수 없습니다(첫 글자가 - . / 임) — 사람이 터미널에서 올려 주세요."; exit 0
+  fi
+  defb=""
+  case "$br" in
+    main|master) defb=$br ;;
+    *) ob=$(git -C "$proj" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null); [ "${ob#origin/}" = "$br" ] && [ -n "$ob" ] && defb=$br ;;
+  esac
+  if [ -n "$defb" ]; then
+    say "⛔ 기본 가지는 올리지 않습니다 — 작업 가지에서(지금 가지: $br). push 허락을 만들지 않았습니다."
+    say "   기본 가지 올리기와 PR 합치기는 사람이 터미널에서 합니다."
+    exit 0
+  fi
+  # 안전장치가 허락 push 를 통과시키는 저장소 설정인지 먼저 본다(허락을 내 놓고 안전장치가 막는 헛걸음 방지 — git 1회, 주소 값은 출력하지 않음):
+  #   origin 주소 없음 · remote.origin.push(올리기 규칙) 있음 · push.default 가 upstream/tracking(지금 가지가 따라가는 원격 가지로 올라감) 이면 거절
+  pc=$(git -C "$proj" config --get-regexp '^(remote[.]origin[.](url|push)|push[.]default)$' 2>/dev/null)
+  pwhy=""; has_url=0
+  while IFS= read -r x; do
+    k=${x%% *}; v=${x#"$k"}; v=${v# }
+    case "$k" in
+      remote.origin.url) has_url=1 ;;
+      remote.origin.push) pwhy="원격에 올리기 규칙(remote.origin.push)이 설정돼 있음" ;;
+      push.default) upper_ascii "$v"; case "$UPV" in UPSTREAM|TRACKING) pwhy="push.default 가 $v 임(따라가는 원격 가지로 올라감)" ;; esac ;;
+    esac
+  done <<EOF
+$pc
+EOF
+  [ -z "$pwhy" ] && [ "$has_url" = 0 ] && pwhy="origin 원격 주소가 없음"
+  if [ -n "$pwhy" ]; then
+    say "⛔ 푸시 허락으로는 올릴 수 없는 저장소 설정입니다($pwhy) — 사람이 터미널에서 올립니다. push 허락을 만들지 않았습니다."
+    exit 0
+  fi
+  ep=$(date +%s)
+  pf="$dir/.turn-push.$psid"
+  if ! { printf 'push %s\n%s\n' "$br" "$ep" > "$pf.tmp.$$" && mv -f "$pf.tmp.$$" "$pf"; }; then
+    rm -f "$pf.tmp.$$"; say "⚠️ push 허락 파일을 쓰지 못했습니다(아무것도 바꾸지 않았습니다)."; exit 0
+  fi
+  printf '%s KST | 푸시 | %s | - | 사용자가 /refactor:approve 로 실행\n' "$now" "$br" >> "$log"
+  rl_log_seal "$dir"
+  say "✅ push 허락: 작업 가지 $br 를 이번 차례에만 올릴 수 있습니다(다음 입력부터 다시 막힘 · 30분 안). 올리는 명령: git push -u origin $br"
+  # 무엇이 올라가는지: 원격 origin 에 아직 없는 커밋(최근 것부터 최대 5줄) · 커밋 안 된 변경 수(리팩토링 기록 docs/refactor 는 빼고 — 승인 기록이 방금 바뀌므로)
+  pl=$(git -C "$proj" log --oneline --no-decorate --no-color HEAD --not --remotes=origin 2>/dev/null)
+  pn=0; pshow=""
+  while IFS= read -r x; do
+    [ -n "$x" ] || continue
+    pn=$((pn + 1)); [ "$pn" -le 5 ] && pshow="$pshow     $x$RL_NL"
+  done <<EOF
+$pl
+EOF
+  if [ "$pn" = 0 ]; then say "   (올릴 새 커밋이 없습니다)"; else say "   올라갈 커밋 ${pn}개:"; printf '%s' "$pshow"; fi
+  dn=0
+  while IFS= read -r x; do [ -n "$x" ] && dn=$((dn + 1)); done <<EOF
+$(git -C "$proj" status --porcelain -- . ':!docs/refactor' 2>/dev/null)
+EOF
+  [ "$dn" -gt 0 ] && say "   ⚠️ 커밋 안 된 변경 ${dn}개는 올라가지 않습니다."
+  say "   기본 가지 올리기·강제 push·PR 합치기는 계속 막힙니다."
+  exit 0
+fi
+
+# ── 기준선 허용(0.3.3): 승인됨·미완료·번호 하나·승인 줄 있음 · 카드의 "깨질 것으로 예상되는 기준선" 칸에 백틱 경로가 있는 단계만 ──
+#   허용 파일 = (지금 파일의 ID 중 아직 대상인 것) ∪ (이번 ID) 한 줄. 실제로 썼을 때만 기록에 "허용" 줄(지문 칸 "-" — 승인 상태 계산은 이 줄을 건너뜀)
+if [ "$mode" = "allow" ]; then
+  if [ ! -f "$plan" ]; then say "❓ 계획서(REFACTOR_PLAN.md)가 아직 없습니다. /refactor:go 로 계획서 단계까지 진행하세요."; exit 0; fi
+  cdir=$(mktemp -d 2>/dev/null) || cdir=$(mktemp -d -t rlcards 2>/dev/null) || cdir=""
+  if [ -z "$cdir" ]; then say "⚠️ 임시 폴더를 만들지 못해 아무것도 바꾸지 않았습니다."; exit 0; fi
+  trap 'rm -rf "$cdir"' EXIT
+  recs=$(RL_CARDDIR=$cdir rl_cards "$plan" "$log")
+  # 후보 카드(승인됨·미완료·번호 하나·승인 줄 있음)의 본문 파일로 기준선 경로를 한 번에 뽑는다(카드마다 awk 를 부르지 않는다)
+  set --
+  while IFS="$US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
+    [ "$kind_" = CARD ] && [ "$st" = approved ] && [ "$done_" != 1 ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ] && set -- "$@" "$cdir/c$n_"
+  done <<EOF
+$recs
+EOF
+  [ "$#" -gt 0 ] && BLP=$(rl_card_bl_paths -n "$@")
+  elig=""; nmap=" "
+  while IFS="$US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
+    [ "$kind_" = CARD ] || continue
+    nmap="$nmap$id=$n_ "
+    [ "$st" = approved ] && [ "$done_" != 1 ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ] || continue
+    bl_of "$n_"
+    case "$BLV" in ""|"?") ;; *) elig="$elig $id" ;; esac
+  done <<EOF
+$recs
+EOF
+  want=""   # 알아듣지 못한 입력은 위(인자 해석 뒤)에서 이미 한 번 알렸다
+  if [ -z "$ids$phases" ]; then
+    if [ -n "$bad" ]; then say "   아무것도 바꾸지 않았습니다. 예: /refactor:approve 허용 P1-1"; exit 0; fi
+    want=$elig
+    if [ -z "$want" ]; then say "ℹ️ 지금 승인돼 있고 기준선을 고치는 단계가 없습니다 — 허용 파일을 만들지 않았습니다."; exit 0; fi
+  else
+    for ph_ in $phases; do
+      found=0
+      while IFS="$US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
+        [ "$kind_" = CARD ] || continue
+        case "$id" in "$ph_"-*) ;; *) continue ;; esac
+        found=1
+        case " $elig " in *" $id "*) case " $want " in *" $id "*) ;; *) want="$want $id" ;; esac ;; esac
+      done <<EOF
+$recs
+EOF
+      [ "$found" = 0 ] && say "❓ 계획서에 $ph_ 묶음의 단계가 없습니다."
+    done
+    for id in $ids; do
+      found=0
+      while IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st; do
+        [ "$kind_" = CARD ] && [ "$id_" = "$id" ] && { found=1; break; }
+      done <<EOF
+$recs
+EOF
+      if [ "$found" = 0 ]; then say "❓ 계획서에 없는 단계 번호: $id"; continue; fi
+      if [ "${cnt:-1}" -gt 1 ]; then say "⛔ [$id] 같은 번호의 단계가 ${cnt}개 있어 어느 것인지 알 수 없습니다 — 허용하지 않았습니다."; continue; fi
+      if [ "$box" = "none" ]; then say "❓ 승인 줄이 없는 단계: [$id] $t — 허용하지 않았습니다."; continue; fi
+      if [ "$done_" = 1 ]; then say "ℹ️ 이미 완료된 단계라 허용이 필요 없습니다: [$id] $t"; continue; fi
+      case "$st" in
+        approved) ;;
+        changed) say "🔁 승인 뒤 카드가 바뀐 단계라 허용하지 않았습니다: [$id] $t — 다시 승인(/refactor:approve $id)한 뒤 허용하세요"; continue ;;
+        *) say "❓ 승인되지 않은 단계라 허용하지 않았습니다: [$id] $t — 먼저 /refactor:approve $id"; continue ;;
+      esac
+      bl_of "$n_"
+      case "$BLV" in
+        "") say "ℹ️ [$id] $t — 기준선을 바꾸지 않는 단계라 허용이 필요 없습니다."; continue ;;
+        "?") say "⚠️ [$id] $t — '깨질 것으로 예상되는 기준선' 칸에 백틱 경로가 없어 허용하지 않았습니다 — 필요하면 계획서를 고치게 하세요."; continue ;;
+      esac
+      case " $want " in *" $id "*) ;; *) want="$want $id" ;; esac
+    done
+    if [ -z "$want" ]; then say "ℹ️ 허용할 단계가 없어 아무것도 바꾸지 않았습니다."; exit 0; fi
+  fi
+  # 지금 파일: 빈 파일(공백만)이면 "기준선 전부 허용" → 이번 단계 목록으로 좁힌다. 아직 대상인 ID 만 이어 둔다
+  af="$dir/.allow-baseline-edit"; had=0; narrowed=0; old=""; new=""; dropped=""
+  if [ -f "$af" ]; then had=1; old=$(rl_allow_ids "$dir"); [ -z "$old" ] && narrowed=1; fi
+  for x in $old; do
+    [ "$x" = "?" ] && continue
+    case " $elig " in
+      *" $x "*) case " $new " in *" $x "*) ;; *) new="$new $x" ;; esac ;;
+      *) dropped="$dropped $x" ;;
+    esac
+  done
+  for x in $want; do case " $new " in *" $x "*) ;; *) new="$new $x" ;; esac; done
+  new=${new# }
+  if [ "$had" = 1 ] && [ "$old" = "$new" ]; then
+    say "ℹ️ 이미 허용돼 있습니다: $new (아무것도 바꾸지 않았습니다)"
+  else
+    if ! { printf '%s\n' "$new" > "$af.tmp.$$" && mv -f "$af.tmp.$$" "$af"; }; then
+      rm -f "$af.tmp.$$"; say "⚠️ 허용 파일을 쓰지 못했습니다(아무것도 바꾸지 않았습니다)."; exit 0
+    fi
+    printf '%s KST | 허용 | %s | - | 사용자가 /refactor:approve 로 실행\n' "$now" "$new" >> "$log"
+    rl_log_seal "$dir"
+    say "🔓 기준선 허용: $new — 이 단계를 실행하는 동안 카드에 적힌 기준선만 고칠 수 있습니다(단계가 모두 끝나면 저절로 닫힘)"
+  fi
+  for x in $new; do
+    nn=${nmap#*" $x="}; nn=${nn%% *}
+    bl_of "$nn"
+    say "   [$x] 고칠 기준선: $BLV"
+  done
+  [ "$narrowed" = 1 ] && [ "$old" != "$new" ] && say "   (빈 허용 파일 — 기준선 전부 허용 — 이었는데 이 단계들로 좁혔습니다.)"
+  [ -n "$dropped" ] && say "   (허용 파일에 있던${dropped} 은(는) 지금 허용 대상이 아니라 뺐습니다.)"
+  say "다음: /refactor:go"
+  exit 0
 fi
 
 # ── 마무리(DONE) ─────────────────────────────────────────────────────────────
@@ -189,6 +419,13 @@ RECS_DONE
   fi
   say "✅ 리팩토링을 마무리했습니다(DONE). 이제 이 프로젝트의 안전장치가 모두 꺼집니다(비밀값·되돌릴 수 없는 명령 보호 포함)."
   say "   다시 켜고 점검하려면 /refactor:go 다시 CHECKUP (한두 달 뒤를 권합니다)"
+  # 주기가 끝났으니 기준선 허용 파일은 지운다(새 계획에서 같은 번호가 다른 카드일 수 있다). 기록에는 줄을 더하지 않는다
+  # (마무리 줄이 기록의 마지막 줄이어야 마무리가 인정된다). 마이그레이션 허용 파일은 알리기만, .allow-env(설정)는 그대로
+  if [ -f "$dir/.allow-baseline-edit" ]; then
+    rm -f "$dir/.allow-baseline-edit"
+    [ -f "$dir/.allow-baseline-edit" ] || say "🔒 리팩토링이 끝나 기준선 허용 파일(.allow-baseline-edit)을 지웠습니다."
+  fi
+  [ -f "$dir/.allow-migration-edit" ] && say "⚠️ 마이그레이션 허용 파일(.allow-migration-edit)이 남아 있습니다 — 작업을 커밋했으면 터미널에서 rm \"$dir/.allow-migration-edit\" 로 지우세요(CLI 라면 입력창에 ! rm … 도 됨)."
   exit 0
 fi
 
@@ -259,6 +496,18 @@ EOF
       [ "$found" = 0 ] && say "❓ 계획서에 $ph_ 묶음의 단계가 없습니다."
     done
 
+    # 0.3.3 승인 화면: 이번에 승인할 수 있는 카드의 "깨질 것으로 예상되는 기준선" 경로를 한 번에 뽑아 둔다(승인 줄 아래 안내용 — 허용은 열지 않는다)
+    if [ "$mode" = "approve" ] && [ -n "$cdir" ] && [ -n "$targets" ]; then
+      set --
+      while IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st; do
+        [ "$kind_" = CARD ] && [ "$done_" != 1 ] && [ "$st" != approved ] || continue
+        case " $targets " in *" $id_ "*) set -- "$@" "$cdir/c$n_" ;; esac
+      done <<EOF
+$recs
+EOF
+      [ "$#" -gt 0 ] && BLP=$(rl_card_bl_paths -n "$@")
+    fi
+
     acted=""; lines=""
     for id in $targets; do
       found=0
@@ -282,6 +531,12 @@ EOF
         [ -n "$k" ] && say "   종류: $k"
         [ -n "$r" ] && say "   위험도: $r"
         say "   👤 사람이 직접 할 일: ${h:-없음}"
+        bl_of "$n_"
+        case "$BLV" in
+          "") ;;
+          "?") say "   ⚠️ '깨질 것으로 예상되는 기준선' 칸에 백틱 경로가 없어 이 단계는 기준선을 고칠 수 없습니다 — 필요하면 계획서를 고치게 하세요" ;;
+          *) say "   🔓 고칠 기준선: $BLV — 실행 전에 /refactor:approve 허용 $id" ;;
+        esac
       else
         case "$st" in
           approved|changed)
@@ -367,6 +622,9 @@ EOF
       say "        /refactor:approve 보류 P1-2    (승인 취소 — 맨 앞에 '보류', 완료 전만)"
       say "        /refactor:approve 마무리        (실행 대기 단계가 없을 때 리팩토링 끝내기)"
       say "        /refactor:approve 확인          (승인 기록을 사람이 직접 고친 뒤 다시 봉인)"
+      say "        /refactor:approve 허용 P1-1     (승인된 단계가 카드에 적힌 기준선을 고칠 수 있게 — 번호 없이 '허용'이면 해당 단계 전부)"
+      say "        /refactor:approve 허용 닫기      (기준선 허용 닫기)"
+      say "        /refactor:approve 푸시           (지금 작업 가지를 이번 차례에만 올려도 됨 — 기본 가지는 안 됨)"
     fi
     if [ -n "$acted" ] || [ "$n_total" != 0 ]; then
       first_ready=${ready# }; first_ready=${first_ready%% *}
