@@ -1055,7 +1055,9 @@ def check_allow_steps_032(check):
     g = lambda d, *a: subprocess.run(["git", "-C", str(d), "-c", "user.email=t@example.com", "-c", "user.name=t", *a], check=True, capture_output=True)
 
     def libcall(d, expr):
-        r = subprocess.run([BASH, "-c", 'eval "$(tr -d \'\\r\' < "$1")"; P=$2; R=$2/docs/refactor; ' + expr, "x", lib, d.as_posix()],
+        # 플러그인 진입점(guard·turn·post-check·approve·status·board)과 같이 LC_ALL=C 로 — macOS 의 UTF-8 인식 awk 가 카드 지문을
+        # 다르게 재어 승인 상태를 못 알아보던 것(0.3.2 PR #12 CI macOS 6건 실패)
+        r = subprocess.run([BASH, "-c", 'LC_ALL=C; export LC_ALL; eval "$(tr -d \'\\r\' < "$1")"; P=$2; R=$2/docs/refactor; ' + expr, "x", lib, d.as_posix()],
                            capture_output=True, env=env(), timeout=90)
         return r.stdout.decode("utf-8", "replace").replace("\r", ""), r.stderr.decode("utf-8", "replace")
 
