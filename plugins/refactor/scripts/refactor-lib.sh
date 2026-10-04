@@ -304,6 +304,88 @@ rl_done_confirmed() { # $1 docs/refactor 폴더
   case "$last" in *"| 마무리 |"*) rl_log_intact "$1" ;; *) return 1 ;; esac
 }
 
+# origin 의 기본 가지(0.3.4 — 새 가지·합치기): refs/remotes/origin/HEAD 가 가리키는 가지(그것이 refs/remotes/origin/ 아래일 때만)
+#   → 없으면 origin/main → origin/master(그 자체가 심볼릭이면 기준이 아님 — guard.sh br_judge_in 과 같은 규칙). 로컬 참조만 본다(네트워크 없음)
+#   $1 = 프로젝트 폴더 → RL_BNAME(가지 이름, origin/ 뺀 것)·RL_BOID(커밋)·RL_BTREE(트리). 못 정하면 1
+rl_origin_base() {
+  local out l r c t s
+  RL_BNAME=""; RL_BOID=""; RL_BTREE=""
+  out=$(git --no-replace-objects -c core.fsmonitor=false -C "$1" for-each-ref --format='%(refname) %(objectname) %(tree) %(symref)' \
+        refs/remotes/origin/HEAD refs/remotes/origin/main refs/remotes/origin/master 2>/dev/null) || return 1
+  out="$RL_NL$out$RL_NL"
+  for r in HEAD main master; do
+    case "$out" in *"${RL_NL}refs/remotes/origin/$r "*) ;; *) continue ;; esac
+    l=${out#*"${RL_NL}refs/remotes/origin/$r "}; l=${l%%"$RL_NL"*}
+    c=${l%% *}; l=${l#* }; t=${l%% *}; s=${l#* }
+    [ "$s" = "$t" ] && s=""
+    if [ "$r" = HEAD ]; then
+      # %(symref) 는 심볼릭을 끝까지 따라간 대상 — 그것이 origin 아래가 아니면 기준으로 쓰지 않는다
+      case "$s" in refs/remotes/origin/HEAD) continue ;; refs/remotes/origin/?*) ;; *) continue ;; esac
+      r=${s#refs/remotes/origin/}
+    else
+      [ -n "$s" ] && continue
+    fi
+    [ -n "$c" ] && [ -n "$t" ] || continue
+    RL_BNAME=$r; RL_BOID=$c; RL_BTREE=$t
+    return 0
+  done
+  return 1
+}
+
+# 지금 위치(HEAD)의 내용이 커밋 $2 에 다 들어 있나(0.3.4 — 새 가지 R8): $1 = 프로젝트 폴더. 들어 있으면 0, 아니면·판정 불가면 1
+#   통과 = HEAD 가 $2 의 조상 · 또는 git merge-tree --write-tree $2 HEAD 의 결과 트리 == $2 의 트리(rebase·스쿼시로 합친 경우)
+#   안전장치(guard.sh br_judge_in)와 같은 방어: 대체 객체 무시 · fsmonitor 끔 · renormalize 끔 ·
+#   합치기 드라이버(merge.<이름>.driver) 설정이 있으면 merge-tree 를 부르지 않는다(조상일 때만 통과 — 드라이버 프로그램이 이 안에서 돌고,
+#   늘 "우리 쪽"을 남기는 드라이버면 안 합친 내용도 합친 것처럼 보인다). git 2.38 미만(--write-tree 없음)도 조상일 때만
+rl_merged_into() {
+  local rc bt t
+  git --no-replace-objects -c core.fsmonitor=false -C "$1" merge-base --is-ancestor HEAD "$2" 2>/dev/null; rc=$?
+  [ "$rc" = 0 ] && return 0
+  [ "$rc" = 1 ] || return 1
+  git --no-replace-objects -c core.fsmonitor=false -C "$1" config --name-only --get-regexp '^merge[.].+[.]driver$' >/dev/null 2>&1; rc=$?
+  [ "$rc" = 1 ] || return 1   # 0 = 드라이버 설정 있음 · 그 밖 = 설정을 못 읽음
+  bt=$(git --no-replace-objects -c core.fsmonitor=false -C "$1" rev-parse -q --verify "$2^{tree}" 2>/dev/null) || return 1
+  t=$(git --no-replace-objects -c core.fsmonitor=false -c merge.renormalize=false -C "$1" merge-tree --write-tree "$2" HEAD 2>/dev/null) || return 1
+  [ -n "$bt" ] && [ "${t%%"$RL_NL"*}" = "$bt" ]
+}
+
+# 시간 한도 안에서 명령 실행(0.3.4 — 합치기의 gh 호출): $1 = 초, 나머지 = 명령. 종료 코드는 명령의 것, 한도에 걸렸으면 124
+#   bash 만으로(외부 timeout·perl 에 기대지 않는다 — 맥에는 timeout 이 없고, gh(Go)는 perl alarm 의 SIGALRM 을 무시하며,
+#   Windows 는 System32 의 다른 timeout.exe 가 먼저 잡힐 수 있다). bash 3.2 에서도 돈다(bash 4.3 의 '아무 하나 끝나기를 기다리기' 옵션은 안 씀)
+#   명령을 백그라운드로 띄우고, 감시(출력을 /dev/null 로 — 안 그러면 $( ) 가 감시가 끝날 때까지 기다린다)가 N초 뒤 표시 파일을 만들고
+#   TERM → 1초 뒤에도 살아 있으면 KILL. 명령이 먼저 끝나면 감시를 끈다(감시는 TERM 을 받으면 자기 sleep 도 끄고 나간다)
+rl_bounded() {
+  local s=$1 md pid wpid rc
+  shift
+  md=$(mktemp -d 2>/dev/null) || md=$(mktemp -d -t rlbound 2>/dev/null) || md=""
+  if [ -z "$md" ]; then "$@"; return; fi
+  "$@" &
+  pid=$!
+  (
+    sp=""
+    trap '[ -n "$sp" ] && kill "$sp" 2>/dev/null; exit 0' TERM
+    sleep "$s" &
+    sp=$!
+    wait "$sp"
+    kill -0 "$pid" 2>/dev/null || exit 0
+    : > "$md/t"
+    kill -TERM "$pid" 2>/dev/null
+    sleep 1 &
+    sp=$!
+    wait "$sp"
+    kill -KILL "$pid" 2>/dev/null
+    exit 0
+  ) >/dev/null 2>&1 &
+  wpid=$!
+  wait "$pid"
+  rc=$?
+  kill -TERM "$wpid" 2>/dev/null
+  wait "$wpid" 2>/dev/null
+  [ -f "$md/t" ] && rc=124
+  rm -rf "$md"
+  return "$rc"
+}
+
 # 기준선 허용 파일(docs/refactor/.allow-baseline-edit) 읽기(0.3.2 #10) — $1 docs/refactor 폴더. 표준출력 1줄째:
 #   NONE            파일 없음(기준선은 잠김)
 #   ALL             공백만(개행·BOM·CR·NUL 포함) — 예전처럼 기준선 전부 허용(사람이 지운다)

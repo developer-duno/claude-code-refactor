@@ -840,6 +840,13 @@ def main():
     check_push_grant_033(res)
     check_commit_msg_033(res)
     check_commit_flow_033(res)
+    check_deploy_t1_034(res)
+    check_quote_t45_034(res)
+    check_remote_t6_034(res)
+    check_push_t7_034(res)
+    check_push_t8_034(res)
+    check_msgs_034(res)
+    check_fixed_034(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -3593,7 +3600,7 @@ def check_allow_current_033(res):
         (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P9-9\n")
         case_hint("f2 UNKNOWN Edit → 허용 부탁 안내 그대로", ed(MONEY), False)
         # K5: current_step 은 맞는데 그 단계가 허용 파일에 없을 때를 위해 F2 안내 끝에 "그 단계 허용을 부탁" 한 문장
-        W_K5 = "current_step 이 맞는데도 막히면 그 단계가 허용 파일에 없는 것입니다 — 사용자에게 /refactor:approve 허용 <그 ID> 를 부탁하세요."
+        W_K5 = "current_step 이 맞는데도 막히면 그 단계가 허용 파일에 없는 것입니다(승인할 때 자동으로 열리지만 닫혔을 수 있음) — 사용자에게 /refactor:approve 허용 <그 ID> 를 부탁하세요."
         (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-2\n")
         state(proj, '"P1-1 (진행 중)"')
         case(proj, "K5 실행 중 단계가 허용 파일에 없음 → 안내 끝에 허용 부탁 한 문장", B, ed(MONEY), need=W_CS + " " + W_K5)
@@ -3922,6 +3929,418 @@ def check_commit_msg_033(res):
                 res["fails"].append(("0.3.3 M2 따옴표 안 safe-run 글자 뒤 위험 명령 → 차단: " + cmd, B, code, "Bash", cmd[:80], err.strip()[:300]))
     finally:
         rmtree_rw(proj)
+
+
+def _cases_034(res, proj, label, rows, need=None, extra=None):
+    """0.3.4 시험 공용: rows = [(기대, (도구, 입력))] 를 판정해 다르면 실패로 적는다. need = 차단일 때 문구에 꼭 있어야 할 글자"""
+    for want, call in rows:
+        code, err = run(proj, *call, extra=extra)
+        res["total"] += 1
+        if code != want or (need and want == B and need not in err):
+            res["fails"].append(("0.3.4 " + label, want, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+
+
+def check_deploy_t1_034(res):
+    """0.3.4 T1: 배포·DB 규칙의 하위명령 끝 경계 — 조회(railway deployment list·wrangler deployments list·rails db:migrate:status …)는 통과,
+    쓰기 꼴·감싼 꼴·다른 철자는 계속 차단, 빠졌던 배포 꼴(railway redeploy|down|restart · wrangler rollback|versions deploy)은 새로 차단.
+    DB 상태 조회는 끝 경계 대신 "migrate:status 낱말만 판정에서 빼기"(설계서 꼴은 db:migrate:reset·db:migrate:primary 를 열어 바꿈 — 메인 승인)."""
+    W_DEP = "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다."
+    W_DB = "리팩토링 진행 중에는 DB 구조 변경(마이그레이션 적용)을 사람이 직접 합니다."
+    proj = make_project(phase="EXECUTE")
+    try:
+        # 조회 15꼴: 지금까지 접두로 막히던 것 → 통과(Bash)
+        reads = ["railway deployment list", "railway deployment", "railway upgrade", "vercel logs deploy-abc.vercel.app",
+                 "vercel inspect deploy-abc.vercel.app", "wrangler deployments list", "wrangler deployments status", "wrangler deployments view",
+                 "wrangler pages deployment list", "wrangler pages deployment tail", "pm2 reloadLogs", "bin/rails db:migrate:status",
+                 "rake db:migrate:status", "php artisan migrate:status", "npx sequelize-cli db:migrate:status"]
+        _cases_034(res, proj, "T1 조회 통과", [(OK, bash(c)) for c in reads])
+        _cases_034(res, proj, "T1 조회 통과(PowerShell)", [(OK, ps(c)) for c in ["railway deployment list", "railway upgrade", "wrangler deployments list"]])
+        # 쓰기 꼴 → 계속 차단(배포 문구)
+        writes = ["railway up", "railway deploy --template postgres", "railway up --detach", "railway deployment up", "railway deployment redeploy",
+                  "wrangler deploy", "wrangler publish", "wrangler pages deploy dist", "wrangler pages deployment create dist",
+                  "wrangler pages deployment delete abc", "wrangler secret put X", "wrangler secret list", "wrangler secrets-store store list",
+                  "wrangler secrets-store secret create s1 --name X", "pm2 reload all", "pm2 restart app", "pm2 reload app",
+                  "pm2 deploy ecosystem.config.js production", "vercel alias rm a.com", "vercel deploy --prebuilt", "vercel --prod", "vercel redeploy x.vercel.app",
+                  # 빠졌던 배포 꼴(새로 차단)
+                  "railway redeploy", "railway down", "railway restart", "wrangler rollback", "wrangler versions deploy",
+                  # 끝 경계의 구분자(;&| ) 백틱 따옴표) — 빼면 railway up; 가 뚫린다
+                  "railway up;", "railway up&&echo x", "railway up|tee x", "railway up&", "(railway up)", "echo `railway up`",
+                  "wrangler deploy;echo x", "pm2 reload;echo x", "vercel deploy|tee x", "bash -c \"railway up\""]
+        _cases_034(res, proj, "T1 쓰기 계속 차단", [(B, bash(c)) for c in writes], need=W_DEP)
+        # 감싼 꼴 11개 → 계속 차단
+        wrapped = ["bash -c 'railway up'", "sh -c \"railway up\"", "eval railway up", "(railway up)", "railway up;", "railway up&&echo x",
+                   "\"rail\"'way' up", "rail${x}way up", "npx wrangler deploy", "ssh host \"pm2 restart all\"", "bash -c 'wrangler pages deploy dist'"]
+        _cases_034(res, proj, "T1 감싼 꼴 차단", [(B, bash(c)) for c in wrapped])
+        # 같은 결과 다른 철자: 조회는 통과, 쓰기는 차단
+        _cases_034(res, proj, "T1 다른 철자(조회)", [(OK, bash(c)) for c in [
+            "RAILWAY DEPLOYMENT LIST", "railway  deployment list", "'railway' deployment list", "railway.exe deployment list",
+            "bash -c 'railway deployment list'", "railway deployment list # x", "railway deployment list 2>&1 | head"]])
+        _cases_034(res, proj, "T1 다른 철자(쓰기)", [(B, bash(c)) for c in [
+            "RAILWAY UP", "railway  up", "'railway' up", "railway.exe up", "bash -c 'railway up'", "railway up # x", "railway up\\\n --detach",
+            "WRANGLER ROLLBACK", "railway  redeploy", "PM2 RELOAD all"]], need=W_DEP)
+        _cases_034(res, proj, "T1 다른 철자(PowerShell 쓰기)", [(B, ps(c)) for c in ["railway up", "railway restart", "wrangler versions deploy"]], need=W_DEP)
+        # 정상 명령 → 통과 그대로
+        normal = ["railway status", "railway logs", "vercel ls", "vercel env ls production", "kubectl get pods", "kubectl diff -f x.yaml",
+                  "pm2 list", "gh run list", "gh workflow list", "terraform plan", "netlify status", "vercel --version", "wrangler versions list"]
+        _cases_034(res, proj, "T1 정상 통과", [(OK, bash(c)) for c in normal])
+        # 프로젝트 스크립트 이름(re_pkg_deploy·re_pkg_db)은 지금 판정 그대로
+        _cases_034(res, proj, "T1 패키지 스크립트 그대로", [(B, bash("yarn deploy:prod")), (B, bash("npm run deploy:check")), (B, bash("npm run deploy")),
+                                                       (B, bash("npm run migrate:status")), (B, bash("npm run db:migrate:status")), (B, bash("pnpm db:migrate")),
+                                                       (OK, bash("npm run deploy-preview")), (OK, bash("npm run db:generate"))])
+        # DB: migrate:status 만 빠지고 나머지 쓰기 꼴은 그대로 차단(반대 방향 짝)
+        _cases_034(res, proj, "T1 DB 쓰기 계속 차단", [(B, bash(c)) for c in [
+            "rails db:migrate", "rake db:migrate", "php artisan migrate", "npx sequelize-cli db:migrate", "rails db:migrate VERSION=1",
+            "rails db:migrate:redo", "rails db:migrate:up VERSION=1", "rails db:migrate:reset", "rails db:migrate:primary", "rake db:migrate:reset",
+            "php artisan migrate:rollback", "php artisan migrate:refresh", "php artisan migrate:install", "npx sequelize-cli db:migrate:undo",
+            "npx sequelize-cli db:migrate:undo:all", "rails db:migrate:statusx", "rails db:migrate:status && rails db:migrate",
+            "rake db:migrate:status; rake db:migrate:reset", "rails db:migrate:status;rails db:migrate", "RAILS DB:MIGRATE",
+            "bash -c 'rails db:migrate'"]], need=W_DB)
+        _cases_034(res, proj, "T1 DB 조회 통과", [(OK, bash(c)) for c in [
+            "bin/rails db:migrate:status:primary", "php artisan migrate:status", "php artisan migrate:status --path=x", "rails db:migrate:status 2>&1 | head",
+            "RAKE DB:MIGRATE:STATUS", "bash -c 'rails db:migrate:status'", "npx sequelize-cli db:migrate:status"]])
+        _cases_034(res, proj, "T1 DB 초기화 그대로", [(B, bash("php artisan migrate:fresh")), (B, bash("php artisan migrate:reset")), (B, bash("rails db:reset"))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_quote_t45_034(res):
+    """0.3.4 T4·T5: 문구 걷어내기(blank_quoted·blank_echo_words)는 지울 따옴표 인자의 앞·끝이 둘 다 따옴표 밖일 때만 —
+    따옴표 안의 ; 를 앵커로 읽거나("cat ';git commit -m x'; git push -f") "a\\" 를 닫힌 따옴표로 읽어(감싼 커밋 경로) 밖의 위험 명령·비밀값 읽기를
+    문구로 지우지 않는다. 반대 방향: 커밋 제목·heredoc·검색어 속 위험 낱말은 계속 통과."""
+    run_sh = (HOOKS / "run.sh").as_posix()
+    W = f'bash "{run_sh}" refactor-safe-run -- '
+    proj = make_project(phase="EXECUTE")
+    try:
+        bad = [
+            'bash "a\\" refactor-safe-run -- git commit -m "; git push -f; echo "x"',
+            'bash "a\\" refactor-safe-run -- git commit -m "; rm -rf docs/refactor; echo "x"',
+            'bash "a\\" refactor-safe-run -- git commit -m "; git reset --hard; echo "x"',
+            'bash "a\\" refactor-safe-run -- git commit -m "; git push origin feat; echo "x"',
+            'bash "a\\" refactor-safe-run -- git commit -m "; cat .env; echo "x"',
+            'bash "a\\" refactor-safe-run -- echo "; git push -f; echo "x"',
+            f'bash "{run_sh}\\" refactor-safe-run -- git commit -m "; git push -f; echo "x"',
+            "cat ';git commit -m x'; git push -f; cat 'y'", 'cat ";git commit -m x"; git push -f; cat "y"',
+            "cat '&git commit -m x'; git push -f; cat 'y'", "cat ';git commit -m x'; rm -rf docs/refactor; cat 'y'",
+            "cat ';grep x'; git push -f; cat 'y'", "cat ';echo x'; git push -f; cat 'y'",
+            'cat "x; git commit -m "; git push -f; cat ""', 'git commit -m \\"; git push -f; echo \\" ""',
+            # 비밀값 7꼴
+            "cat ';grep '; cat .env; cat 'y'", "cat ';echo '; cat .env; cat 'y'", "cat ';jq '; cat .env; cat 'y'",
+            'echo "a\\" -m "; cat .env; echo "x"', 'true "a\\" -m "; cat .env; true "x"', 'echo "a\\" -S "; cat .env; echo "x"',
+            "echo \"a -m '\"; cat .env; echo \"'\"",
+            # ANSI-C $'…' 3꼴(안에서 \' 가 이스케이프 — 앞만 보면 다시 뚫린다)
+            "echo $'a\\'; git commit -m x'; git push -f; echo 'y'", "echo $'a\\'; git commit -m x'; rm -rf docs/refactor; echo 'y'",
+            "echo $'a\\'; grep '; cat .env; echo 'y'",
+        ]
+        _cases_034(res, proj, "T45 막혀야 할 25꼴", [(B, bash(c)) for c in bad])
+        # 같은 뿌리 다른 철자(조사 T4·T5 표) — 감싸개 철자 × 위험 명령, 앵커·낱말 철자
+        pre = ['bash "a\\" refactor-safe-run -- git commit -m "', 'bash  "a\\"  refactor-safe-run  --  git  commit  -m  "',
+               'BASH "a\\" REFACTOR-SAFE-RUN -- GIT COMMIT -M "', 'bash "a\\" refactor-safe-run -- git commit -am "',
+               'bash "a\\" refactor-safe-run -- git commit --message "', 'bash "a\\" refactor-safe-run -- git log --grep "',
+               'bash "a\\" refactor-safe-run -- grep "', 'bash.exe "a\\" refactor-safe-run -- git commit -m "',
+               '/bin/bash "a\\" refactor-safe-run -- git commit -m "', 'true; bash "a\\" refactor-safe-run -- git commit -m "',
+               'bash "a\\" refactor-safe-run \\\n -- git commit -m "', 'bash "a\\\\\\" refactor-safe-run -- git commit -m "']
+        pay = ['; git push -f; echo "x"', '; rm -rf docs/refactor; echo "x"', '; git push --force origin main; echo "x"',
+               '; git push -f #"', ';  git  push  -f; echo "x"', "; 'git' push -f; echo \"x\"", '; /usr/bin/git push -f; echo "x"',
+               '; git.exe push -f; echo "x"', '; git push -f --; echo "x"', '; vercel --prod; echo "x"', '; rm -rf ~; echo "x"']
+        _cases_034(res, proj, "T4 감싸개 철자", [(B, bash(p + pay[0])) for p in pre] + [(B, bash(p + pay[1])) for p in pre])
+        _cases_034(res, proj, "T4 위험 명령 철자", [(B, bash(pre[0] + d)) for d in pay])
+        _cases_034(res, proj, "T5 앵커·낱말 철자", [(B, bash(c)) for c in [
+            "cat '|git commit -m x'; git push -f; cat 'y'", "cat '(git commit -m x'; git push -f; cat 'y'",
+            "cat ';git  commit  -m x';  git  push  -f; cat 'y'", "cat ';GIT COMMIT -m x'; GIT PUSH -F; cat 'y'",
+            "cat ';git commit -m x'; git push -f #'", "cat ';git commit -m x'; git push -f --; cat 'y'",
+            "cat ';git commit -m x'; \"git\" push -f; cat 'y'", "cat ';git commit -m x'; /usr/bin/git push -f; cat 'y'",
+            "cat ';git commit -m x'; git.exe push -f; cat 'y'", "cat ';git commit -m x'; git push \\\n -f; cat 'y'",
+            "cat ';git commit -m x'\ngit push -f\ncat 'y'", "cat ';git commit -m x'; git reset --hard; cat 'y'",
+            "cat ';rg x'; git push -f; cat 'y'", "cat ';git log --grep x'; git push -f; cat 'y'", "cat ';printf x'; git push -f; cat 'y'",
+            "cat ';write-host x'; git push -f; cat 'y'", "cat ';git grep x'; git push -f; cat 'y'",
+            'echo "a\\" --author "; cat .env; echo "x"', "echo $$'a\\'; git push -f; echo 'y'",
+            'echo $";git commit -m x"; git push -f; echo "y"']])
+        _cases_034(res, proj, "T45 PowerShell", [(B, ps(c)) for c in [
+            'bash "a\\" refactor-safe-run -- git commit -m "; git push -f; echo "x"', "cat ';git commit -m x'; git push -f; cat 'y'",
+            'cat ";git commit -m x"; git push -f; cat "y"']])
+        # 막으면 안 되는 정상 명령(조사 T4·T5) — 계속 통과
+        good = [
+            'git commit -m "refactor: P1-2 둘째"', W + 'git commit -m "refactor: P2-1 git push 전 확인"',
+            W + 'git commit -m "refactor: P2-14 vercel --prod 배포 막기"',
+            'bash "C:\\Users\\me\\.claude\\plugins\\refactor\\hooks\\run.sh" refactor-safe-run -- git commit -m "refactor: P1-1 git push 안내"',
+            'bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-safe-run -- git commit -m "refactor: P1-1 git push 안내"',
+            'git log --oneline --grep "^refactor: P1-1 "', 'grep -rn "vercel --prod" .github/workflows', 'echo "API_KEY is required"',
+            'git commit -m "remove .env from repo; git push --force docs"', "git commit -m 'a; git push -f'",
+            "cat 'a b'; git commit -m \"x; git push -f\"", 'echo "don\'t"; git commit -m "fix: git push 안내"',
+            "grep -rn 'git push --force' .github", 'git commit -m "it\\"s; git push -f"', "echo it\\'s; git commit -m \"a; git push -f\"",
+            "cat > /tmp/n.txt <<'EOF'\nit's\nEOF\ngit commit -m \"x; git push 안내\"",
+            "git commit -m \"$(cat <<'EOF'\nrefactor: P1-1 x\n\nbody git push word\nEOF\n)\"",
+            'echo "a" && git commit -m "b; vercel --prod"', "printf $'it\\'s\\n'; git commit -m \"git push 안내\"",
+            "cat \"; echo x\" 'y' && git commit -m \"m; git push 안내\"", "echo \"a;b\" && git commit -m \"c; git push -f\"",
+            'grep -rn "process.env" src',
+        ]
+        _cases_034(res, proj, "T45 정상 통과", [(OK, bash(c)) for c in good])
+        # 고정: 전부터 있던 헛막힘 1꼴(printf 의 둘째 따옴표 인자) · 0.3.4 가 받아들인 새 헛막힘 1꼴 —
+        #   주석(#) 속 짝 없는 ' 뒤 문구를 안 지운다. 주석을 건너뛰게 하면 ${#x}·$# 를 주석으로 오인해 새 구멍이 생길 수 있어 막는 쪽을 택했다(설계서 §5)
+        _cases_034(res, proj, "T45 헛막힘 고정", [(B, bash("printf '%s\\n' \"a; git push -f\"")), (B, bash("ls # don't; git commit -m \"git push 안내\""))])
+        # 속도: 따옴표 660개 남짓·10KB 명령(커밋 220개) — 밖 판정을 "마지막으로 밖이던 자리"부터만 재므로 느려지지 않는다
+        big = "; ".join(f"git commit -m \"m{i} it's\" && echo 'a{i}' \"b{i}\"" for i in range(220))
+        t0 = time.perf_counter()
+        code, err = run(proj, *bash(big))
+        dt = time.perf_counter() - t0
+        res["total"] += 1
+        print(f"  성능 · 0.3.4 따옴표 660개·10KB 명령: {dt*1000:.0f}ms")
+        if code != OK or dt > 10:
+            res["fails"].append(("0.3.4 T45 큰 따옴표 명령", OK, code, "Bash", f"{dt:.1f}s", err.strip()[:200]))
+    finally:
+        rmtree_rw(proj)
+
+
+def _push_proj_034():
+    """0.3.4 T6·T7·T8 공용 준비: EXECUTE + origin 주소(로컬 경로 — 설정만, 네트워크 없음). check_push_grant_033 과 같은 꼴"""
+    proj = make_project(phase="EXECUTE")
+    git(proj, "remote", "add", "origin", (proj.parent / (proj.name + "-origin.git")).as_posix())
+    return proj
+
+
+def _grant_034(proj, on=True, branch="feat"):
+    """사람이 /refactor:approve 푸시 로 허락한 턴(docs/refactor/.turn-push.t — 1줄 push <가지> · 2줄 만든 시각)을 만들거나 지운다"""
+    for p in (proj / "docs/refactor").glob(".turn-push.*"):
+        p.unlink()
+    if on:
+        (proj / "docs/refactor/.turn-push.t").write_bytes(f"push {branch}\n{int(time.time())}\n".encode("utf-8"))
+
+
+def check_remote_t6_034(res):
+    """0.3.4 T6: 리팩토링 중 원격 저장소 주소·올리기 설정을 바꾸는 명령은 차단(바꾼 뒤의 허락 push 가 다른 저장소로 감 — 로컬 bare 로 조사 때 확인).
+    git remote add|set-url|rename|remove|rm|set-head|set-branches · git config 의 remote.*·url.*·push.*·branch.*·include*·includeIf.* 쓰기 · 편집기.
+    읽기(--get*·--list·값 없는 키 하나)와 그 밖 키(user.name 등)는 통과. 조각마다 따로 본다(앞 조각의 읽기 옵션이 뒤 쓰기를 못 가리게)."""
+    W = "리팩토링 중에는 원격 저장소·올리기 설정을 바꾸지 않습니다"
+    X = "https://example.invalid/x.git"
+    sets = [f"git remote set-url origin {X}", f"git remote set-url --push origin {X}", f"git remote set-url --add --push origin {X}",
+            f"git remote rename origin old && git remote add origin {X}", "git remote remove origin", f"git config remote.origin.url {X}",
+            f"git config remote.origin.pushurl {X}", f"git config --add remote.origin.pushurl {X}", "git config remote.origin.push refs/heads/feat:refs/heads/main",
+            f"git config url.{X}.insteadOf /dev/origin", f"git config url.{X}.pushInsteadOf /", "git config push.default upstream",
+            "git config branch.feat.merge refs/heads/main", "git config include.path /tmp/evil.cfg", f"git config --global url.{X}.pushInsteadOf /",
+            f"git config set remote.origin.pushurl {X}", f"git config --file .git/config remote.origin.pushurl {X}",
+            "sed -i 's#url = .*#url = x#' .git/config", "printf '[url \"x\"]\\n\\tpushInsteadOf = /\\n' >> .git/config",
+            f"git config REMOTE.origin.PUSHURL {X}", f"git \"remote\" set-url origin {X}", f"/usr/bin/git remote set-url origin {X}",
+            f"git.exe remote set-url origin {X}", f"git  remote  set-url  origin  {X}", f"git remote set-url origin {X} # x",
+            f"git remote set-url \\\n origin {X}", f"git config -- remote.origin.pushurl {X}", f"git -C . remote set-url origin {X}",
+            f"git config --replace-all remote.origin.url {X}", "git remote set-head origin main", "git config remote.pushDefault other",
+            f"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0={X} git push origin feat"]
+    # 조사 표 그대로: 지금 판정(R7·R9·R10 은 원격 주소 출력 규칙으로 전부터 2 — 범위 밖)
+    reads = [(OK, "git remote"), (OK, "git remote -v | sed -E 's#//[^/@]*@#//****@#'"), (OK, "git config user.name"), (OK, "git config --get user.email"),
+             (OK, "git config user.name t"), (OK, "git config core.autocrlf false"), (B, "git config --get-regexp '^branch\\.'"),
+             (OK, "git config --list --name-only"), (B, "git remote show origin"), (B, "git remote get-url origin"), (OK, "git config --get push.default"),
+             (OK, "git config push.default"), (OK, "git config --get-regexp 'remote\\..*\\.url' | grep -c x-access-token"), (OK, "git fetch origin"),
+             (OK, "git remote update"), (OK, "git remote prune origin"), (OK, "git branch --set-upstream-to=origin/feat"), (OK, "git config --global user.name"),
+             (OK, "git config --local --get remote.origin.push"), (OK, "git config --get-regexp '^(user|credential)\\.'")]
+    proj = _push_proj_034()
+    try:
+        _grant_034(proj, on=False)
+        _cases_034(res, proj, "T6 단독 차단", [(B, bash(c)) for c in sets])
+        _cases_034(res, proj, "T6 branch -u 는 통과(일부러)", [(OK, bash("git branch -u origin/main"))])
+        _cases_034(res, proj, "T6 조회·정상 그대로", [(w, bash(c)) for w, c in reads])
+        _cases_034(res, proj, "T6 PowerShell", [(B, ps(c)) for c in [sets[0], sets[1], sets[5], sets[6]]])
+        # 반대 방향 짝: 값 없는 키 하나 = 읽기(0) · 값 있음 = 쓰기(2)
+        _cases_034(res, proj, "T6 읽기·쓰기 짝", [(OK, bash("git config remote.origin.pushurl")), (B, bash(f"git config remote.origin.pushurl {X}")),
+                                                (OK, bash("git config --get remote.origin.pushurl")), (B, bash("git config --unset remote.origin.pushurl")),
+                                                (OK, bash("git config get remote.origin.push")), (B, bash("git config unset remote.origin.pushurl")),
+                                                (OK, bash("git config branch.feat.merge")), (B, bash("git config branch.feat.merge refs/heads/main"))], need=W)
+        # 조각마다: 앞 조각의 읽기(--get·--list·값 없는 키)가 뒤 조각의 쓰기를 가리지 않는다 · 다른 철자
+        _cases_034(res, proj, "T6 조각·다른 철자", [(B, bash(c)) for c in [
+            f"git config --get user.name; git config remote.origin.pushurl {X}", "git config push.default; git config push.default upstream",
+            "git config --list && git config url.X.insteadOf Y", "git config --remove-section remote.origin", "git config remove-section remote.origin",
+            "git config --rename-section remote.origin remote.old", "git config --rename-section foo remote.origin", "git config rename-section foo remote.origin",
+            "git config -e", "git config --global --edit", "git config edit", "git config includeIf.gitdir:/x/.path /tmp/evil",
+            "git config --type=bool push.followTags true", "git config --type bool push.followTags true", "git config remote.origin.pushurl `echo X`",
+            "git config remote.origin.pushurl $(cat f)", "git -c core.x=y config remote.origin.pushurl X", "git --no-pager config push.default upstream",
+            "GIT CONFIG REMOTE.ORIGIN.PUSHURL X", "git config remote.origin.pushurl X 2>&1 | tail -1", "cd . && git remote set-url origin X",
+            "git remote set-branches origin feat", "git remote rm origin", "bash -c 'git remote set-url origin X'", "eval git remote set-url origin X",
+            "git config 'remote.origin.pushurl' X"]], need=W)
+        _cases_034(res, proj, "T6 정상 통과", [(OK, bash(c)) for c in [
+            "git config user.name remote.dev", "git config set user.name remote.dev", "git config list", "git config -l", "git config --global --list",
+            "git config --show-origin --get push.default", "git config remote.origin.push > /tmp/x", 'git commit -m "docs: git config remote.origin.url 안내"',
+            'git commit -m "docs: git remote set-url origin 안내"', 'echo "git remote add origin x"', 'grep -rn "git remote set-url" docs',
+            "git config core.editor vim", "git config --unset user.name", 'git config user.name "Kim remote"', "git log --oneline -3",
+            "git config --file .gitmodules submodule.x.url Y"]])
+        # 허락(feat) + 같은 명령 안에서 바꾼 뒤 push — 판정 때 아직 바뀌지 않아 push 판정으로는 못 본다
+        _grant_034(proj)
+        same = [c if "git push" in c else c + " && git push origin feat" for c in sets[:17] + [sets[19], sets[20], sets[21]]]
+        _cases_034(res, proj, "T6 허락 + 같은 명령", [(B, bash(c)) for c in same] + [(B, bash(f"git remote set-url origin {X}; git push origin feat"))])
+        _cases_034(res, proj, "T6 허락 push 그대로", [(OK, bash("git push -u origin feat")), (OK, bash("git push origin feat"))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_push_t7_034(res):
+    """0.3.4 T7: 허락 push 와 같은 명령의 조각은 첫 낱말이 허용 목록(git·echo·printf·tail·head·true·wc·빈 조각)일 때만,
+    git 조각은 둘째 낱말이 옵션·config·remote 가 아닐 때만 — 대입·export·함수 정의·중괄호·제어 낱말·trap 뒤의 폴더·저장소·git 바꾸기를 막는다.
+    허락이 없을 때의 push 차단은 그대로."""
+    P = "git push origin feat"
+    W = "리팩토링 진행 중에는 push를 사람이 직접 합니다"
+    bad = ["{ cd ../other; } && " + P, "X=1 cd ../other && " + P, "builtin cd ../other && " + P, "command cd ../other && " + P,
+           "if true; then cd ../other; fi; " + P, 'git() { command git -C ../other "$@"; }; ' + P, "PATH=/tmp/x:$PATH; " + P,
+           "export GIT_DIR=/x/.git; " + P, "export GIT_WORK_TREE=/x; " + P,
+           "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=/tmp/b.git; " + P,
+           "declare -x GIT_DIR=/x/.git; " + P, "GIT_DIR=/x/.git; export GIT_DIR; " + P, "set -a; GIT_DIR=/x/.git; " + P, "HOME=/tmp/h; " + P,
+           'function git { command git -C ../other "$@"; }; ' + P, "shopt -s expand_aliases; alias git='git -C ../other'; " + P,
+           "trap 'cd ../other' DEBUG; " + P, "time cd ../other; " + P, "! cd ../other; " + P, "eval cd ../other; " + P, "source ./x.sh; " + P,
+           ". ./x.sh; " + P, "while false; do :; done; until true; do cd ..; done; " + P, "case x in x) cd ../other;; esac; " + P,
+           "if true; then pushd ../other; fi; " + P, "CD ../other; " + P, "'cd' ../other; " + P, "{  cd  ../other;  };  " + P,
+           "{\ncd ../other\n}\n" + P, "{ cd ../other; } # x\n" + P, "export PATH=/tmp/x:$PATH; " + P, "hash -p /tmp/x/git git; " + P,
+           "export -f git; " + P, "export GIT_EXEC_PATH=/tmp/x; " + P, "export GIT_SSH_COMMAND='ssh -o ProxyCommand=x'; " + P,
+           "cd ../other && " + P, "(cd ../other); " + P, "x=$(cd ../other); " + P,
+           # git 조각의 둘째 낱말(옵션·config·remote) · 다른 철자
+           "git -C ../other status; " + P, "GIT -C ../other status; " + P, 'git "-C" ../other status; ' + P, "git --git-dir=../o/.git status; " + P,
+           "git config core.hooksPath /tmp/h; " + P, 'git "config" core.hooksPath /tmp/h; ' + P, "git remote -v; " + P, "GIT REMOTE; " + P,
+           "/usr/bin/git status; " + P, "git.exe status; " + P]
+    ps_bad = ["$env:GIT_DIR='C:\\x\\.git'; " + P, "$env:PATH='C:\\x;' + $env:PATH; " + P, "& { Set-Location .. }; " + P, ". { cd .. }; " + P,
+              "Push-Location ..; " + P, "function git { git.exe -C .. @args }; " + P, "Set-Alias git C:\\x\\git.exe; " + P,
+              "[Environment]::SetEnvironmentVariable('GIT_DIR','C:\\x'); " + P, "Set-Location ..; " + P]
+    good = [P, "git push -u origin feat", "git add a && git commit -m x && git push -u origin feat", P + " 2>&1 | tail -3", P + "\necho 끝",
+            "git status --short && " + P, "echo ok; " + P, "true && " + P, P + " | head -5", P + " 2>&1 | wc -l", "printf 'a'; " + P,
+            "GIT status && " + P]
+    # 새로 막히는 정상 꼴(설계서 §5 T7 — 안내하는 꼴은 git push -u origin <가지> 한 줄이라 영향 없음)
+    newly = ["X=1 echo hi; " + P, "export FOO=1; " + P, "if git diff --quiet; then echo clean; fi; " + P]
+    proj = _push_proj_034()
+    try:
+        _grant_034(proj)
+        _cases_034(res, proj, "T7 우회 차단", [(B, bash(c)) for c in bad])
+        _cases_034(res, proj, "T7 우회 차단(PowerShell)", [(B, ps(c)) for c in ps_bad])
+        _cases_034(res, proj, "T7 정상 통과", [(OK, bash(c)) for c in good])
+        _cases_034(res, proj, "T7 새로 막히는 꼴 고정", [(B, bash(c)) for c in newly], need=W)
+        _grant_034(proj, on=False)
+        _cases_034(res, proj, "T7 허락 없음 그대로 차단", [(B, bash(c)) for c in [P, "git push -u origin feat", "git status --short && " + P]], need=W)
+    finally:
+        rmtree_rw(proj)
+
+
+def check_push_t8_034(res):
+    """0.3.4 T8: 허락 push 의 작업 폴더가 프로젝트 안의 다른 저장소(중첩 저장소·서브모듈(.git 파일)·프로젝트 안 링크 → 밖 저장소·
+    node_modules 안 저장소·같은 저장소 워크트리)면 차단 — push 는 작업 폴더의 저장소 원격으로 간다(조사 때 로컬 bare 로 확인). 정상 폴더는 통과."""
+    W = "프로젝트 안의 다른 git 저장소"
+    proj = _push_proj_034()
+    outside = pathlib.Path(tempfile.mkdtemp(prefix="t8out-"))
+    try:
+        sub = proj / "vendor/sub"
+        sub.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(sub)], check=True, capture_output=True)
+        mod = proj / "mods/m"   # 서브모듈 꼴: .git 이 파일
+        mod.mkdir(parents=True)
+        lf(mod / ".git", "gitdir: ../../.git/modules/m\n")
+        nm = proj / "node_modules/pkg"
+        nm.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(nm)], check=True, capture_output=True)
+        git(proj, "worktree", "add", "-q", str(proj / "wt"), "-b", "wtb")
+        subprocess.run(["git", "init", "-q", str(outside)], check=True, capture_output=True)
+        dirs = [sub, str(sub) + "/", sub / ".", sub / "src", mod, nm, proj / "wt"]
+        try:
+            os.symlink(outside, proj / "lnk")
+            dirs.append(proj / "lnk")
+        except OSError:
+            pass   # 링크를 못 만드는 OS(권한 없는 Windows)에서는 링크 칸만 건너뛴다
+        (proj / "vendor/sub/src").mkdir()
+        (proj / "src").mkdir(exist_ok=True)
+        normal = [proj, proj / "src", proj / "docs/refactor", str(proj / "src") + "/..", proj / "vendor", proj / "mods"]
+        _grant_034(proj)
+        for d in dirs:
+            for call in (bash("git push origin feat"), ps("git push -u origin feat")):
+                _cases_034(res, proj, f"T8 중첩 차단 {pathlib.Path(str(d)).name}", [(B, call)], need=W, extra={"cwd": str(d)})
+        for d in normal:
+            for call in (bash("git push origin feat"), ps("git push -u origin feat")):
+                _cases_034(res, proj, f"T8 정상 통과 {pathlib.Path(str(d)).name}", [(OK, call)], extra={"cwd": str(d)})
+    finally:
+        rmtree_rw(proj)
+        rmtree_rw(outside)
+
+
+def check_msgs_034(res):
+    """0.3.4 문구(판정은 그대로): §4 기준선 허용 안내의 PowerShell 대안(Set-Content)은 Windows 경로 프로젝트(WINPATH=1)에서만 ·
+    §9 기준선 허용은 승인할 때 자동으로 열림 — 닫혀 있으면 /refactor:approve 허용 · §2-5 가지 옮기기 차단에 /refactor:approve 새 가지 ·
+    §10-5 배포 차단 안내의 /refactor:approve 합치기 는 gh pr merge 일 때만."""
+    ed = ("Edit", {"file_path": "tests/baseline/money.test.ts", "old_string": "expect", "new_string": "expect"})
+    wr = ("Write", {"file_path": "docs/refactor/.allow-baseline-edit", "content": "P1-1\n"})
+    AUTO = "🛠 단계의 기준선 허용은 승인할 때 자동으로 열립니다 — 닫혀 있으면"
+
+    def msg(proj, call, ostype=None):
+        old = os.environ.get("OSTYPE")
+        try:
+            if ostype:
+                os.environ["OSTYPE"] = ostype   # bash 는 환경의 OSTYPE 을 그대로 쓴다 — guard 의 WINPATH 판정(msys·cygwin)을 흉내
+            return run(proj, *call)
+        finally:
+            if ostype:
+                if old is None:
+                    os.environ.pop("OSTYPE", None)
+                else:
+                    os.environ["OSTYPE"] = old
+
+    def case(title, ok, detail):
+        res["total"] += 1
+        if not ok:
+            res["fails"].append(("0.3.4 문구 " + title, "", "", "", "", detail.strip()[:400]))
+
+    proj = make_project(phase="EXECUTE")
+    try:
+        (proj / "docs/refactor/.allow-baseline-edit").unlink(missing_ok=True)
+        code, err = msg(proj, ed)
+        case("§9 기준선 차단 안내 = 자동으로 열림 + 닫혀 있으면 허용", code == B and AUTO in err and "/refactor:approve 허용 P1-1 P1-2" in err, err)
+        if os.name != "nt":   # Windows 러너는 늘 WINPATH=1(OSTYPE msys · C:/ 경로)이라 '없음' 칸은 리눅스·맥에서만
+            case("§4 WINPATH=0 → Set-Content 없음", code == B and "Set-Content" not in err, err)
+        code, err = msg(proj, ed, ostype="msys")
+        case("§4 WINPATH=1 → Set-Content 있음", code == B and "Set-Content -Encoding ascii" in err, err)
+        code, err = msg(proj, wr)
+        case("§9 사람 전용 파일 안내 = 자동으로 열림", code == B and AUTO in err and "Set-Content" not in err, err)
+        code, err = run(proj, *bash("git switch main"))
+        case("§2-5 가지 옮기기 차단 = 새 가지 안내", code == B and "/refactor:approve 새 가지" in err, err)
+        for c in ["gh pr merge 68 --rebase", "GH PR MERGE 68 --squash", "bash -c 'gh pr merge 68'"]:
+            code, err = run(proj, *bash(c))
+            case(f"§10-5 {c} → 합치기 안내", code == B and "/refactor:approve 합치기" in err, err)
+        for c in ["vercel --prod", "railway up", "gh release create v1", "npm run deploy"]:
+            code, err = run(proj, *bash(c))
+            case(f"§10-5 {c} → 합치기 안내 없음", code == B and "합치기" not in err and "필요한 명령을 사람에게 안내하세요." in err, err)
+    finally:
+        rmtree_rw(proj)
+
+
+def check_fixed_034(res):
+    """0.3.4 고정 시험(안전장치 동작은 그대로 — 지금 판정을 고정): n14 새 가지 뒤에도 Claude 의 가지 옮기기는 차단 ·
+    §3 기준선 커밋은 BASELINE(승인 유효)+go 턴에서 통과 · PLAN+go 턴의 commit 은 차단 ·
+    §8 한 차례 안에서 current_step 을 P1-1 진행 중 → 완료 → P1-2 진행 중으로 바꿔 가며 편집·단계 커밋 통과, 기준선 허용은 current_step 을 따라감 ·
+    g12 gh pr merge 는 차단, gh pr view·checks 는 통과."""
+    run_sh = (HOOKS / "run.sh").as_posix()
+    W = f'bash "{run_sh}" refactor-safe-run -- '
+    made = []
+    try:
+        # n14: 새 가지(입력 훅의 승인 스크립트가 만듦)를 위해 안전장치에 예외를 내지 않았다
+        proj = make_project(phase="EXECUTE")
+        made.append(proj)
+        _cases_034(res, proj, "n14 가지 옮기기 차단", [(B, bash("git switch -c x origin/main")), (B, bash("git switch main")),
+                                                    (B, bash("git checkout -b x origin/main")), (OK, bash("git switch -c x"))])
+        # g12
+        _cases_034(res, proj, "g12 gh pr", [(B, bash("gh pr merge 68 --rebase")), (OK, bash("gh pr view 68 --json state")), (OK, bash("gh pr checks 68"))])
+        # §3 기준선 커밋: BASELINE + 기준선 계획 승인 + go 턴
+        proj = make_project(phase="BASELINE", allow=(".turn",), baseline_approved=True)
+        made.append(proj)
+        _cases_034(res, proj, "§3 BASELINE+승인+go 턴 기준선 커밋 통과", [
+            (OK, bash("git add -- tests/baseline/new.test.ts docs/refactor/STATE.md docs/refactor/BASELINE.md")),
+            (OK, bash("git diff --cached --stat")), (OK, bash(W + 'git commit -m "test: 기준선 테스트 추가"'))])
+        proj = make_project(phase="PLAN", allow=(".turn",))
+        made.append(proj)
+        _cases_034(res, proj, "§3 PLAN+go 턴 commit 차단", [(B, bash(W + 'git commit -m "test: 기준선 테스트 추가"')), (B, bash('git commit -m "x"'))])
+        # §8 이어서 실행: 한 차례(.turn ready = P1-1 P1-2) 안에서 current_step 이 바뀌어 가도 편집·단계 커밋은 통과, 기준선 허용은 current_step 을 따른다
+        proj = project_032(current_step='"P1-1 (진행 중)"')
+        made.append(proj)
+        lf(proj / "docs/refactor/.turn.t", "go t\nready P1-1 P1-2\n")
+        (proj / "docs/refactor/.allow-baseline-edit").write_bytes(b"P1-2\n")
+        money = ("Edit", {"file_path": "tests/baseline/money.test.ts", "old_string": "expect", "new_string": "expect"})
+        code_ed = ("Edit", {"file_path": "src/app.ts", "old_string": "export", "new_string": "export"})
+        commit = [(OK, bash("git add -- src/app.ts docs/refactor/STATE.md")), (OK, bash(W + 'git commit -m "refactor: P1-1 첫 단계"'))]
+        for cs, base in [('"P1-1 (진행 중)"', B), ('"P1-1 (완료)"', B), ('"P1-2 (진행 중)"', OK)]:
+            sp = proj / "docs/refactor/STATE.md"
+            lf(sp, "---\nrefactor_state: 1\nproject: \"t\"\nphase: EXECUTE\ngate: G3-step\n" + f"current_step: {cs}\n---\n")
+            _cases_034(res, proj, f"§8 {cs} 편집·단계 커밋 통과", [(OK, code_ed)] + commit)
+            _cases_034(res, proj, f"§8 {cs} P1-2 기준선", [(base, money)])
+    finally:
+        for p in made:
+            rmtree_rw(p)
 
 
 if __name__ == "__main__":

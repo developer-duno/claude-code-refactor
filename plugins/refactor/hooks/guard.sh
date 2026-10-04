@@ -441,14 +441,17 @@ MSG_APPROVE="사용자에게 /refactor:approve <단계ID> (기준선은 /refacto
 # 안내 예시의 단계 ID: /refactor:go 턴이면 이번 실행 대기 단계(.turn 의 ready), 아니면 예시
 abl_ex="P1-1 P1-2"
 if [ "$go_turn" = 1 ] && [ -n "$t_ready" ] && [ "$t_ready" != "?" ]; then abl_ex=${t_ready//[!A-Za-z0-9_ -]/}; [ -n "${abl_ex// /}" ] || abl_ex="P1-1 P1-2"; fi
-MSG_ALLOW_B="기준선을 새 동작으로 바꿔야 하는 🛠 단계라면 멈추고 사용자에게 입력창에 /refactor:approve 허용 $abl_ex 를 입력해 달라고 요청하세요(터미널이 없어도 됩니다 — 원격·VS Code). 터미널에서는 printf '$abl_ex\n' > \"$rdir/.allow-baseline-edit\" 도 됩니다(PowerShell 은 Set-Content -Encoding ascii -Path \"…\" -Value \"$abl_ex\"). 이번에 승인된 🛠 단계 ID 를 모두 적으면 한 번으로 끝 · 적힌 단계가 모두 끝나면 저절로 닫힙니다. 고칠 수 있는 파일은 지금 실행 중인 단계의 카드에 적힌 파일('깨질 것으로 예상되는 기준선' 칸에 백틱으로 적힌 것)뿐입니다."
+# 0.3.4 §4: PowerShell 대안(Set-Content)은 프로젝트 경로가 Windows 꼴일 때만 — 리눅스·WSL 경로(/home/…)는 PowerShell 에서 못 쓴다
+abl_ps=""; [ "$WINPATH" = 1 ] && abl_ps="(PowerShell 은 Set-Content -Encoding ascii -Path \"…\" -Value \"$abl_ex\")"
+# 0.3.4 §9: 🛠 카드의 기준선 허용은 승인할 때 자동으로 열린다 — 닫혀 있을 때만 사람에게 허용을 부탁한다
+MSG_ALLOW_B="🛠 단계의 기준선 허용은 승인할 때 자동으로 열립니다 — 닫혀 있으면: 기준선을 새 동작으로 바꿔야 하는 🛠 단계라면 멈추고 사용자에게 입력창에 /refactor:approve 허용 $abl_ex 를 입력해 달라고 요청하세요(터미널이 없어도 됩니다 — 원격·VS Code). 터미널에서는 printf '$abl_ex\n' > \"$rdir/.allow-baseline-edit\" 도 됩니다$abl_ps. 이번에 승인된 🛠 단계 ID 를 모두 적으면 한 번으로 끝 · 적힌 단계가 모두 끝나면 저절로 닫힙니다. 고칠 수 있는 파일은 지금 실행 중인 단계의 카드에 적힌 파일('깨질 것으로 예상되는 기준선' 칸에 백틱으로 적힌 것)뿐입니다."
 # 허용은 이미 있는데 실행 중 단계가 안 맞아 막힐 때(WAIT · OPEN 인데 카드 밖 파일)의 안내 — 사람에게 다시 부탁할 일이 아니다(검사 보완 F2)
 MSG_ALLOW_CS="허용은 이미 있습니다 — STATE.md 의 current_step 을 지금 실행할 단계 \"<ID> (진행 중)\" 으로 먼저 고친 뒤 다시 하세요(사람에게 부탁할 것 없음). 카드에 없는 기준선 파일은 고치지 않습니다."
 # WAIT 일 때만 덧붙인다(R3 — OPEN 은 실행 중 단계가 이미 허용 파일에 있어 까닭이 다르다)
-MSG_ALLOW_K5="current_step 이 맞는데도 막히면 그 단계가 허용 파일에 없는 것입니다 — 사용자에게 /refactor:approve 허용 <그 ID> 를 부탁하세요."
+MSG_ALLOW_K5="current_step 이 맞는데도 막히면 그 단계가 허용 파일에 없는 것입니다(승인할 때 자동으로 열리지만 닫혔을 수 있음) — 사용자에게 /refactor:approve 허용 <그 ID> 를 부탁하세요."
 abl_hint() { case "$abl_mode" in WAIT) AH="$MSG_ALLOW_CS $MSG_ALLOW_K5" ;; OPEN) AH=$MSG_ALLOW_CS ;; *) AH=$MSG_ALLOW_B ;; esac; }   # 기준선 차단의 → 안내 → AH(abl_file_ok·abl_any_open 뒤에 부른다)
 MSG_ALLOW_M="구조 변경은 새 마이그레이션 파일로 만드세요. 이미 있는 파일을 꼭 고쳐야 하면 사람에게 요청: 터미널에서 touch \"$rdir/.allow-migration-edit\" (CLI 라면 입력창에 ! touch \"…\" 도 됨 · 끝나면 지우기)."
-MSG_HUMAN="필요하면 사용자에게 입력창에 /refactor:approve 허용 $abl_ex 를 입력해 달라고 요청하세요(터미널이 없어도 됩니다 — 원격·VS Code). 터미널에서는 printf '$abl_ex\n' > \"$rdir/.allow-baseline-edit\" 도 됩니다(CLI 라면 입력창에 ! printf … 도 됨). 적힌 단계가 모두 끝나면 저절로 닫히고, 지금 실행 중인 단계의 카드에 적힌 파일만 고칠 수 있습니다."
+MSG_HUMAN="🛠 단계의 기준선 허용은 승인할 때 자동으로 열립니다 — 닫혀 있으면 사용자에게 입력창에 /refactor:approve 허용 $abl_ex 를 입력해 달라고 요청하세요(터미널이 없어도 됩니다 — 원격·VS Code). 터미널에서는 printf '$abl_ex\n' > \"$rdir/.allow-baseline-edit\" 도 됩니다(CLI 라면 입력창에 ! printf … 도 됨). 적힌 단계가 모두 끝나면 저절로 닫히고, 지금 실행 중인 단계의 카드에 적힌 파일만 고칠 수 있습니다."
 
 normpath() { # $1 → NP (절대경로, / 구분자, ./ 와 ../ 정리). $2 = 상대경로의 기준 폴더(없으면 프로젝트)
   local p=${1//"$BS"/$SL} re_dot='/\./' re_up='/[^/]+/\.\./' re_dbl='//+' b
@@ -982,15 +985,46 @@ interp_writes() {
   return 0
 }
 
+# 0.3.4 T5: $1 이 따옴표 밖에서 끝나는가(bash 의 따옴표 규칙) — 밖의 \X · '…'(안은 그대로) · "…"(안의 \X) · $'…'(안의 \X) · $"…" · $ 다음 한 글자.
+#   따옴표·역슬래시가 없으면 정규식을 돌리지 않는다. 명령 치환 $( )·` ` 안의 따옴표는 따로 보지 않는다(지금도 그런 문자열은 지우지 않음)
+RE_QOUT='^([^"'"'"'\\$]|\\.|[$]('"'"'([^'"'"'\\]|\\.)*'"'"'|"([^"\\]|\\.)*"|\\.|[^'"'"'"\\]|$)|'"'"'[^'"'"']*'"'"'|"([^"\\]|\\.)*")*$'
+q_outside() { case "$1" in *[\"\'\\]*) [[ $1 =~ $RE_QOUT ]] ;; *) return 0 ;; esac; }
+# 앵커가 따옴표 안일 때 그 따옴표가 닫히는 자리까지 한 번에 넘긴다(한 글자씩 넘기면 큰따옴표 안에 앵커가 많은 긴 명령이 느려진다) →
+#   QN = $2(앵커부터의 원문)에서 넘길 글자 수 · -1 = 끝까지 안 닫힘(뒤에는 따옴표 밖 자리가 없다). $1 = 마지막 밖 자리부터 앵커 앞까지(따옴표 안에서 끝남)
+RE_QPRE='^([^"'"'"'\\$]|\\.|[$]('"'"'([^'"'"'\\]|\\.)*'"'"'|"([^"\\]|\\.)*"|\\.|[^'"'"'"\\]|$)|'"'"'[^'"'"']*'"'"'|"([^"\\]|\\.)*")*'
+RE_Q1='^('"'"'[^'"'"']*'"'"'|"([^"\\]|\\.)*"|[$]'"'"'([^'"'"'\\]|\\.)*'"'"'|[$]"([^"\\]|\\.)*"|\\.)'
+q_skip() {
+  local r
+  [[ $1 =~ $RE_QPRE ]]; r=${1:${#BASH_REMATCH[0]}}
+  QN=1; [ -n "$r" ] || return 0
+  if [[ $r$2 =~ $RE_Q1 ]] && [ "${#BASH_REMATCH[0]}" -gt "${#r}" ]; then QN=$((${#BASH_REMATCH[0]} - ${#r})); else QN=-1; fi
+}
 # 따옴표 인자 하나를 _Q_로 바꾼다(명령 치환이 든 것은 그대로). $1 정규식(따옴표 인자가 마지막 괄호) $2 그 괄호 번호 $3 원문 → BQ
+#   0.3.4 T4·T5: 지울 따옴표 인자의 앞과 끝이 둘 다 따옴표 밖일 때만 지운다(따옴표 안의 ; 를 앵커로 읽거나 "a\" 를 닫힌 따옴표로 읽어
+#   cat ';git commit -m x'; git push -f; cat 'y' 의 밖 명령을 문구로 지우지 않게). 아니면 한 글자 넘겨 다시 찾는다.
+#   밖 판정은 "마지막으로 밖이었던 자리"(qt 의 시작) 뒤 글자만 다시 잰다 — 앞부분 전체를 매번 재면 긴 명령에서 느려진다
 blank_quoted() {
-  local re=$1 gi=$2 rest=$3 out="" m0 mq re_cs='[$][(]|`' re_se='^[(][[:space:]]*(echo|printf|write-output)'
+  local re=$1 gi=$2 rest=$3 out="" m0 mq pre qt="" qa=0 re_cs='[$][(]|`' re_se='^[(][[:space:]]*(echo|printf|write-output)'
+  case "$rest" in *[\"\'\\]*) qa=1 ;; esac
   while [[ $rest =~ $re ]]; do
     m0=${BASH_REMATCH[0]}; mq=${BASH_REMATCH[$gi]}
-    out="$out${rest%%"$m0"*}"
+    pre=${rest%%"$m0"*}
+    if [ "$qa" = 1 ]; then
+      if ! q_outside "$qt$pre"; then   # 앵커가 따옴표 안 → 그 따옴표 끝까지 넘김
+        q_skip "$qt$pre" "${rest:${#pre}}"
+        [ "$QN" -lt 0 ] && break
+        QN=$((${#pre} + QN)); out="$out${rest:0:$QN}"; rest=${rest:$QN}; qt=""; continue
+      fi
+      if ! q_outside "$qt$pre${m0%"$mq"}" || ! q_outside "$qt$pre$m0"; then   # 인자 앞·끝이 따옴표 안("a\" 꼴·$'…\'…') → 한 글자 넘김
+        out="$out$pre${m0:0:1}"; qt="$qt$pre${m0:0:1}"; rest=${rest:$((${#pre} + 1))}; continue
+      fi
+    fi
+    out="$out$pre"
     rest=${rest#*"$m0"}
     # $(echo "…") 의 문구는 명령의 인자가 되므로 지우지 않는다(cat $(echo ".env"))
-    if [[ $mq =~ $re_cs ]] || { [ "${out: -1}" = '$' ] && [[ $m0 =~ $re_se ]]; }; then out="$out$m0"; else out="$out${m0%"$mq"}_Q_"; fi
+    if [[ $mq =~ $re_cs ]] || { [ "${out: -1}" = '$' ] && [[ $m0 =~ $re_se ]]; }; then
+      out="$out$m0"; case "$m0" in *'$') qt="$qt$pre$m0" ;; *) qt="" ;; esac   # 끝이 $ 면 다음 따옴표가 $'…' 가 되므로 그 자리부터 다시 재지 않는다
+    else out="$out${m0%"$mq"}_Q_"; qt=""; fi
   done
   BQ="$out$rest"
 }
@@ -1007,17 +1041,30 @@ env_near() {
 under_proj() { case "$1" in "$proj"/*) return 0 ;; esac; return 1; }
 
 # echo·printf 의 따옴표 없는 글자도 뺀다(echo .env >> .gitignore 는 막지 않게). > 리다이렉트 대상과 $( ) 는 남긴다 → BQ
+#   0.3.4 T5: 앵커(; & | ( 줄 머리)와 지울 인자의 끝이 둘 다 따옴표 밖일 때만(blank_quoted 와 같은 판정 · 같은 qt)
 blank_echo_words() {
-  local rest=$1 out="" m0 lead args kept r
+  local rest=$1 out="" m0 lead args kept r pre qt="" qa=0
   local re='(^|[;&|(])([[:space:]]*(echo|printf|write-host|write-output))([^;&|]*)'
   local re_r='[0-9]*>>?[[:space:]]*[^[:space:];&|<>]+' re_cs='[$][(]|`'
+  case "$rest" in *[\"\'\\]*) qa=1 ;; esac
   while [[ $rest =~ $re ]]; do
     m0=${BASH_REMATCH[0]}; lead="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; args=${BASH_REMATCH[4]}
-    out="$out${rest%%"$m0"*}"; rest=${rest#*"$m0"}
-    if [[ $args =~ $re_cs ]] || { [ "${out: -1}" = '$' ] && [ "${m0:0:1}" = '(' ]; }; then out="$out$m0"; continue; fi   # $(echo .env) 는 인자가 된다
+    pre=${rest%%"$m0"*}
+    if [ "$qa" = 1 ]; then
+      if ! q_outside "$qt$pre"; then
+        q_skip "$qt$pre" "${rest:${#pre}}"
+        [ "$QN" -lt 0 ] && break
+        QN=$((${#pre} + QN)); out="$out${rest:0:$QN}"; rest=${rest:$QN}; qt=""; continue
+      fi
+      if ! q_outside "$qt$pre$m0"; then out="$out$pre${m0:0:1}"; qt="$qt$pre${m0:0:1}"; rest=${rest:$((${#pre} + 1))}; continue; fi
+    fi
+    out="$out$pre"; rest=${rest#*"$m0"}
+    if [[ $args =~ $re_cs ]] || { [ "${out: -1}" = '$' ] && [ "${m0:0:1}" = '(' ]; }; then   # $(echo .env) 는 인자가 된다
+      out="$out$m0"; case "$m0" in *'$') qt="$qt$pre$m0" ;; *) qt="" ;; esac; continue
+    fi
     kept=""
     while [[ $args =~ $re_r ]]; do r=${BASH_REMATCH[0]}; kept="$kept $r"; args=${args#*"$r"}; done
-    out="$out$lead _Q_$kept "
+    out="$out$lead _Q_$kept "; qt=""
   done
   BQ="$out$rest"
 }
@@ -1798,13 +1845,21 @@ hv_db() {
 #   $2 = 원격 DB 주소 판정용 문자열(원형은 lr, 사본은 그 사본)
 hv_deploy() {
   local t=$1 r=${2:-$1} remote_db=0
-  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|redeploy))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|pages[[:space:]]+deploy|secret)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
+  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|redeploy)([[:space:]\"')\`;&|]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([[:space:]\"')\`;&|]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([[:space:]\"')\`;&|]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([[:space:]\"')\`;&|]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
   local re_pkg_deploy="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?([a-z0-9_-]+:)?(deploy|release|publish|ship)([[:space:]:]|$)"
   if has "$t" "$re_deploy" || has "$t" "$re_pkg_deploy"; then
-    block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+    # 0.3.4 §10-5: PR 합치기(gh pr merge)가 걸렸을 때만 입력창 명령을 안내한다(합치기는 승인 스크립트가 검사 뒤 직접 한다)
+    local dh="필요한 명령을 사람에게 안내하세요."
+    has "$t" "${S}gh[[:space:]]+pr[[:space:]]+merge" && dh="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요."
+    block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "$dh"
   fi
   local re_pkg_db="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?[a-z0-9_:-]*(migrat[a-z]*|(db|prisma|supabase|drizzle)[:_-](push|migrate|reset|seed|deploy|drop|up|apply))"
-  if has "$t" 'supabase[[:space:]]+(db[[:space:]]+push|functions[[:space:]]+deploy|secrets[[:space:]]+set)|supabase[[:space:]]+migration[[:space:]]+(up|repair)[^;&|]*(--linked|--db-url)|prisma[[:space:]]+(migrate[[:space:]]+(deploy|resolve)|db[[:space:]]+(push|execute))|drizzle-kit[[:space:]]+(push|migrate)|sequelize[^;&|]*db:migrate|knex[^;&|]*migrate:(latest|up|down|rollback)|alembic[[:space:]]+(upgrade|downgrade)|manage\.py[[:space:]]+migrate|rails[[:space:]]+db:migrate|rake[[:space:]]+db:migrate|artisan[[:space:]]+migrate' \
+  # 0.3.4 T1: 마이그레이션 상태 조회(rails·rake db:migrate:status[:<DB 이름>] · artisan migrate:status · sequelize db:migrate:status)는 적용이 아니다 —
+  #   그 낱말만(끝 경계까지) 공백으로 바꾼 사본으로 아래 CLI 규칙을 본다. 쓰기 꼴(db:migrate:reset·db:migrate:primary·migrate:rollback …)은 지금처럼 접두로 막힌다.
+  #   프로젝트 스크립트 이름(re_pkg_db — npm run db:migrate:status)은 무엇을 하는지 몰라 원래 문자열로 본다
+  local tm=$t re_mst="([[:space:]\"'])(db:)?migrate:status(:[a-z0-9_-]+)?([[:space:]\"')\`;&|]|$)"
+  while [[ $tm =~ $re_mst ]]; do tm=${tm/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]} ${BASH_REMATCH[4]}"}; done
+  if has "$tm" 'supabase[[:space:]]+(db[[:space:]]+push|functions[[:space:]]+deploy|secrets[[:space:]]+set)|supabase[[:space:]]+migration[[:space:]]+(up|repair)[^;&|]*(--linked|--db-url)|prisma[[:space:]]+(migrate[[:space:]]+(deploy|resolve)|db[[:space:]]+(push|execute))|drizzle-kit[[:space:]]+(push|migrate)|sequelize[^;&|]*db:migrate|knex[^;&|]*migrate:(latest|up|down|rollback)|alembic[[:space:]]+(upgrade|downgrade)|manage\.py[[:space:]]+migrate|rails[[:space:]]+db:migrate|rake[[:space:]]+db:migrate|artisan[[:space:]]+migrate' \
     || has "$t" "$re_pkg_db" \
     || has "$t" "${S}docker(-compose|[[:space:]]+compose)[^;&|]*[[:space:]]down[^;&|]*[[:space:]](-v|--volumes)([[:space:]]|$)" \
     || has "$t" '(^|[[:space:]:])db:(reset|drop|wipe|purge)([[:space:]]|$)' \
@@ -2761,6 +2816,63 @@ remote_url_out() {
   done
   return 1
 }
+# 0.3.4 T6: 원격 저장소·올리기 설정을 바꾸는 git 명령인가 → 0. 리팩토링 중에만 부른다(바꾼 뒤의 허락 push 가 다른 저장소로 갈 수 있다).
+#   git remote add|set-url|rename|remove|rm|set-head|set-branches(set-head: origin/HEAD 는 승인 스크립트가 기본 가지를 가리는 데 쓴다) ·
+#   git config 가 remote.*·url.*·push.*·branch.*·include.*·includeIf.* 키를 쓰는 꼴 — 옛 문법(키 + 값 · --add·--unset·--unset-all·
+#   --replace-all·--rename-section·--remove-section) · 새 문법(set·unset·rename-section·remove-section) · 편집기(-e·--edit·edit — 어느 키든 바뀐다).
+#   읽기(--get*·-l/--list·get·list·값 없는 키 하나)는 통과. 조각(; & | 줄바꿈)마다 따로 본다 — 앞 조각의 읽기 옵션이 뒤 조각의 쓰기를 가리지 않게.
+#   git branch -u(이 가지의 추적 대상)는 push 가 가는 저장소를 바꾸지 않아 보지 않는다
+rmt_write() {
+  local s=$1 c args w mode nv skip dd wr rd prot ren IFS=$' \t\n'
+  local re_rm="git(\.exe)?([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+remote([[:space:]]+-[^[:space:]]+)*[[:space:]]+(add|set-url|rename|remove|rm|set-head|set-branches)([[:space:]]|$)"
+  local re_cf="git(\.exe)?([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+config(([[:space:]].*)?)$"
+  local re_pk='^(remote|url|push|branch|include|includeif)([.]|$)'
+  has "$s" 'git(\.exe)?[[:space:]]' || return 1
+  s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//&/$NL}
+  while [ -n "$s" ]; do
+    c=${s%%"$NL"*}; if [ "$c" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    has "$c" "$re_rm" && return 0
+    [[ $c =~ $re_cf ]] || continue
+    args=${BASH_REMATCH[4]}; mode=""; nv=0; skip=0; dd=0; wr=0; rd=0; prot=0; ren=0
+    set -f
+    for w in $args; do
+      case "$w" in '#'*) break ;; esac   # 따옴표 없는 # 부터는 주석
+      while :; do case "$w" in [\"\'\(\`]*) w=${w#?} ;; *) break ;; esac; done
+      while :; do case "$w" in *[\"\'\)\`]) w=${w%?} ;; *) break ;; esac; done
+      [ -n "$w" ] || continue
+      [ "$skip" = 1 ] && { skip=0; continue; }
+      case "$w" in *'>'*|'<'*) case "$w" in *'>'|'<') skip=1 ;; esac; continue ;; esac   # 리다이렉트(> 파일)는 인자가 아니다
+      if [ "$dd" = 0 ]; then
+        case "$w" in
+          --) dd=1; continue ;;
+          -e|--edit) wr=2; continue ;;
+          --rename-section) wr=1; ren=1; continue ;;
+          --add|--unset|--unset-all|--replace-all|--remove-section) wr=1; continue ;;
+          --get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|-l|--list) rd=1; continue ;;
+          -f|--file|--blob|--type|--default|--comment|--value) skip=1; continue ;;
+          -*) continue ;;
+        esac
+        if [ -z "$mode" ] && [ "$nv" = 0 ]; then
+          case "$w" in
+            rename-section) mode=w; ren=1; continue ;;
+            set|unset|remove-section) mode=w; continue ;;
+            edit) wr=2; continue ;;
+            get|list) mode=r; continue ;;
+          esac
+        fi
+      fi
+      nv=$((nv + 1))   # 키(1) · 값 또는 rename-section 의 새 이름(2)
+      [[ $w =~ $re_pk ]] && { [ "$nv" = 1 ] || { [ "$nv" = 2 ] && [ "$ren" = 1 ]; }; } && prot=1
+    done
+    set +f
+    [ "$wr" = 2 ] && return 0
+    [ "$prot" = 1 ] || continue
+    if [ "$wr" = 1 ] || [ "$mode" = w ]; then return 0; fi
+    [ "$rd" = 1 ] || [ "$mode" = r ] && continue
+    [ "$nv" -ge 2 ] && return 0   # 옛 문법 키 + 값
+  done
+  return 1
+}
 # 인터프리터로 docs/refactor 안 파일이나 .md 문서를 실행하는가. 코드 옵션(셸 -c·-[a-z]*c · python -c · node·bun·deno -e·-p·--eval·--print ·
 #   ruby·perl -e·-E) 뒤 토큰은 코드 문자열이라 파일로 보지 않는다(bash -e·-p · sh -e 는 코드 옵션이 아니다)
 #   (bash -lc 'f=~/x.md; cat a.md >> "$f"' 는 실행이 아니다. 그 안의 bash x.md · source a.md 는 따옴표를 경계로 따로 잡힌다). 옵션은 대소문자를 가린다(python -E 는 코드 옵션 아님)
@@ -2876,9 +2988,9 @@ mk_views() {
 mk_lq() {
   local m0 dv dk=0
   # 0.3.3 K2: 안전 실행기로 감싼 명령(…run.sh" refactor-safe-run -- git commit -m "…" — 7-execute 5-1 의 단계 커밋)도 그냥 꼴과 같이 문구를 뺀다
-  #   (R3: 그 접두는 명령 시작 자리의 bash <경로> 뒤에서만 — 따옴표 안의 글자로 경계를 어긋나게 읽지 않게. 그룹이 둘 늘어 문구 그룹 = 6)
+  #   (R3: 그 접두는 명령 시작 자리의 bash <경로> 뒤에서만 — 따옴표 안의 글자로 경계를 어긋나게 읽지 않게. 그룹이 둘 늘어 문구 그룹 = 6 · 0.3.4 T4: 경로 묶음도 \" 를 따옴표 끝으로 보지 않아 "a\" 꼬아 쓰기로 경계가 어긋나지 않게 — 문구 그룹 = 7)
   # 0.3.2: 가운데 묶음은 > 를 건너지 않는다 — echo x >> "docs/refactor/APPROVALS.log" 의 리다이렉트 대상(따옴표)을 문구로 보고 비우면 쓰기 판정이 대상을 못 본다
-  blank_quoted "(^|[;&|(]|(^|[;&|(])[[:space:]]*bash[[:space:]]+(\"[^\"]*\"|'[^']*'|[^[:space:];&|\"']+)[[:space:]]+refactor-safe-run[[:space:]]+--[[:space:]])[[:space:]]*(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep|git[[:space:]]+log|git[[:space:]]+commit|echo|printf|write-host|write-output)([^;&|\"'>]*)(\"([^\"\\\\]|\\\\.)*\"|'[^']*')" 6 "$1"
+  blank_quoted "(^|[;&|(]|(^|[;&|(])[[:space:]]*bash[[:space:]]+(\"([^\"\\\\]|\\\\.)*\"|'[^']*'|[^[:space:];&|\"']+)[[:space:]]+refactor-safe-run[[:space:]]+--[[:space:]])[[:space:]]*(grep|egrep|fgrep|rg|ag|ack|git[[:space:]]+grep|git[[:space:]]+log|git[[:space:]]+commit|echo|printf|write-host|write-output)([^;&|\"'>]*)(\"([^\"\\\\]|\\\\.)*\"|'[^']*')" 7 "$1"
   unquote_simple "$BQ"; LQ=$UQ   # 검색어·문구를 뺀 뒤 단순 따옴표 인자는 벗긴다(git reset "--hard" → git reset --hard)
   # 보내는 데이터는 실행되지 않는다 — curl·wget 류의 -d·--data·--json·-F 따옴표 값과 JSON 값("키":"값")은 비운다
   #   (curl -d '{"cmd":"git reset --hard"}' …). $( )·` ` 가 든 큰따옴표 값은 실행되므로 그대로 둔다
@@ -2977,7 +3089,7 @@ push_grant() {
 }
 # $1 판정용 문자열 하나가 "허락된 가지($2)로 보내는 정확한 push 한 번" 인가. 조각(&& || ; | & ( ) 백틱 줄바꿈)으로 나눠
 #   push 낱말(따옴표 뗀 뒤 대소문자 무시)이 정확히 한 번 · 그 조각이 git push [-u|--set-upstream] origin <가지>(가지는 따옴표 한 쌍까지) [2>&1] 뿐 ·
-#   그 조각에 \ 없음 · 명령 어디에도 작업 폴더를 바꾸는 조각(cd·pushd·popd·chdir·set-location·sl·push-location) 없음
+#   그 조각에 \ 없음 · 모든 조각의 첫 낱말이 git·echo·printf·tail·head·true·wc(0.3.4 T7 허용 목록 — 작업 폴더·저장소·git 을 바꾸는 조각이 끼지 않게)
 push_exact() {
   local s=$1 ab=$2 re_dup='[0-9]?>&[0-9]' seg n=0 ps="" t w i
   while [[ $s =~ $re_dup ]]; do s=${s/"${BASH_REMATCH[0]}"/ }; done
@@ -2992,7 +3104,10 @@ push_exact() {
       esac
     done
     t=${w[0]:-}; t=${t//\"/}; t=${t//\'/}
-    case "$t" in [Cc][Dd]|[Pp][Uu][Ss][Hh][Dd]|[Pp][Oo][Pp][Dd]|[Cc][Hh][Dd][Ii][Rr]|[Ss][Ll]|[Ss][Ee][Tt]-[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]|[Pp][Uu][Ss][Hh]-[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]) return 1 ;; esac
+    # 0.3.4 T7: 조각의 첫 낱말은 허용 목록만(빈 조각 포함) — 막을 목록(cd·pushd·…)은 대입·export·함수 정의·중괄호·제어 낱말·trap 뒤의
+    #   폴더·저장소·git 바꾸기를 못 따라간다. git 조각은 둘째 낱말이 옵션(-C·-c·--git-dir …)·config·remote 가 아닐 때만
+    case "$t" in ""|git|echo|printf|tail|head|true|wc) ;; *) return 1 ;; esac
+    case "$t" in [Gg][Ii][Tt]) case "${w[1]//[\"\']/}" in -*|[Cc][Oo][Nn][Ff][Ii][Gg]|[Rr][Ee][Mm][Oo][Tt][Ee]) return 1 ;; esac ;; esac
   done
   [ "$n" = 1 ] || return 1
   case "$ps" in *"$BS"*) return 1 ;; esac
@@ -3009,6 +3124,7 @@ push_exact() {
 
 # 허락 push 의 자리 확인(검사 보완 F3·F4) → 통과면 0, 아니면 PW 에 까닭. 정확한 꼴 판정이 모두 맞은 뒤에만 부른다(git 1회)
 #   F3: 훅 입력의 작업 폴더(BRCWD — check_shell 이 정규화, 비었으면 빈 값)가 프로젝트 폴더이거나 그 아래 — 앞 호출의 cd 로 다른 저장소에 있으면 막는다
+#       (0.3.4 T8: 그 아래라도 프로젝트 폴더까지 올라가는 길에 .git 이 있으면 프로젝트 안의 다른 저장소라 막는다)
 #   F4: 프로젝트 저장소 설정에 remote.origin.push(올리기 규칙)가 있으면 허락된 가지 말고 다른 가지로 갈 수 있어 막는다. git 이 없거나,
 #       origin 주소(remote.origin.url)가 안 보이면(git 저장소가 아님 · origin 없음 — 설정이 없을 때와 종료 코드가 같아 주소로 가린다) 막는다
 push_where() {
@@ -3028,6 +3144,15 @@ push_where() {
   if [ "$inp" = 0 ]; then
     PW="(지금 작업 폴더가 리팩토링 프로젝트 밖입니다)"; PWH="프로젝트 폴더로 옮긴 뒤(cd 는 따로 한 번 실행) 같은 꼴로 다시 — 허락은 그대로입니다."; return 1
   fi
+  # 0.3.4 T8: 프로젝트 안의 다른 저장소(중첩 저장소·서브모듈·프로젝트 안 링크 → 밖 저장소 · 같은 저장소 워크트리도) — 작업 폴더에서 프로젝트 폴더
+  #   바로 아래까지 한 칸씩 올라가며 .git(폴더·파일)이 있으면 막는다(push 는 작업 폴더의 저장소 원격으로 간다). 외부 명령 0
+  local up=${BRCWD%/} upo
+  while [ "${#up}" -gt "${#pn}" ]; do
+    if [ -e "$up/.git" ]; then
+      PW="(지금 작업 폴더가 프로젝트 안의 다른 git 저장소입니다 — 서브모듈·중첩 저장소·링크)"; PWH="프로젝트 폴더로 옮긴 뒤(cd 는 따로 한 번 실행) 같은 꼴로 다시 — 허락은 그대로입니다."; return 1
+    fi
+    upo=$up; up=${up%/*}; [ "$up" = "$upo" ] && break
+  done
   command -v git >/dev/null 2>&1 || { PW="(git 을 찾지 못했습니다)"; return 1; }
   # F4·K4: 올리기 규칙(remote.origin.push)이 있거나, push.default 가 upstream·tracking(가지의 upstream 으로 감 — 허락된 가지 이름과 다른 원격 가지로 갈 수 있음)이면 막는다
   out=$(git --no-replace-objects -c core.fsmonitor=false -C "$proj" config --get-regexp '^(remote[.]origin[.](url|push)|push[.]default)$' 2>/dev/null)
@@ -3273,6 +3398,11 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ "$refactor_on" = 1 ] || return 0
   [ "${AGENT_MODE:-0}" = 1 ] && return 0
 
+  # 0.3.4 T6: 원격 저장소 주소·올리기 설정 바꾸기(바꾼 뒤의 허락 push 가 다른 저장소로 갈 수 있다) — 원형과 사본(lz·hv·hvz) 모두
+  if rmt_write "$lq" || { [ -n "$lz" ] && rmt_write "$lz"; } || { [ -n "$hv" ] && rmt_write "$hv"; } || { [ -n "$hvz" ] && rmt_write "$hvz"; }; then
+    block "리팩토링 중에는 원격 저장소·올리기 설정을 바꾸지 않습니다(바꾼 뒤의 push 가 다른 저장소로 갈 수 있음)." "원격 저장소·올리기 설정 변경은 사람이 터미널에서 합니다 — 필요하면 멈추고 사람에게 부탁하세요. 읽기(git remote · git config --get <키>)는 됩니다."
+  fi
+
   if has "$lq" 'git[[:space:]]+push'; then
     # 0.3.3: 사람이 /refactor:approve 푸시 로 허락한 턴이면 맨 위 명령의 정확한 꼴(git push [-u] origin <허락된 가지>)만 통과.
     #   판정용 사본(원형 cmd0·lq·lz·hv·hvz) 모두가 정확한 꼴이어야 하고, 줄 이어쓰기·역슬래시(JSON 의 \\)가 있으면 막는다
@@ -3292,7 +3422,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   fi
   # 0.3.2: 다른 가지·커밋으로 옮기기 — 기록 폴더(STATE)가 없는 곳으로 가면 안전장치가 통째로 꺼진다. 원형과 사본(lz·hv·hvz) 모두(bash -c "git sw"'itch x')
   if br_switch "$lq" || { [ -n "$lz" ] && br_switch "$lz"; } || { [ -n "$hv" ] && br_switch "$hv"; } || { [ -n "$hvz" ] && br_switch "$hvz"; }; then
-    block "리팩토링 중에는 다른 가지·커밋으로 옮기지 않습니다(리팩토링 기록이 없는 곳으로 가면 안전장치가 통째로 꺼짐)." "가지를 옮겨야 하면 멈추고 사람에게 부탁하세요(사람이 터미널에서 git switch <가지>). 지금 위치에서 새 가지 만들기(git switch -c <새 가지>)와 파일 되돌리기(git restore <파일> · git checkout -- <파일>)는 됩니다. 강제 만들기(-C·-B)는 다른 가지를 덮어쓸 수 있어 막습니다 — -c·-b 로 만드세요."
+    block "리팩토링 중에는 다른 가지·커밋으로 옮기지 않습니다(리팩토링 기록이 없는 곳으로 가면 안전장치가 통째로 꺼짐)." "가지를 옮겨야 하면 멈추고 사람에게 부탁하세요(사람이 터미널에서 git switch <가지>). PR 을 합친 뒤 최신 기본 가지에서 새 작업 가지가 필요하면 사용자에게 /refactor:approve 새 가지 를 입력해 달라고 하세요. 지금 위치에서 새 가지 만들기(git switch -c <새 가지>)와 파일 되돌리기(git restore <파일> · git checkout -- <파일>)는 됩니다. 강제 만들기(-C·-B)는 다른 가지를 덮어쓸 수 있어 막습니다 — -c·-b 로 만드세요."
   fi
   if has "$lq" "$re_glp" && ! has "$lq" 'git[[:space:]]+log[^;&|]*[[:space:]]--[[:space:]]+[^[:space:]-]'; then
     block "리팩토링 진행 중에는 파일을 지정하지 않은 git log -p 를 쓰지 않습니다(옛 비밀값이 찍힐 수 있음)." "파일을 지정하세요: git log -p -- <파일>, 또는 목록만: git log --oneline"
