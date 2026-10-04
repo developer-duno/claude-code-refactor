@@ -332,21 +332,43 @@ rl_origin_base() {
   return 1
 }
 
-# 지금 위치(HEAD)의 내용이 커밋 $2 에 다 들어 있나(0.3.4 — 새 가지 R8): $1 = 프로젝트 폴더. 들어 있으면 0, 아니면·판정 불가면 1
-#   통과 = HEAD 가 $2 의 조상 · 또는 git merge-tree --write-tree $2 HEAD 의 결과 트리 == $2 의 트리(rebase·스쿼시로 합친 경우)
+# 지금 위치(HEAD)의 내용이 커밋 $2 에 다 들어 있나(0.3.4 — 새 가지 R8): $1 = 프로젝트 폴더
+#   반환 0 = 들어 있음 · 1 = 안 들어 있음(깨끗이 합쳐지는데 결과가 $2 와 다름) · 2 = 판정 불가(까닭은 RL_MERGED_WHY 에 한 줄)
+#   판정 순서(0.3.4 보완 F3): ① HEAD 가 $2 의 조상 ② 트리가 같음(HEAD^{tree} == $2^{tree} — git 판과 상관없이)
+#   ③ git cherry $2 HEAD: 범위 $2..HEAD 에 병합 커밋이 없고, 출력이 1줄 이상이며 전부 "-"(같은 변경이 $2 에 이미 있음 — rebase 로 합친 꼴.
+#      옛 git·합친 뒤 기본 가지에 같은 줄을 또 고친 커밋이 와도 통함) ④ git merge-tree --write-tree $2 HEAD 의 결과 트리 == $2 의 트리
 #   안전장치(guard.sh br_judge_in)와 같은 방어: 대체 객체 무시 · fsmonitor 끔 · renormalize 끔 ·
-#   합치기 드라이버(merge.<이름>.driver) 설정이 있으면 merge-tree 를 부르지 않는다(조상일 때만 통과 — 드라이버 프로그램이 이 안에서 돌고,
-#   늘 "우리 쪽"을 남기는 드라이버면 안 합친 내용도 합친 것처럼 보인다). git 2.38 미만(--write-tree 없음)도 조상일 때만
+#   합치기 드라이버(merge.<이름>.driver) 설정이 있으면 merge-tree 를 부르지 않는다(판정 불가 — 드라이버 프로그램이 이 안에서 돌고,
+#   늘 "우리 쪽"을 남기는 드라이버면 안 합친 내용도 합친 것처럼 보인다). git 2.38 미만(--write-tree 없음)·충돌도 판정 불가
 rl_merged_into() {
-  local rc bt t
-  git --no-replace-objects -c core.fsmonitor=false -C "$1" merge-base --is-ancestor HEAD "$2" 2>/dev/null; rc=$?
+  local rc bt ht t m c l
+  local G=(git --no-replace-objects -c core.fsmonitor=false -C "$1")
+  RL_MERGED_WHY=""
+  "${G[@]}" merge-base --is-ancestor HEAD "$2" 2>/dev/null; rc=$?
   [ "$rc" = 0 ] && return 0
-  [ "$rc" = 1 ] || return 1
-  git --no-replace-objects -c core.fsmonitor=false -C "$1" config --name-only --get-regexp '^merge[.].+[.]driver$' >/dev/null 2>&1; rc=$?
-  [ "$rc" = 1 ] || return 1   # 0 = 드라이버 설정 있음 · 그 밖 = 설정을 못 읽음
-  bt=$(git --no-replace-objects -c core.fsmonitor=false -C "$1" rev-parse -q --verify "$2^{tree}" 2>/dev/null) || return 1
-  t=$(git --no-replace-objects -c core.fsmonitor=false -c merge.renormalize=false -C "$1" merge-tree --write-tree "$2" HEAD 2>/dev/null) || return 1
-  [ -n "$bt" ] && [ "${t%%"$RL_NL"*}" = "$bt" ]
+  [ "$rc" = 1 ] || { RL_MERGED_WHY="git 이 두 커밋을 비교하지 못했습니다"; return 2; }
+  bt=$("${G[@]}" rev-parse -q --verify "$2^{tree}" 2>/dev/null)
+  ht=$("${G[@]}" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)
+  [ -n "$bt" ] && [ -n "$ht" ] || { RL_MERGED_WHY="git 이 두 커밋을 비교하지 못했습니다"; return 2; }
+  [ "$ht" = "$bt" ] && return 0
+  m=$("${G[@]}" rev-list --merges --count "$2..HEAD" 2>/dev/null)
+  if [ "$m" = 0 ] && c=$("${G[@]}" cherry "$2" HEAD 2>/dev/null) && [ -n "$c" ]; then
+    rc=0
+    while IFS= read -r l; do case "$l" in "- "?*) ;; *) rc=1; break ;; esac; done <<RLCH
+$c
+RLCH
+    [ "$rc" = 0 ] && return 0
+  fi
+  "${G[@]}" config --name-only --get-regexp '^merge[.].+[.]driver$' >/dev/null 2>&1; rc=$?
+  [ "$rc" = 0 ] && { RL_MERGED_WHY="이 저장소에 합치기 드라이버(merge.<이름>.driver) 설정이 있어 내용 비교를 하지 않았습니다"; return 2; }
+  [ "$rc" = 1 ] || { RL_MERGED_WHY="git 이 저장소 설정을 읽지 못했습니다"; return 2; }
+  t=$("${G[@]}" -c merge.renormalize=false merge-tree --write-tree "$2" HEAD 2>/dev/null); rc=$?
+  case "$rc" in
+    0) [ "${t%%"$RL_NL"*}" = "$bt" ] && return 0; return 1 ;;
+    1) RL_MERGED_WHY="합친 뒤 기본 가지에서 같은 곳이 다시 바뀌어 git 이 내용을 맞춰 보지 못했습니다(겹침)" ;;
+    *) RL_MERGED_WHY="이 PC 의 git 이 내용 비교(git merge-tree --write-tree — git 2.38 이상)를 하지 못했습니다" ;;
+  esac
+  return 2
 }
 
 # 시간 한도 안에서 명령 실행(0.3.4 — 합치기의 gh 호출): $1 = 초, 나머지 = 명령. 종료 코드는 명령의 것, 한도에 걸렸으면 124
@@ -546,6 +568,9 @@ rl_protected_dirty() {
     [ "${#ent}" -gt 3 ] || continue
     xy=${ent:0:2}; path=${ent:3}
     case "$xy" in *R*|*C*) IFS= read -r -d '' old ;; esac   # 이름 바꾸기·복사: 다음 칸은 옛 경로
+    # HEAD 에 없는 새 파일(index 에 막 올림 = 첫 칸 A · 올릴 예정 표시 git add -N = 둘째 칸만 A)은 "이미 커밋된 파일"이 아니다(0.3.4 보완 F1 —
+    #   기준선 단계의 새 기준선·단계 실행의 새 마이그레이션을 git add 하면 헛경보가 났다). 고침·지움·이름 바꾸기·복사(M·D·R·C)는 그대로 잡는다
+    case "$xy" in A?|" A") continue ;; esac
     case "$path" in *"$RL_NL"*|*"$RL_TAB"*|docs/refactor/*) continue ;; esac
     keep=0
     if [ "$abl" != ALL ] && [[ $path =~ $re_bl ]] && ! { [ -n "$ablp" ] && case "$path" in "$pfx"*) rl_abl_hit "${path#"$pfx"}" "$ablp" ;; *) false ;; esac; }; then keep=1; fi

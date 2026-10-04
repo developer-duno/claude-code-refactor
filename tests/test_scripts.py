@@ -1021,11 +1021,14 @@ def main():
     check_approve_allow_033(check)
     check_approve_push_033(check)
     check_approve_newbranch_034(check)
+    check_newbranch_fix_034(check)
     check_approve_autoallow_034(check)
+    check_protected_new_034(check)
     check_approve_merge_034(check)
     check_lib_lc_all_033(check)
     check_commit_docs_033(check)
     check_docs_034(check)
+    check_docs_fix_034(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -2116,15 +2119,27 @@ def check_approve_newbranch_034(check):
               "Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요." in out, out)
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    # 합치기 드라이버 설정이 있으면 조상일 때만(트리가 같아도 거절)
+    # 합치기 드라이버 설정이 있으면 merge-tree 를 부르지 않는다(판정 불가) — 0.3.4 보완 F3 로 바뀜: 예전엔 "조상일 때만"이라
+    #   rebase 합침(트리 같음)도 R8 거절이었으나, 이제 트리 같음·git cherry 는 드라이버와 상관없이 먼저 본다.
+    #   그래서 스쿼시 합침 + 기본 가지에 다른 파일 커밋(트리 다름 · cherry 는 '+')으로 merge-tree 까지 가게 한다
+    d = mk()
+    try:
+        lf(d / "c.txt", "c\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "c")
+        merged(d, "squash")
+        extra_on_base(d)
+        g(d, "config", "merge.ours.driver", "true")
+        unchanged("n3 합치기 드라이버 설정 → merge-tree 안 부름(판정 불가)", d, "새 가지", "판정하지 못했습니다: 이 저장소에 합치기 드라이버")
+        g(d, "config", "--unset", "merge.ours.driver")
+        out, _ = _ap034(d, "새 가지")
+        check("0.3.4 n3 드라이버 설정을 지우면 → 만들어짐", cur(d) == f"refactor/{today}", out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
     d = mk()
     try:
         merged(d)
         g(d, "config", "merge.ours.driver", "true")
-        unchanged("n3 합치기 드라이버 설정 → 조상일 때만", d, "새 가지", W_R8)
-        g(d, "config", "--unset", "merge.ours.driver")
         out, _ = _ap034(d, "새 가지")
-        check("0.3.4 n3 드라이버 설정을 지우면 → 만들어짐", cur(d) == f"refactor/{today}", out)
+        check("0.3.4 n3 드라이버 설정이 있어도 트리가 같으면(rebase 합침) → 만들어짐(F3 ②)", cur(d) == f"refactor/{today}", out)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -2306,6 +2321,164 @@ def check_approve_newbranch_034(check):
         shutil.rmtree(d, ignore_errors=True)
 
 
+def check_newbranch_fix_034(check):
+    """0.3.4 보완 F3(f3: R8 판정 순서 ①조상 ②트리 같음 ③git cherry ④merge-tree · 반환 0/1/2 · 판정 불가 문구)·F6(이름 거절)."""
+    g = _git034
+    today = _today_kst034()
+    cur = lambda d: g(d, "branch", "--show-current")
+    W_R8 = "의 내용이 아직 origin/main 에 다 들어 있지 않습니다"
+    W_UNK = "의 내용이 origin/main 에 다 들어 있는지 판정하지 못했습니다: "
+    W_TERM = f"받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서: git switch -c refactor/{today} origin/main"
+    TEN = "".join(f"{i}\n" for i in range(1, 11))
+    made_dirs = []
+
+    def mk():
+        d = project(plan=PLAN_033)
+        g(d, "init", "-q"); g(d, "symbolic-ref", "HEAD", "refs/heads/main")
+        g(d, "remote", "add", "origin", str(d.parent / "no-such-origin.git"))
+        lf(d / "a.txt", TEN)
+        approve(d, "P1-1")
+        g(d, "add", "-A"); g(d, "commit", "-qm", "i")
+        g(d, "update-ref", "refs/remotes/origin/main", "HEAD")
+        g(d, "checkout", "-q", "-b", "feat/x")
+        lf(d / "a.txt", TEN.replace("3\n", "X\n")); g(d, "add", "-A"); g(d, "commit", "-qm", "b")
+        return d
+
+    def on_base(d, files, parent=None, msg="기본 가지 커밋"):
+        """origin/main(또는 parent) 위에 files({경로: 내용 | None=지움})를 바꾼 커밋 → origin/main 으로."""
+        base = parent or g(d, "rev-parse", "refs/remotes/origin/main")
+        idx = d / ".git" / "tmpidx"
+        e = dict(os.environ, GIT_INDEX_FILE=str(idx))
+        subprocess.run(["git", "-C", str(d), "read-tree", base], env=e, check=True)
+        for path, data in files.items():
+            if data is None:
+                subprocess.run(["git", "-C", str(d), "update-index", "--force-remove", path], env=e, check=True)
+                continue
+            blob = subprocess.run(["git", "-C", str(d), "hash-object", "-w", "--stdin"], input=data.encode("utf-8"), capture_output=True).stdout.decode().strip()
+            subprocess.run(["git", "-C", str(d), "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"], env=e, check=True)
+        tree = subprocess.run(["git", "-C", str(d), "write-tree"], env=e, capture_output=True, check=True).stdout.decode().strip()
+        idx.unlink()
+        c = g(d, "commit-tree", tree, "-p", base, "-m", msg)
+        g(d, "update-ref", "refs/remotes/origin/main", c)
+        return c
+
+    def rebase_merged(d):
+        """feat/x 의 커밋 하나하나를 같은 변경으로 origin/main 에 다시 얹는다(rebase 합침 — 커밋 번호만 다름)."""
+        for c in g(d, "rev-list", "--reverse", "refs/remotes/origin/main..HEAD").split():
+            tree = g(d, "rev-parse", f"{c}^{{tree}}")
+            base = g(d, "rev-parse", "refs/remotes/origin/main")
+            # 그 커밋의 변경만 기본 가지에 적용(여기서는 기본 가지 = 커밋의 부모와 같은 내용이라 트리를 그대로 쓴다)
+            g(d, "update-ref", "refs/remotes/origin/main", g(d, "commit-tree", tree, "-p", base, "-m", "rebased"))
+
+    def squash_merged(d):
+        tree = g(d, "rev-parse", "HEAD^{tree}")
+        base = g(d, "rev-parse", "refs/remotes/origin/main")
+        g(d, "update-ref", "refs/remotes/origin/main", g(d, "commit-tree", tree, "-p", base, "-m", "squashed"))
+
+    def unchanged(title, d, args, msg, path=None):
+        h0, b0, snap = g(d, "rev-parse", "HEAD"), cur(d), rdir_files(d)
+        out, _ = _ap034(d, args, path=path)
+        check(f"0.3.4 {title} → 안 바뀜 + 까닭", g(d, "rev-parse", "HEAD") == h0 and cur(d) == b0 and rdir_files(d) == snap and msg in out, out)
+        return out
+
+    def created(title, d, out, name=None):
+        check(f"0.3.4 {title} → 만들어짐", cur(d) == (name or f"refactor/{today}")
+              and g(d, "rev-parse", "HEAD") == g(d, "rev-parse", "refs/remotes/origin/main"), out)
+
+    # merge-tree 를 못 쓰는 git(옛 git 흉내): merge-tree 에만 129, 나머지는 진짜 git
+    real_git = shutil.which("git")
+    fg = pathlib.Path(tempfile.mkdtemp(prefix="oldgit-"))
+    made_dirs.append(fg)
+    (fg / "git").write_bytes(("#!/usr/bin/env bash\nfor a in \"$@\"; do [ \"$a\" = merge-tree ] && { echo 'usage: git merge-tree <base-tree> <branch1> <branch2>' >&2; exit 129; }; done\n"
+                              f"exec \"{pathlib.Path(real_git).as_posix()}\" \"$@\"\n").encode("utf-8"))
+    os.chmod(fg / "git", 0o755)
+    old_path = str(fg) + os.pathsep + env()["PATH"]
+
+    try:
+        # f3-1 rebase 합침 + 그 뒤 기본 가지가 같은 줄을 고침 → 만들어짐(③ cherry — 예전엔 merge-tree 충돌로 R8)
+        d = mk(); made_dirs.append(d)
+        rebase_merged(d)
+        on_base(d, {"a.txt": TEN.replace("3\n", "Y\n")}, msg="hotfix 같은 줄")
+        out, _ = _ap034(d, "새 가지")
+        created("f3 rebase 합침 + 기본 가지가 같은 줄 고침", d, out)
+
+        # f3-2 스쿼시 합침(커밋 둘 → 하나) + 같은 줄 고침 → 거절 · 판정 불가 문구(겹침) · 터미널 대안
+        d = mk(); made_dirs.append(d)
+        lf(d / "c.txt", "c\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "c")
+        squash_merged(d)
+        on_base(d, {"a.txt": TEN.replace("3\n", "Y\n")}, msg="hotfix 같은 줄")
+        out = unchanged("f3 스쿼시 합침 + 같은 줄 고침", d, "새 가지", W_UNK + "합친 뒤 기본 가지에서 같은 곳이 다시 바뀌어")
+        check("0.3.4 f3 판정 불가 문구: 받아 오기 + 터미널 대안 · ⛔ 아님", W_TERM in out and "Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요." in out
+              and "❓ 지금 가지(feat/x)" in out and W_R8 not in out, out)
+        out = unchanged("f3 판정 불가 + 이름 붙임 → 터미널 대안에 그 이름", d, "새 가지 feat/hot-1", "git switch -c feat/hot-1 origin/main")
+
+        # f3-3 merge-tree 를 못 쓰는 git + rebase 합침(+ 기본 가지에 다른 파일 커밋) → 만들어짐(cherry 길)
+        d = mk(); made_dirs.append(d)
+        lf(d / "c.txt", "c\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "c")
+        rebase_merged(d)
+        on_base(d, {"other.txt": "o\n"})
+        out, _ = _ap034(d, "새 가지", path=old_path)
+        created("f3 옛 git + rebase 합침", d, out)
+
+        # f3-4 같은 옛 git + 스쿼시 합침 + 기본 가지에 다른 파일 커밋 → 판정 불가(옛 git 문구) / 진짜 git 이면 만들어짐
+        d = mk(); made_dirs.append(d)
+        lf(d / "c.txt", "c\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "c")
+        squash_merged(d)
+        on_base(d, {"other.txt": "o\n"})
+        unchanged("f3 옛 git + 스쿼시 합침 + 다른 파일 커밋", d, "새 가지", W_UNK + "이 PC 의 git 이 내용 비교(git merge-tree --write-tree", path=old_path)
+        out, _ = _ap034(d, "새 가지")
+        created("f3 같은 상태 + git 2.38 이상(merge-tree) → ④", d, out)
+
+        # f3-5 반대 방향: rebase 합침 뒤 가지에 기본 가지에 없는 커밋 1개('+') → 거절(코드 1 문구 · 판정 불가 아님)
+        d = mk(); made_dirs.append(d)
+        rebase_merged(d)
+        lf(d / "e.txt", "e\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "합치고 더 한 커밋")
+        cherry = g(d, "cherry", "refs/remotes/origin/main", "HEAD")
+        check("0.3.4 f3 반대 준비: cherry 에 '-' 와 '+' 가 섞임", "- " in cherry and "+ " in cherry, cherry)
+        out = unchanged("f3 반대: 안 합쳐진 커밋 1개(+)", d, "새 가지", W_R8)
+        check("0.3.4 f3 반대: 판정 불가 문구가 아님", W_UNK not in out, out)
+
+        # f3-6 반대 방향: 가지에 변경을 담은 병합 커밋(병합할 때 e.txt 를 더함) — 병합 아닌 커밋은 다 기본 가지에 같은 변경으로 들어감
+        #      → cherry 는 전부 '-' 이지만 병합 커밋이 있으므로 cherry 길을 타지 않고 거절
+        d = mk(); made_dirs.append(d)
+        g(d, "checkout", "-q", "-b", "side", "main")
+        lf(d / "s.txt", "s\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "s")
+        g(d, "checkout", "-q", "feat/x")
+        g(d, "merge", "-q", "--no-ff", "--no-commit", "side")
+        lf(d / "e.txt", "병합 때 몰래 더함\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "Merge side")
+        b1 = on_base(d, {"a.txt": TEN.replace("3\n", "X\n")}, msg="b 다시")
+        on_base(d, {"s.txt": "s\n"}, parent=b1, msg="s 다시")
+        cherry = g(d, "cherry", "refs/remotes/origin/main", "HEAD")
+        check("0.3.4 f3 반대 준비: 병합 커밋 말고는 cherry 가 전부 '-'", cherry != "" and all(l.startswith("- ") for l in cherry.splitlines()), cherry)
+        out = unchanged("f3 반대: 변경을 담은 병합 커밋", d, "새 가지", W_R8)
+        check("0.3.4 f3 반대: 병합 커밋 → 판정 불가 아님(merge-tree 로 '다름')", W_UNK not in out, out)
+        # 같은 상태 + 옛 git → cherry 길을 안 타므로 판정 불가(만들지 않음)
+        unchanged("f3 반대: 병합 커밋 + 옛 git → 판정 불가", d, "새 가지", W_UNK, path=old_path)
+
+        # F6 이름 거절(cases-034 approve_새가지_거절 17꼴 + 참조 이름 꼴·기본 가지 이름) · 반대 방향(비슷하지만 다른 이름은 받음)
+        d = mk(); made_dirs.append(d)
+        rebase_merged(d)
+        for args in ("가지 새", "P1-1 새 가지", "새 가지 푸시", "새 가지 a b", "새 가지 -x", "새 가지 a..b", "새 가지 .hidden", "새 가지 a/",
+                     "새 가지 a@{1}", "새 가지 HEAD", "새 가지 main", "새 가지 refs/heads/x", "새 가지 '$(id)'", "새 가지 `id`", "새 가지 a;b",
+                     "새 가지 허용", "새 합치기", "새 가지 origin/x", "새 가지 master", "새 가지 refs/x", "새 가지 origin/main"):
+            unchanged(f"F6 {args!r} → 거절", d, args, "아무것도 바꾸지 않았습니다")
+        out = unchanged("F6 'refs/heads/x' 문구", d, "새 가지 refs/heads/x", "가지 이름(refs/heads/x)을 쓸 수 없습니다(refs/·origin/ 으로 시작하는 이름과 HEAD·main·master·기본 가지 이름 main 은")
+        check("0.3.4 F6 refs/heads/x 가지가 안 생김", g(d, "for-each-ref", "refs/heads/refs/") == "", out)
+        for name in ("Main", "mainline", "feat/main", "refs-x", "origin-x", "HEADS"):
+            g(d, "checkout", "-q", "feat/x")
+            out, _ = _ap034(d, f"새 가지 {name}")
+            created(f"F6 반대: '{name}'(비슷하지만 다른 이름)", d, out, name)
+        # 기본 가지가 develop 이면 develop 도 거절(main 도 계속 거절)
+        g(d, "checkout", "-q", "feat/x")
+        g(d, "update-ref", "refs/remotes/origin/develop", g(d, "rev-parse", "refs/remotes/origin/main"))
+        g(d, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+        unchanged("F6 기본 가지 이름 develop", d, "새 가지 develop", "기본 가지 이름 develop 은")
+        unchanged("F6 기본 가지가 develop 이어도 main", d, "새 가지 main", "을 쓸 수 없습니다")
+    finally:
+        for m in made_dirs:
+            shutil.rmtree(m, ignore_errors=True)
+
+
 def check_approve_autoallow_034(check):
     """0.3.4 §9: 승인하면 기준선 허용 자동(v1~v9) · 보류하면 뺌 · 승인 화면의 🔓 줄."""
     af = lambda d: d / "docs/refactor/.allow-baseline-edit"
@@ -2439,14 +2612,126 @@ def check_approve_autoallow_034(check):
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
+    # v10(0.3.4 보완 F8) 자동으로 여는 것은 🛠 카드만: 🔧 카드(경로 있음)·종류 칸 없는 카드·둘 다 적힌 카드 → 안 열림 + ⚠️ 줄 /
+    #     🛠️(변형 선택자 붙음) → 열림 / 수동 '허용 <ID>'는 그대로(🔧 카드도 0.3.3 처럼 받음)
+    W_NOAUTO = "   ⚠️ 🛠 카드가 아니라 기준선 허용을 자동으로 열지 않았습니다 — 계획서를 확인하고 필요하면 /refactor:approve 허용 "
+    card = lambda cid, kind: (f"\n### [{cid}] 카드 {cid}\n" + (f"- **종류**: {kind}\n" if kind is not None else "")
+                              + f"- **깨질 것으로 예상되는 기준선**: `tests/baseline/{cid}.test.ts`\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n")
+    plan10 = ("# 계획서\n" + card("P1-1", "🔧 리팩토링") + card("P1-2", None) + card("P1-3", "🔧 리팩토링 / 🛠 개선(바뀌는 동작: 전 → 후)")
+              + card("P1-4", "🛠️ 개선(금액 반올림 → 버림)") + card("P1-5", "🛠 개선"))
+    for cid, name in (("P1-1", "🔧 카드"), ("P1-2", "종류 칸 없는 카드"), ("P1-3", "🔧·🛠 둘 다 적힌 카드(틀 그대로)")):
+        d = project(plan=plan10)
+        try:
+            out = approve(d, cid)
+            check(f"0.3.4 v10 {name} 승인 → 허용 안 생김 · ⚠️ 줄", not af(d).exists() and not allow_lines(d) and "🔓" not in out
+                  and W_NOAUTO + cid in out and f"승인함: [{cid}]" in out, out)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+    d = project(plan=plan10)
+    try:
+        out = approve(d, "P1-4 P1-1 P1-5")
+        check("0.3.4 v10 섞어서 승인 → 🛠 카드(P1-4 변형 선택자·P1-5)만 열림", ab(d) == b"P1-4 P1-5\n" and W_NOAUTO + "P1-1" in out
+              and out.count("🔓 고칠 기준선") == 2 and intact(d), out)
+        out = approve(d, "허용 P1-1")
+        check("0.3.4 v10 수동 '허용 P1-1'(🔧 카드)은 그대로 받음", ab(d) == b"P1-4 P1-5 P1-1\n" and "🔓 기준선 허용:" in out, out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def check_protected_new_034(check):
+    """0.3.4 보완 F1(f1): 턴 끝 알림(post-check)은 HEAD 에 없는 새 파일을 git add 해도 조용하다(기준선 단계의 새 기준선 ·
+    단계 실행의 새 마이그레이션 · AM · git add -N). 반대 방향: 이미 커밋된 기준선·마이그레이션을 고치거나(' M'·'M ') 지우거나(' D'·'D ')
+    이름을 바꾸면(git mv) 알림이 그대로 나온다."""
+    g = _git034
+    pc = lambda d: hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+
+    def mk(phase):
+        d = project(plan=PLAN_033)
+        lf(d / "docs/refactor/STATE.md", STATE.replace("phase: PLAN", f"phase: {phase}").replace("gate: G2-plan", "gate: none"))
+        (d / "tests/baseline").mkdir(parents=True)
+        lf(d / "tests/baseline/old.test.ts", "x\n")
+        (d / "supabase/migrations").mkdir(parents=True)
+        lf(d / "supabase/migrations/001_a.sql", "a\n")
+        g(d, "init", "-q"); g(d, "add", "-A"); g(d, "commit", "-qm", "i")
+        if phase == "BASELINE":
+            out = approve(d, "baseline")
+            check("0.3.4 f1 준비: 기준선 계획 승인", "기준선 계획 승인: [x]" in (d / "docs/refactor/BASELINE.md").read_text(encoding="utf-8"), out)
+        hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+        return d
+
+    # 기준선 단계: 새 기준선 파일 → add → 0 · 올린 뒤 또 고침(AM) → 0 · 커밋 → 0 · git add -N(둘째 칸만 A) → 0
+    d = mk("BASELINE")
+    try:
+        lf(d / "tests/baseline/new.test.ts", "n\n")
+        g(d, "add", "--", "tests/baseline/new.test.ts")
+        _, se, rc, _ = pc(d)
+        check("0.3.4 f1 BASELINE 새 기준선 파일 git add('A ') → post-check 조용", rc == 0 and se == "", f"{rc} {se}")
+        lf(d / "tests/baseline/new.test.ts", "n2\n")
+        st = g(d, "status", "--porcelain", "--", "tests/baseline/new.test.ts")
+        _, se, rc, _ = pc(d)
+        check("0.3.4 f1 BASELINE 올린 뒤 또 고침('AM') → 조용", st.startswith("AM") and rc == 0, f"{st!r} {rc} {se}")
+        g(d, "add", "--", "tests/baseline/new.test.ts"); g(d, "commit", "-qm", "test: 기준선 테스트 추가")
+        _, se, rc, _ = pc(d)
+        check("0.3.4 f1 BASELINE 커밋 뒤 → 조용", rc == 0, f"{rc} {se}")
+        lf(d / "tests/baseline/n2.test.ts", "n\n")
+        g(d, "add", "-N", "--", "tests/baseline/n2.test.ts")
+        st = g(d, "status", "--porcelain", "--", "tests/baseline/n2.test.ts")
+        _, se, rc, _ = pc(d)
+        # (_git034 는 출력 앞뒤 공백을 떼므로 ' A x' 가 'A x' 로 온다 — 올린 꼴 'A  x' 와는 공백 수로 갈린다)
+        check("0.3.4 f1 BASELINE git add -N(' A') → 조용", st == "A tests/baseline/n2.test.ts" and rc == 0, f"{st!r} {rc} {se}")
+        # 반대 방향: 방금 커밋한 기준선(이제 커밋된 파일)을 고치면 알림
+        lf(d / "tests/baseline/new.test.ts", "몰래\n")
+        _, se, rc, _ = pc(d)
+        check("0.3.4 f1 반대: 커밋된 기준선 고침(' M') → 알림", rc == 2 and " M tests/baseline/new.test.ts" in se and "n2.test.ts" not in se, f"{rc} {se}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 단계 실행: 새 마이그레이션 → add → 0 / 반대 방향: 커밋된 기준선·마이그레이션 고침·지움·이름 바꾸기 → 알림
+    d = mk("EXECUTE")
+    try:
+        lf(d / "supabase/migrations/002_new.sql", "n\n")
+        g(d, "add", "--", "supabase/migrations/002_new.sql")
+        _, se, rc, _ = pc(d)
+        check("0.3.4 f1 EXECUTE 새 마이그레이션 git add('A ') → 조용", rc == 0 and se == "", f"{rc} {se}")
+        cases = [
+            ("기준선 고침(' M')", " M tests/baseline/old.test.ts", lambda: lf(d / "tests/baseline/old.test.ts", "y\n"),
+             lambda: g(d, "checkout", "-q", "--", "tests/baseline/old.test.ts")),
+            ("기준선 고쳐 올림('M ')", "M  tests/baseline/old.test.ts",
+             lambda: (lf(d / "tests/baseline/old.test.ts", "y\n"), g(d, "add", "--", "tests/baseline/old.test.ts")),
+             lambda: (g(d, "reset", "-q", "--", "tests/baseline/old.test.ts"), g(d, "checkout", "-q", "--", "tests/baseline/old.test.ts"))),
+            ("기준선 지움(' D')", " D tests/baseline/old.test.ts", lambda: (d / "tests/baseline/old.test.ts").unlink(),
+             lambda: g(d, "checkout", "-q", "--", "tests/baseline/old.test.ts")),
+            ("기준선 git rm('D ')", "D  tests/baseline/old.test.ts", lambda: g(d, "rm", "-q", "--", "tests/baseline/old.test.ts"),
+             lambda: (g(d, "reset", "-q", "--", "tests/baseline/old.test.ts"), g(d, "checkout", "-q", "--", "tests/baseline/old.test.ts"))),
+            ("기준선 git mv('R ')", "R  tests/baseline/moved.test.ts",
+             lambda: g(d, "mv", "tests/baseline/old.test.ts", "tests/baseline/moved.test.ts"),
+             lambda: g(d, "mv", "tests/baseline/moved.test.ts", "tests/baseline/old.test.ts")),
+            ("마이그레이션 고침(' M')", " M supabase/migrations/001_a.sql", lambda: lf(d / "supabase/migrations/001_a.sql", "b\n"),
+             lambda: g(d, "checkout", "-q", "--", "supabase/migrations/001_a.sql")),
+            ("마이그레이션 git mv('R ')", "R  supabase/migrations/001_b.sql",
+             lambda: g(d, "mv", "supabase/migrations/001_a.sql", "supabase/migrations/001_b.sql"),
+             lambda: g(d, "mv", "supabase/migrations/001_b.sql", "supabase/migrations/001_a.sql")),
+        ]
+        for name, want, do, undo in cases:
+            do()
+            _, se, rc, _ = pc(d)
+            check(f"0.3.4 f1 반대: 커밋된 {name} → 알림 그대로", rc == 2 and want in se and "002_new.sql" not in se, f"{rc} {se}")
+            undo()
+            _, se, rc, _ = pc(d)
+            check(f"0.3.4 f1 반대: {name} 되돌린 뒤 → 조용", rc == 0, f"{rc} {se}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
 
 # 합치기 시험의 가짜 gh: 받은 인자(한 호출 한 줄)를 calls, 작업 폴더를 cwds 에 적고, 미리 정한 출력·종료 코드를 낸다.
 # 응답은 같은 폴더의 <종류>.out / .err / .rc / .sleep(있으면 그 초만큼 잠 — exec 라 시간 한도가 바로 끊는다). 종류 = view · compare · merge · other
+# .kid(0.3.4 보완 F7): 출력 통로를 물려받은 자식(그 초만큼 잠)을 남기고, 자기는 오래 자다가 TERM 에 죽는다(자식을 띄우는 gh 감싸개 꼴)
 # gh 로그인 정보는 다루지 않는다(환경 변수를 읽거나 적지 않음). 실제 GitHub 호출 0.
 _FAKE_GH = """#!/usr/bin/env bash
 d=${BASH_SOURCE[0]%/*}
 printf '%s\\n' "$*" >> "$d/calls"
-printf '%s\\n' "$PWD" >> "$d/cwds"
+# 작업 폴더: Windows Git Bash 면 pwd -W 로 C:/… 꼴(MSYS 의 /tmp/… 꼴은 파이썬이 못 연다 — 0.3.4 보완 F5), 다른 OS 는 pwd -W 가 없어 그냥 pwd
+printf '%s\\n' "$(pwd -W 2>/dev/null || pwd)" >> "$d/cwds"
 case "$1 $2" in
   "pr view") k=view ;;
   "pr merge") k=merge ;;
@@ -2455,12 +2740,21 @@ case "$1 $2" in
 esac
 [ -f "$d/$k.sleep" ] && exec sleep "$(cat "$d/$k.sleep")"
 [ -f "$d/$k.stubborn" ] && { trap '' ALRM TERM; exec sleep "$(cat "$d/$k.stubborn")"; }
+[ -f "$d/$k.kid" ] && { sleep "$(cat "$d/$k.kid")" & exec sleep 40; }
 [ -f "$d/$k.err" ] && cat "$d/$k.err" >&2
 [ -f "$d/$k.out" ] && cat "$d/$k.out"
 exit "$(cat "$d/$k.rc" 2>/dev/null || echo 0)"
 """
 _MG_JSON = "number,state,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,statusCheckRollup"
 _MG_AUTH = "gh 로그인 계정이 이 저장소에 쓰기 권한이 있는지 사람이 확인"
+
+
+def _same034(a, b):
+    """같은 폴더인가 — 경로를 못 열면(다른 OS 꼴 경로 등) 예외 대신 거짓(0.3.4 보완 F5: Windows CI 에서 시험 전체가 멈췄음)."""
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return False
 
 
 def _jqv034(pr):
@@ -2525,7 +2819,7 @@ def check_approve_merge_034(check):
         lf(d / "b.txt", "b\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "b")
         return d
 
-    def fake(d, pr=None, view_rc=0, view_err="", view_sleep=None, view_stubborn=None, behind="0", cmp_rc=0, cmp_err="", merge_rc=0, merge_err="", **prk):
+    def fake(d, pr=None, view_rc=0, view_err="", view_sleep=None, view_stubborn=None, view_kid=None, behind="0", cmp_rc=0, cmp_err="", merge_rc=0, merge_err="", **prk):
         """가짜 gh 폴더를 만들고 PATH 를 돌려준다. pr 칸은 기본값(전부 맞음) 위에 prk 로 덮어쓴다."""
         fg = pathlib.Path(tempfile.mkdtemp(prefix="fakegh-"))
         (fg / "gh").write_bytes(_FAKE_GH.encode("utf-8"))
@@ -2546,6 +2840,8 @@ def check_approve_merge_034(check):
             (fg / "view.sleep").write_text(str(view_sleep))
         if view_stubborn:
             (fg / "view.stubborn").write_text(str(view_stubborn))
+        if view_kid:
+            (fg / "view.kid").write_text(str(view_kid))
         made.append(str(fg))
         return fg
 
@@ -2585,7 +2881,7 @@ def check_approve_merge_034(check):
               and c[1] == f"api repos/{{owner}}/{{repo}}/compare/main...{hoid} --jq .behind_by", "\n".join(c))
         check("0.3.4 g1 합치기 인자 = pr merge 68 --rebase --match-head-commit <HEAD> 정확히", c[2:] == [f"pr merge 68 --rebase --match-head-commit {hoid}"], "\n".join(c))
         cw = (fg / "cwds").read_text(encoding="utf-8").splitlines()
-        check("0.3.4 g1 gh 는 프로젝트 폴더에서 불림", len(cw) == 3 and all(os.path.samefile(x, d) for x in cw), "\n".join(cw))
+        check("0.3.4 g1 gh 는 프로젝트 폴더에서 불림", len(cw) == 3 and all(_same034(x, d) for x in cw), "\n".join(cw))
         check("0.3.4 g1 기록 1줄 · 봉인 일치",
               lt.count("\n") == lines0 + 1 and lt.endswith(f" KST | 합치기 | PR #68 feat/x -> main (rebase) @{hoid[:7]} | - | 사용자가 /refactor:approve 로 실행\n")
               and intact(d), lt[-300:])
@@ -2698,6 +2994,27 @@ def check_approve_merge_034(check):
         check("0.3.4 g9b timeout·perl 없음 + gh 가 ALRM·TERM 무시 → 거절 · 6~11초", "6초 안에 끝나지 않았습니다" in out and W_NO in out
               and 6 <= secs < 11 and _log033(d) == before and len(calls(fg)) == 1, f"{secs:.1f}초\n{out}")
 
+        # g9c(0.3.4 보완 F7) gh 가 출력 통로를 물려받은 자식(12초 잠)을 남기고 TERM 에 죽음 → 한도(6초)+3초 안에 거절
+        fg = fake(d, view_kid=12)
+        before = _log033(d)
+        out, secs = run(d, fg, "합치기 68 rebase")
+        check("0.3.4 g9c 자식이 출력 통로를 쥔 채 남음 → 거절 · 9초 안", "6초 안에 끝나지 않았습니다" in out and W_NO in out
+              and 5 <= secs < 9 and _log033(d) == before and len(calls(fg)) == 1, f"{secs:.1f}초\n{out}")
+
+        # F10(0.3.4 보완) 검사 이름·gh 오류 문구의 제어 문자 → ? 로(결과에 ESC 0)
+        out = refused("0.3.4 F10 검사 이름에 제어 문자 → 거절", d, fake(d, statusCheckRollup=[CR("a"), CR("a\x1b[31mred\x07", co="FAILURE")]),
+                      "합치기 68 rebase", "자동 검사 실패(a?[31mred?)")
+        check("0.3.4 F10 검사 이름 → 결과에 ESC·BEL 0", "\x1b" not in out and "\x07" not in out, repr(out))
+        out = refused("0.3.4 F10 gh 오류에 제어 문자 → 거절", d, fake(d, view_rc=1, view_err="boom\x1b[2J\x1b]0;x\x07 end"),
+                      "합치기 68 rebase", "PR 을 조회하지 못했습니다: boom?[2J?]0;x? end")
+        check("0.3.4 F10 gh 오류 → 결과에 ESC·BEL 0", "\x1b" not in out and "\x07" not in out, repr(out))
+        out = refused("0.3.4 F10 비교 오류에 제어 문자 → 거절", d, fake(d, cmp_rc=1, cmp_err="HTTP\x1b[31m 500"), "합치기 68 rebase", "비교하지 못했습니다: HTTP?[31m 500")
+        check("0.3.4 F10 비교 오류 → 결과에 ESC 0", "\x1b" not in out, repr(out))
+        before = _log033(d)
+        out, _ = run(d, fake(d, merge_rc=1, merge_err="no\x1b[1m way"), "합치기 68 rebase")
+        check("0.3.4 F10 합치기 오류에 제어 문자 → ? 로 · 결과에 ESC 0 · 기록 그대로", "합치기를 거절했습니다: no?[1m way" in out
+              and "\x1b" not in out and _log033(d) == before, repr(out))
+
         # g8 M1: --from-hook 없음 · 봉인 깨짐 → gh 호출 0 · 기록 그대로
         fg = fake(d)
         before = rdir_files(d)
@@ -2801,6 +3118,57 @@ def check_commit_docs_033(check):
 
 
 
+def check_docs_fix_034(check):
+    """0.3.4 보완(검사 1차) 문서: F2 계정 문장 · F3 approve SKILL 6 · F8 🛠 만 · F9 ①②③④ · F12 멈춤 조건 ⓗ — 지침 글자 검사."""
+    sk = ROOT / "plugins/refactor/skills/go"
+    bl = (sk / "phases/5-baseline.md").read_text(encoding="utf-8")
+    ex = (sk / "phases/7-execute.md").read_text(encoding="utf-8")
+    gs = (sk / "SKILL.md").read_text(encoding="utf-8")
+    ap = (ROOT / "plugins/refactor/skills/approve/SKILL.md").read_text(encoding="utf-8")
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    # F2 README: 뺀 '계정 고르기' 문장 없음 · gh 로그인 정보는 다루지 않음
+    check("0.3.4 F2 README: 옛 계정 고르기 문장('토큰을 이 확인') 없음 · 로그인 정보 안 다룸 안내",
+          "토큰을 이 확인" not in rd and "gh 로그인 정보는 다루지 않습니다 — 지금 gh 계정에 그 저장소 쓰기 권한이 있어야 합니다" in rd, "")
+    # F9③ README §13: gcloud 조회가 풀린다는 틀린 문장 없음(코드는 계속 막음)
+    check("0.3.4 F9③ README: 'gcloud deploy releases list' 풀림 문장 없음", "gcloud deploy releases list" not in rd, "")
+    # F9① 5-baseline 5-1 머리(이미 커밋됐으면 6 으로) · 실패 표시 · go/SKILL ask-user 줄
+    i = bl.find("5-1. **커밋**")
+    j = bl.find("\n6. STATE:", i)
+    c51 = bl[i:j] if i >= 0 and j > i else ""
+    check("0.3.4 F9① 5-baseline 5-1: 이미 커밋돼 있으면 건너뛰고 6 · 실패 표시 '기준선 커밋 실패: <까닭>'",
+          "이미 다 커밋돼 있으면" in c51 and "커밋을 건너뛰고 6 으로 간다" in c51 and "`기준선 커밋 실패: <까닭>`" in c51
+          and c51.find("이미 다 커밋돼 있으면") < c51.find("이름을 하나씩 적는다"), c51[:300])
+    ask = next((l for l in gs.splitlines() if l.lstrip().startswith("- `ask-user`:")), "")
+    check("0.3.4 F9① go/SKILL ask-user: '기준선 커밋 실패' 표시면 다시 묻지 않고 5-1 부터",
+          "`기준선 커밋 실패: …`" in ask and "다시 묻지 않고" in ask and "5-1(커밋)부터" in ask, ask)
+    # F9② 7-execute ⑦: 묶음 첫 단계 커밋의 승인 기록 단서 · README 같은 단서
+    r7 = next((l for l in ex.splitlines() if l.startswith("- ⑦ 되돌리는 법")), "")
+    check("0.3.4 F9② 7-execute ⑦: 묶음 첫 단계 커밋엔 승인 기록 — revert 대신 '코드만 되돌려 줘'",
+          "**묶음의 첫 단계**" in r7 and "승인이 풀리거나 봉인이 어긋난다" in r7 and "첫 단계도 \"<ID> 단계 코드만 되돌려 줘\"로" in r7, r7[:200])
+    check("0.3.4 F9② README 사용 순서: 첫 단계 커밋 revert 단서", "묶음의 첫 단계 커밋에는 승인 기록도 들어 있어" in rd, "")
+    # F9④ README §6-4 한계 두 줄
+    a = rd.find("### 6-4. 한계")
+    b = rd.find("\n## 7.", a)
+    lim = rd[a:b] if a >= 0 and b > a else ""
+    check("0.3.4 F9④ README §6-4: 새 가지는 받아 둔 origin 참조를 믿음 · 🔧 카드는 자동 허용 안 함",
+          "새 가지는 이 PC 에 받아 둔 `origin/<기본 가지>` 를 믿습니다" in lim and "🔧 카드나 종류 칸이 없는 카드는" in lim, "")
+    # F8 README·approve SKILL: 자동으로 여는 것은 🛠 카드만
+    check("0.3.4 F8 README §6-3·§13 · approve SKILL: 저절로 열리는 것은 🛠 카드",
+          rd.count("🛠 카드의 \"깨질 것으로 예상되는 기준선\" 칸에 파일이 백틱으로 적힌 단계는") == 2
+          and "⚠️ 🛠 카드가 아니라 기준선 허용을 자동으로 열지 않았습니다" in ap, "")
+    # F3 approve SKILL 6: 받아 온 뒤엔 늘 다시 입력(git log·diff 로 짐작 안 함) · 판정 불가면 터미널 대안
+    s6 = ap[ap.find("6. **새 가지 결과**"):ap.find("7. **합치기 결과**")]
+    check("0.3.4 F3 approve SKILL 6: 받아 온 뒤 늘 다시 입력 · log/diff 짐작 없음 · 판정 불가면 사람 터미널 꼴로 대안",
+          "받아 온 뒤에는 늘" in s6 and "짐작하지 않는다" in s6 and "git log --oneline HEAD --not" not in s6
+          and "판정하지 못했다" in s6 and "`git switch -c <이름> origin/<기본 가지>`" in s6 and "**사람의 터미널 꼴로**" in s6, s6[:300])
+    # F12 멈춤 조건 ⓗ: 7-execute 표 · README 사용 순서·§13
+    h = next((l for l in ex.splitlines() if l.startswith("| ⓗ |")), "")
+    check("0.3.4 F12 7-execute ⓗ: 👤 사람 확인 필요·위험도 🔴 카드 뒤 멈춤",
+          "\"👤 사람 확인 필요\"" in h and "위험도가 🔴" in h and "`/refactor:go` 로 계속" in h and "멈춤 조건 ⓐ~ⓗ 중" in ex, h)
+    check("0.3.4 F12 README: 멈추는 일에 '👤 사람 확인 필요'·위험도 🔴 카드(사용 순서·§13)",
+          rd.count("\"👤 사람 확인 필요\"·위험도 🔴 인 카드") == 2, "")
+
+
 def check_docs_034(check):
     """0.3.4 문서: 이어서 실행(멈춤 조건) · 기준선 커밋도 Claude · 리다이렉트 든 사람 명령 · 자동 허용 · 새 가지·합치기 안내 — 지침 글자 검사."""
     sk = ROOT / "plugins/refactor/skills/go"
@@ -2839,12 +3207,12 @@ def check_docs_034(check):
     check("0.3.4 D2 원칙 3·사람 명령: 기준선 커밋도 직접 · 옛 '(기준선 커밋은 사람이)' 없음",
           "(기준선 커밋은 사람이)" not in gs and "기준선 커밋과 단계 커밋은 사람에게 부탁하지 않고" in gs, "")
 
-    # §8 이어서 실행: 7-execute 의 멈춤 조건 표(ⓐ~ⓖ 하나도 빠짐없이) · 하나씩 · STATE 적는 법 · 묶음 요약
+    # §8 이어서 실행: 7-execute 의 멈춤 조건 표(ⓐ~ⓗ 하나도 빠짐없이 — ⓗ 는 0.3.4 보완 F12·D7) · 하나씩 · STATE 적는 법 · 묶음 요약
     a = ex.find("## 0-2. 이어서 실행과 멈춤 조건")
     b = ex.find("\n## 1.", a)
     sec = ex[a:b] if a >= 0 and b > a else ""
-    marks = ["| ⓐ |", "| ⓑ |", "| ⓒ |", "| ⓓ |", "| ⓔ |", "| ⓕ |", "| ⓖ |"]
-    check("0.3.4 D1 7-execute 0-2: 멈춤 조건 표 ⓐ~ⓖ 일곱 줄",
+    marks = ["| ⓐ |", "| ⓑ |", "| ⓒ |", "| ⓓ |", "| ⓔ |", "| ⓕ |", "| ⓖ |", "| ⓗ |"]
+    check("0.3.4 D1 7-execute 0-2: 멈춤 조건 표 ⓐ~ⓗ 여덟 줄",
           sec != "" and all(sec.count(m) == 1 for m in marks), str([m for m in marks if sec.count(m) != 1]))
     needs = ["`/refactor:go 하나씩`", "묻지 않고", "`current_step: \"<ID> (완료)\"`", "`gate: G3-step`",
              "`current_step: \"<다음 ID> (진행 중)\"`", "| 단계 | 상태 | 커밋 |", "승인된 단계를 모두 끝냄",
@@ -2860,7 +3228,7 @@ def check_docs_034(check):
           "「0-2」의 멈춤 조건" in s36 and "다음 단계의 1.(시작 전 확인)로 간다" in s36 and "묶음 요약을 보고하고 멈춘다" in s36, s36)
     check("0.3.4 D1 go/SKILL: 하나씩·이어서 실행 설명 · G3-step 이어서 · 멈추는 때에 멈춤 조건",
           "단계 실행에서는 승인된 단계 하나만 실행하고 멈춘다" in gs and "하나씩 차례로 이어서 한다" in gs
-          and "남은 실행 대기 단계를 이어서 실행한다" in gs and "「0-2」의 멈춤 조건(ⓐ~ⓖ)" in gs, "")
+          and "남은 실행 대기 단계를 이어서 실행한다" in gs and "「0-2」의 멈춤 조건(ⓐ~ⓗ)" in gs, "")
 
     # §9 자동 허용: 멈추고 부탁하는 것은 닫혀 있을 때만 · PowerShell 대안은 Windows 경로일 때만
     r2 = next((l for l in ex.splitlines() if "🛠에서 예상된 기준선을 새 동작으로 바꿔야 하면" in l), "")

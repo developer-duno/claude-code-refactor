@@ -841,6 +841,7 @@ def main():
     check_commit_msg_033(res)
     check_commit_flow_033(res)
     check_deploy_t1_034(res)
+    check_deploy_colon_034(res)
     check_quote_t45_034(res)
     check_remote_t6_034(res)
     check_push_t7_034(res)
@@ -3949,11 +3950,12 @@ def check_deploy_t1_034(res):
     proj = make_project(phase="EXECUTE")
     try:
         # 조회 15꼴: 지금까지 접두로 막히던 것 → 통과(Bash)
-        reads = ["railway deployment list", "railway deployment", "railway upgrade", "vercel logs deploy-abc.vercel.app",
-                 "vercel inspect deploy-abc.vercel.app", "wrangler deployments list", "wrangler deployments status", "wrangler deployments view",
-                 "wrangler pages deployment list", "wrangler pages deployment tail", "pm2 reloadLogs", "bin/rails db:migrate:status",
+        reads = ["railway deployment list", "railway deployment", "railway upgrade", "wrangler deployments list", "wrangler deployments status",
+                 "wrangler deployments view", "wrangler pages deployment list", "wrangler pages deployment tail", "pm2 reloadLogs", "bin/rails db:migrate:status",
                  "rake db:migrate:status", "php artisan migrate:status", "npx sequelize-cli db:migrate:status"]
         _cases_034(res, proj, "T1 조회 통과", [(OK, bash(c)) for c in reads])
+        # 보완 F4: 인자에 deploy- 가 든 vercel 조회는 0.3.3 처럼 다시 막힌다(끝 경계 = 영문·숫자가 아닌 글자 — '-' 도 경계, 메인 허용)
+        _cases_034(res, proj, "T1 vercel 인자 deploy- 다시 차단", [(B, bash(c)) for c in ["vercel logs deploy-abc.vercel.app", "vercel inspect deploy-abc.vercel.app"]])
         _cases_034(res, proj, "T1 조회 통과(PowerShell)", [(OK, ps(c)) for c in ["railway deployment list", "railway upgrade", "wrangler deployments list"]])
         # 쓰기 꼴 → 계속 차단(배포 문구)
         writes = ["railway up", "railway deploy --template postgres", "railway up --detach", "railway deployment up", "railway deployment redeploy",
@@ -3999,6 +4001,36 @@ def check_deploy_t1_034(res):
             "bin/rails db:migrate:status:primary", "php artisan migrate:status", "php artisan migrate:status --path=x", "rails db:migrate:status 2>&1 | head",
             "RAKE DB:MIGRATE:STATUS", "bash -c 'rails db:migrate:status'", "npx sequelize-cli db:migrate:status"]])
         _cases_034(res, proj, "T1 DB 초기화 그대로", [(B, bash("php artisan migrate:fresh")), (B, bash("php artisan migrate:reset")), (B, bash("rails db:reset"))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_deploy_colon_034(res):
+    """0.3.4 보완 F4: 배포 하위명령 낱말 뒤 경계 = 영문·숫자가 아닌 글자 또는 끝. 574d8f9 의 끝 경계(공백·따옴표·구분자만)는
+    :·-·=·, 가 붙은 꼴(wrangler secret:put — 운영 비밀값 쓰기의 옛 문법 · railway up:x …)을 풀었다 → 다시 막는다.
+    글자가 이어지는 낱말(upgrade·deployment·deployments·reloadLogs)은 계속 풀림. vercel aliases 는 alias 와 같이 막는다."""
+    W_DEP = "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다."
+    again = ["wrangler secret:bulk x.json", "wrangler secret:put K", "wrangler deploy:x", "wrangler publish:x", "wrangler pages deploy:x",
+             "railway up:x", "railway deploy:x", "railway up-x", "railway deploy-x", "vercel deploy:x", "vercel aliases ls", "pm2 restart:all",
+             "pm2 reload:all", "pm2 deploy:x", "railway up=x", "railway deploy,x", "wrangler secret=K", "RAILWAY UP:x", "vercel aliases set a b"]
+    # 같은 결과 다른 철자(감싼 꼴·대소문자·.exe·따옴표 낱말·공백 둘·주석·밑줄·한글 바로 붙음)
+    again_alt = ["bash -c 'wrangler secret:put K'", "WRANGLER SECRET:PUT K", "wrangler.exe secret:put K", "'railway' up:x", "railway  up-x",
+                 "railway up:x # x", "railway up_x", "railway up한", "VERCEL ALIASES ls", "npx wrangler secret:bulk x.json", "pm2 restart:all;echo x"]
+    still_open = ["railway upgrade", "railway deployment list", "wrangler deployments list", "wrangler deployments status",
+                  "wrangler pages deployment list", "wrangler pages deployment tail", "pm2 reloadLogs", "bin/rails db:migrate:status",
+                  "php artisan migrate:status", "railway status", "railway logs", "vercel ls", "pm2 list"]
+    still_block = ["railway up", "railway up;", "railway up&&echo", "railway deploy", "railway redeploy", "railway down", "railway restart",
+                   "railway deployment redeploy", "railway deployment up", "wrangler deploy", "wrangler secret put K", "wrangler secret bulk x.json",
+                   "wrangler secrets-store secret create x", "wrangler rollback", "wrangler versions deploy", "vercel alias set a b", "vercel --prod",
+                   "pm2 reload all", "pm2 restart all", "netlify deploy:prod", "firebase deploy:hosting", "fly deploy:x", "gh pr merge 68 --rebase",
+                   "rails db:migrate:reset", "rails db:migrate:statusx", "php artisan migrate:rollback"]
+    proj = make_project(phase="EXECUTE")
+    try:
+        _cases_034(res, proj, "F4 다시 막힘", [(B, bash(c)) for c in again], need=W_DEP)
+        _cases_034(res, proj, "F4 다시 막힘(다른 철자)", [(B, bash(c)) for c in again_alt], need=W_DEP)
+        _cases_034(res, proj, "F4 다시 막힘(PowerShell)", [(B, ps(c)) for c in ["wrangler secret:put K", "railway up:x", "vercel aliases ls"]], need=W_DEP)
+        _cases_034(res, proj, "F4 계속 풀림", [(OK, bash(c)) for c in still_open])
+        _cases_034(res, proj, "F4 계속 막힘", [(B, bash(c)) for c in still_block])
     finally:
         rmtree_rw(proj)
 
@@ -4195,10 +4227,11 @@ def check_push_t7_034(res):
               "Push-Location ..; " + P, "function git { git.exe -C .. @args }; " + P, "Set-Alias git C:\\x\\git.exe; " + P,
               "[Environment]::SetEnvironmentVariable('GIT_DIR','C:\\x'); " + P, "Set-Location ..; " + P]
     good = [P, "git push -u origin feat", "git add a && git commit -m x && git push -u origin feat", P + " 2>&1 | tail -3", P + "\necho 끝",
-            "git status --short && " + P, "echo ok; " + P, "true && " + P, P + " | head -5", P + " 2>&1 | wc -l", "printf 'a'; " + P,
+            "git status --short && " + P, "echo ok; " + P, "true && " + P, P + " | head -5", P + " 2>&1 | wc -l",
             "GIT status && " + P]
     # 새로 막히는 정상 꼴(설계서 §5 T7 — 안내하는 꼴은 git push -u origin <가지> 한 줄이라 영향 없음)
-    newly = ["X=1 echo hi; " + P, "export FOO=1; " + P, "if git diff --quiet; then echo clean; fi; " + P]
+    #   (보완 F11: printf 는 허용 목록에서 빠졌다 — printf -v PATH … 로 뒤 git 을 바꿀 수 있음)
+    newly = ["X=1 echo hi; " + P, "export FOO=1; " + P, "if git diff --quiet; then echo clean; fi; " + P, "printf 'a'; " + P]
     proj = _push_proj_034()
     try:
         _grant_034(proj)
@@ -4206,6 +4239,21 @@ def check_push_t7_034(res):
         _cases_034(res, proj, "T7 우회 차단(PowerShell)", [(B, ps(c)) for c in ps_bad])
         _cases_034(res, proj, "T7 정상 통과", [(OK, bash(c)) for c in good])
         _cases_034(res, proj, "T7 새로 막히는 꼴 고정", [(B, bash(c)) for c in newly], need=W)
+        # 보완 F11: printf 빼기 + 2>&1 꼴 말고 리다이렉트 글자(> <)가 남으면 차단(같은 결과 다른 철자 포함) / 반대 방향: 2>&1 꼴은 그대로 통과
+        f11_bad = ["printf -v PATH '/tmp/x:%s' \"$PATH\"; " + P, "printf -v HOME /tmp/h; " + P, "printf 'ok\\n'; " + P, "PRINTF -v PATH x; " + P,
+                   "echo ok > /tmp/x; " + P, P + " > /dev/null 2>&1", P + " >> log.txt", P + " < /dev/null", "echo x >.git/hooks/pre-push; " + P,
+                   P + " 2> err.txt",
+                   "\"printf\" -v PATH x; " + P, "printf.exe -v PATH x; " + P, "echo ok>/tmp/x; " + P, "echo ok >| /tmp/x; " + P,
+                   "echo ok &>/tmp/x; " + P, "echo ok 1> /tmp/x; " + P]
+        f11_good = [P, "git push -u origin feat", "git push --set-upstream origin feat", P + " 2>&1 | tail -3", "git push -u origin feat 2>&1",
+                    "echo ok; " + P, "git status --short && " + P, "git add a && git commit -m x && git push -u origin feat", "echo ok 2>&1; " + P]
+        _cases_034(res, proj, "F11 리다이렉트·printf 차단", [(B, bash(c)) for c in f11_bad], need=W)
+        _cases_034(res, proj, "F11 정상 통과", [(OK, bash(c)) for c in f11_good])
+        # 보완 F11(메인 추가): 파일 번호 잇기는 숫자 바로 뒤가 공백·| ; & )·끝일 때만 지운다 — 뒤에 글자가 붙으면 파일 리다이렉트라 차단
+        _cases_034(res, proj, "F11 번호 잇기 뒤 글자 차단", [(B, bash(c)) for c in [
+            "echo hi >&2file; " + P, P + " >&2x", P + " 2>&1x"]], need=W)
+        _cases_034(res, proj, "F11 번호 잇기 통과", [(OK, bash(c)) for c in [
+            P + " 2>&1", P + " 2>&1|tail -3", P + " 2>&1 | tail -3", P + " >&2", "git push -u origin feat 2>&1;echo 끝"]])
         _grant_034(proj, on=False)
         _cases_034(res, proj, "T7 허락 없음 그대로 차단", [(B, bash(c)) for c in [P, "git push -u origin feat", "git status --short && " + P]], need=W)
     finally:

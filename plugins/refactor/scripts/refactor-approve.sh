@@ -10,7 +10,7 @@
 #              "새 가지" / "새 가지 refactor/hotfix-1" / "합치기" / "합치기 68 rebase" / 비움=현황)
 #   환경변수 REFACTOR_TURN_SID = 입력 훅이 넘기는 세션 ID("푸시"의 허락 파일 이름에 쓴다)
 # "허용"(0.3.3)은 승인된 🛠 단계의 기준선 허용 파일(.allow-baseline-edit)에 단계 ID 를 적는다.
-#   0.3.4 부터는 승인할 때도 그 카드의 기준선 칸에 백틱 경로가 있으면 같은 루틴으로 자동으로 적는다(보류하면 뺀다) — '허용'은 닫은 뒤 다시 열 때 쓴다.
+#   0.3.4 부터는 승인할 때도 🛠 카드의 기준선 칸에 백틱 경로가 있으면 같은 루틴으로 자동으로 적는다(보류하면 뺀다 · 🔧·종류 칸 없는 카드는 안 연다) — '허용'은 닫은 뒤 다시 열 때 쓴다.
 # "새 가지"(0.3.4)는 지금 가지의 내용이 origin/<기본 가지> 에 다 들어 있을 때 거기서 새 작업 가지를 만들어 옮긴다(네트워크 없음).
 # "합치기"(0.3.4)는 지금 가지의 PR 을 gh 로 확인(열림·검사 초록·기본 가지에 새 커밋 없음 등)한 뒤 합친다 — 승인 모드 중 유일하게 네트워크를 쓴다.
 # "허용 닫기"는 그 파일을 지운다(기록에 줄을 남기지 않는다 — 닫는 쪽은 안전한 방향이고, 마무리 뒤에 닫아도 "마지막 줄 = 마무리"가 그대로).
@@ -381,17 +381,32 @@ EOF
     || nb_no "⛔ 기본 가지(origin/$bname)의 승인 기록이 지금 가지와 다릅니다"
   ob=$("${G[@]}" symbolic-ref -q --short HEAD 2>/dev/null)
   obs=${ob:-떨어진 HEAD}
-  if ! rl_merged_into "$proj" "$boid"; then
-    say "⛔ 지금 가지($obs)의 내용이 아직 origin/$bname 에 다 들어 있지 않습니다 — PR 이 아직 안 합쳐졌거나, 합친 뒤 최신 내용을 안 받아 온 상태입니다. Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요."
-    say "   (새 가지를 만들지 않았습니다 — 아무것도 바꾸지 않았습니다.)"
-    exit 0
-  fi
+  # 붙인 이름은 판정 전에 본다(판정 불가 문구의 터미널 명령에 그 이름을 쓰므로)
+  nb=""
   if [ -n "$nbname" ]; then
     nb=$nbname
     if ! [[ $nb =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || ! "${G[@]}" check-ref-format --branch "$nb" >/dev/null 2>&1; then
       nb_no "❓ 가지 이름($nb)을 쓸 수 없습니다(영문·숫자·._/- 만, 첫 글자는 영문·숫자·_, git 가지 이름 규칙)"
     fi
-  else
+    # 0.3.4 보완 F6: 참조 이름 꼴·기본 가지 이름은 거절(대소문자 그대로 비교)
+    case "$nb" in
+      refs/*|origin/*|HEAD|main|master|"$bname")
+        nb_no "❓ 가지 이름($nb)을 쓸 수 없습니다(refs/·origin/ 으로 시작하는 이름과 HEAD·main·master·기본 가지 이름 $bname 은 새 작업 가지 이름으로 쓰지 않습니다)" ;;
+    esac
+  fi
+  rl_merged_into "$proj" "$boid"; mrc=$?
+  if [ "$mrc" = 1 ]; then
+    say "⛔ 지금 가지($obs)의 내용이 아직 origin/$bname 에 다 들어 있지 않습니다 — PR 이 아직 안 합쳐졌거나, 합친 뒤 최신 내용을 안 받아 온 상태입니다. Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요."
+    say "   (새 가지를 만들지 않았습니다 — 아무것도 바꾸지 않았습니다.)"
+    exit 0
+  elif [ "$mrc" != 0 ]; then
+    # 판정 불가(0.3.4 보완 F3): 까닭 + 사람이 터미널에서 만드는 길
+    say "❓ 지금 가지($obs)의 내용이 origin/$bname 에 다 들어 있는지 판정하지 못했습니다: ${RL_MERGED_WHY:-까닭 모름}."
+    say "   Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요. 받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서: git switch -c ${nb:-refactor/$RL_TODAY} origin/$bname"
+    say "   (새 가지를 만들지 않았습니다 — 아무것도 바꾸지 않았습니다.)"
+    exit 0
+  fi
+  if [ -z "$nb" ]; then
     nb0="refactor/$RL_TODAY"
     have=$("${G[@]}" for-each-ref --format='%(refname)' "refs/heads/$nb0*" "refs/remotes/origin/$nb0*" 2>/dev/null)
     have="$RL_NL$have$RL_NL"
@@ -477,18 +492,22 @@ if [ "$mode" = "merge" ]; then
   mtmp=$(mktemp -d 2>/dev/null) || mtmp=$(mktemp -d -t rlmerge 2>/dev/null) || mtmp=""
   [ -n "$mtmp" ] || mg_no "⚠️ 임시 폴더를 만들지 못했습니다"
   trap 'rm -rf "$mtmp"' EXIT
-  # gh 의 첫 오류 줄(200자까지) → GE
+  # gh 의 첫 오류 줄(200자까지) → GE. 제어 문자는 ? 로(0.3.4 보완 F10 — 결과 블록에 터미널 제어 글자가 그대로 실리지 않게)
   gh_err() {
     GE=""
     while IFS= read -r x; do x=${x%$'\r'}; [ -n "${x//[[:space:]]/}" ] && { GE=${x:0:200}; break; }; done < "$mtmp/e"
+    GE=${GE//[[:cntrl:]]/?}
     [ -n "$GE" ] || GE="(오류 문구 없음)"
   }
+  # gh 호출의 출력·오류는 $( ) 가 아니라 임시 파일로 받는다(0.3.4 보완 F7 — gh 감싸개가 띄운 자식이 출력 통로를 쥐고 남으면
+  #   $( ) 는 시간 한도와 상관없이 그 자식이 끝날 때까지 기다린다. 파일이면 한도에서 바로 돌아온다)
   export GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 GIT_TERMINAL_PROMPT=0
   # 1) PR 조회 — 첫 줄 = 번호·상태·초안·포크·기본 가지·머리 가지·머리 커밋·합칠 수 있음, 그다음 줄마다 검사 하나(종류·status·conclusion·state·이름)
   JQV='([.number, .state, .isDraft, .isCrossRepository, .baseRefName, .headRefName, .headRefOid, .mergeable] | map(tostring) | join("\u001f")), ((.statusCheckRollup // [])[] | [(.__typename // "-"), (.status // "-"), (.conclusion // "-"), (.state // "-"), (.name // .context // "-")] | map(tostring) | join("\u001f"))'
   set -- pr view
   [ -n "$mprn" ] && set -- "$@" "$mprn"
-  pv=$( (cd "$proj" && rl_bounded 6 gh "$@" --json number,state,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,statusCheckRollup --jq "$JQV") 2>"$mtmp/e"); prc=$?
+  (cd "$proj" && rl_bounded 6 gh "$@" --json number,state,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,statusCheckRollup --jq "$JQV") >"$mtmp/o" 2>"$mtmp/e"; prc=$?
+  pv=$(< "$mtmp/o")
   if [ "$prc" != 0 ]; then
     case "$prc" in 124|142) mg_no "⛔ PR 조회가 6초 안에 끝나지 않았습니다 — 잠시 뒤 다시 입력하세요" ;; esac
     gh_err
@@ -519,7 +538,7 @@ EOF
   cn=0; cok=0; cpend=""; cfail=""
   while IFS="$US" read -r ctype cstat cconc cstate cname; do
     [ -n "$ctype" ] || continue
-    cn=$((cn + 1)); cname=${cname:0:80}
+    cn=$((cn + 1)); cname=${cname:0:80}; cname=${cname//[[:cntrl:]]/?}
     case "$ctype" in
       CheckRun)
         if [ "$cstat" != COMPLETED ]; then cpend="$cpend, $cname"
@@ -538,14 +557,15 @@ EOF
     mg_no "⛔ PR #$pn 에 통과한 자동 검사가 없습니다 — 검사 없이는 여기서 합치지 않습니다. 사람이 GitHub 화면·터미널에서 합쳐 주세요"
   fi
   # 3) 기본 가지에 PR 이 모르는 새 커밋이 들어왔나(GitHub 쪽 기준 — 로컬 참조는 옛 것일 수 있다)
-  cb=$( (cd "$proj" && rl_bounded 5 gh api "repos/{owner}/{repo}/compare/$bname...$poid" --jq .behind_by) 2>"$mtmp/e"); crc=$?
+  (cd "$proj" && rl_bounded 5 gh api "repos/{owner}/{repo}/compare/$bname...$poid" --jq .behind_by) >"$mtmp/o" 2>"$mtmp/e"; crc=$?
+  cb=$(< "$mtmp/o")
   if [ "$crc" != 0 ] || ! [[ $cb =~ ^[0-9]+$ ]]; then
     case "$crc" in 124|142) GE="5초 안에 끝나지 않음" ;; 0) GE="응답 형식이 예상과 다름" ;; *) gh_err ;; esac
     mg_no "⛔ 기본 가지($bname)와 PR 을 비교하지 못했습니다: $GE — 사람이 확인한 뒤 GitHub 화면·터미널에서"
   fi
   [ "$cb" = 0 ] || mg_no "⛔ 기본 가지($bname)에 새 커밋 ${cb}개가 들어와 있습니다 — 사람이 확인한 뒤 GitHub 화면·터미널에서"
   # 4) 합치기 — 확인한 머리 커밋일 때만(--match-head-commit). 그 밖의 옵션은 붙이지 않는다
-  mo=$( (cd "$proj" && rl_bounded 8 gh pr merge "$pn" "--$mth" --match-head-commit "$poid") 2>"$mtmp/e"); mrc=$?
+  (cd "$proj" && rl_bounded 8 gh pr merge "$pn" "--$mth" --match-head-commit "$poid") >"$mtmp/o" 2>"$mtmp/e"; mrc=$?
   if [ "$mrc" != 0 ]; then
     case "$mrc" in
       124|142) say "⚠️ 합치기 요청이 8초 안에 끝나지 않았습니다 — 합쳐졌는지 알 수 없습니다. Claude 에게 'gh pr view $pn --json state,mergedAt' 로 확인해 달라고 하세요."
@@ -815,9 +835,19 @@ EOF
           "") ;;
           "?") say "   ⚠️ '깨질 것으로 예상되는 기준선' 칸에 백틱 경로가 없어 이 단계는 기준선을 고칠 수 없습니다 — 필요하면 계획서를 고치게 하세요" ;;
           *) # 0.3.4: 승인하면 그 단계의 기준선 허용이 자동으로 열린다(승인 줄 덧붙임으로 "승인 뒤 바뀜"이 되는 카드는 안 열림)
+             #   🛠(동작이 바뀌는) 카드만 — 종류 칸에 🛠 가 있고 🔧 가 없을 때(0.3.4 보완 F8). 그 밖이면 열지 않고 ⚠️ 한 줄(수동 '허용 <ID>'는 그대로)
              case "$alt_pre" in *" $n_=$hv "*)
-               say "   🔓 고칠 기준선: $BLV — 이 단계를 실행하는 동안 열립니다(닫기: /refactor:approve 허용 닫기)"
-               aw_want="$aw_want $id" ;;
+               case "$k" in
+                 *🔧*) aw_kind=0 ;;
+                 *🛠*) aw_kind=1 ;;
+                 *) aw_kind=0 ;;
+               esac
+               if [ "$aw_kind" = 1 ]; then
+                 say "   🔓 고칠 기준선: $BLV — 이 단계를 실행하는 동안 열립니다(닫기: /refactor:approve 허용 닫기)"
+                 aw_want="$aw_want $id"
+               else
+                 say "   ⚠️ 🛠 카드가 아니라 기준선 허용을 자동으로 열지 않았습니다 — 계획서를 확인하고 필요하면 /refactor:approve 허용 $id"
+               fi ;;
              esac ;;
         esac
       else

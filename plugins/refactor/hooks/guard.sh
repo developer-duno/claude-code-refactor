@@ -1845,7 +1845,9 @@ hv_db() {
 #   $2 = 원격 DB 주소 판정용 문자열(원형은 lr, 사본은 그 사본)
 hv_deploy() {
   local t=$1 r=${2:-$1} remote_db=0
-  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|redeploy)([[:space:]\"')\`;&|]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([[:space:]\"')\`;&|]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([[:space:]\"')\`;&|]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([[:space:]\"')\`;&|]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
+  # 0.3.4 F4: 하위명령 낱말 뒤 경계 = 영문·숫자가 아닌 글자 또는 끝 — 글자가 이어지는 낱말(upgrade·deployments·reloadLogs)만 풀리고
+  #   :·-·=·, 가 붙은 꼴(wrangler secret:put · railway up:x)은 막힌다. vercel aliases 는 alias 와 같이
+  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
   local re_pkg_deploy="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?([a-z0-9_-]+:)?(deploy|release|publish|ship)([[:space:]:]|$)"
   if has "$t" "$re_deploy" || has "$t" "$re_pkg_deploy"; then
     # 0.3.4 §10-5: PR 합치기(gh pr merge)가 걸렸을 때만 입력창 명령을 안내한다(합치기는 승인 스크립트가 검사 뒤 직접 한다)
@@ -3089,10 +3091,14 @@ push_grant() {
 }
 # $1 판정용 문자열 하나가 "허락된 가지($2)로 보내는 정확한 push 한 번" 인가. 조각(&& || ; | & ( ) 백틱 줄바꿈)으로 나눠
 #   push 낱말(따옴표 뗀 뒤 대소문자 무시)이 정확히 한 번 · 그 조각이 git push [-u|--set-upstream] origin <가지>(가지는 따옴표 한 쌍까지) [2>&1] 뿐 ·
-#   그 조각에 \ 없음 · 모든 조각의 첫 낱말이 git·echo·printf·tail·head·true·wc(0.3.4 T7 허용 목록 — 작업 폴더·저장소·git 을 바꾸는 조각이 끼지 않게)
+#   그 조각에 \ 없음 · 모든 조각의 첫 낱말이 git·echo·tail·head·true·wc(0.3.4 T7 허용 목록 — 작업 폴더·저장소·git 을 바꾸는 조각이 끼지 않게) ·
+#   2>&1 꼴 말고 리다이렉트 글자(> <) 없음(0.3.4 F11)
 push_exact() {
-  local s=$1 ab=$2 re_dup='[0-9]?>&[0-9]' seg n=0 ps="" t w i
-  while [[ $s =~ $re_dup ]]; do s=${s/"${BASH_REMATCH[0]}"/ }; done
+  local s=$1 ab=$2 re_dup='[0-9]?>&[0-9]([[:space:]|;&)]|$)' seg n=0 ps="" t w i
+  # 파일 번호끼리 잇기(2>&1 · >&2)는 숫자 바로 뒤가 공백·| ; & )·끝일 때만 지운다(뒤 글자는 남김) — >&2file 은 파일 리다이렉트라 아래에서 막힌다
+  while [[ $s =~ $re_dup ]]; do s=${s/"${BASH_REMATCH[0]}"/ ${BASH_REMATCH[1]}}; done
+  # 0.3.4 F11: 파일 번호끼리 잇기(2>&1) 말고 리다이렉트 글자(> <)가 남아 있으면 막는다 — 같은 명령의 다른 조각이 파일(.git/hooks 등)을 쓰거나 읽지 않게
+  case "$s" in *[\<\>]*) return 1 ;; esac
   s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//&/$NL}; s=${s//(/$NL}; s=${s//)/$NL}; s=${s//\`/$NL}
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
@@ -3106,7 +3112,8 @@ push_exact() {
     t=${w[0]:-}; t=${t//\"/}; t=${t//\'/}
     # 0.3.4 T7: 조각의 첫 낱말은 허용 목록만(빈 조각 포함) — 막을 목록(cd·pushd·…)은 대입·export·함수 정의·중괄호·제어 낱말·trap 뒤의
     #   폴더·저장소·git 바꾸기를 못 따라간다. git 조각은 둘째 낱말이 옵션(-C·-c·--git-dir …)·config·remote 가 아닐 때만
-    case "$t" in ""|git|echo|printf|tail|head|true|wc) ;; *) return 1 ;; esac
+    #   (0.3.4 F11: printf 는 뺀다 — printf -v PATH … 로 내보낸 변수를 바꿔 뒤 git 이 다른 프로그램이 될 수 있다)
+    case "$t" in ""|git|echo|tail|head|true|wc) ;; *) return 1 ;; esac
     case "$t" in [Gg][Ii][Tt]) case "${w[1]//[\"\']/}" in -*|[Cc][Oo][Nn][Ff][Ii][Gg]|[Rr][Ee][Mm][Oo][Tt][Ee]) return 1 ;; esac ;; esac
   done
   [ "$n" = 1 ] || return 1
