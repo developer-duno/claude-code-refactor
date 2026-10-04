@@ -1,7 +1,7 @@
 {
   "name": "refactor",
   "displayName": "Vibe Refactor",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "운영 중인 서비스를 안전한 순서(건강검진 → 기준선 → 계획서 → 승인된 단계 실행)로 리팩토링합니다. 읽기만 하는 단계는 자동으로 이어 가고, 코드를 바꾸는 단계는 사람이 승인한 것만 한 단계씩 진행합니다. (안전장치는 리팩토링 중에만 켜집니다)",
   "author": {
     "name": "Vibe Consulting",

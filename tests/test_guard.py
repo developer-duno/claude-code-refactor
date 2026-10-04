@@ -4460,6 +4460,13 @@ def check_merge_nogrant_035(res):
                 f"bash {run_sh} refactor-mer${{z}}ge {P} t", f"python3 -c \"import subprocess; subprocess.run(['bash','{run_sh}','refactor-merge','{P}','t'])\""]
         _cases_034(res, proj, "G4 허락 없음 · 안내", [(B, bash(c)) for c in hint], need=W_MERGE_NO)
         _cases_034(res, proj, "G2 허락 없음 · PowerShell", [(B, ps(c)) for c in [_mcmd_035(proj), f"& bash {run_sh} refactor-merge {P} t"]], need=W_MERGE)
+        # 0.3.6 #9: 짧은 경로 글자 고정 — 승인 이름 정규식(run.sh 뒤 24글자 안의 guard 등)이 경로의 "guard" 에 걸려도
+        #   합치기 안내가 나와야 한다(0.3.5 CI 우분투만 깨짐: 로컬 TMPDIR 가 길면 24글자 밖이라 안 보였다)
+        S = "/tmp/guardtest-a"
+        short = [f'bash "{run_sh}" refactor-merge "{S}" t', f"bash {run_sh} refactor-merge {S} t",
+                 f"node -e \"require('child_process').execSync('bash {run_sh} refactor-merge {S} t')\"",
+                 f"python3 - <<'EOF'\nimport os\nos.system('bash {run_sh} refactor-merge {S} t')\nEOF"]
+        _cases_034(res, proj, "G2 허락 없음 · 짧은 경로(#9)", [(B, bash(c)) for c in short], need=W_MERGE)
         reads = [f"cat {ms}", f"grep -n merge {ms}", f"head -20 {ms}", f"wc -l {ms}", f"ls {R}/scripts", f"tail -5 {ms}",
                  "git log --oneline -3 -- plugins/refactor/scripts/refactor-merge.sh", f"grep -rn refactor-merge {R}/skills",
                  f"python3 -c \"print(open('{ms}').read())\"", f"cat {run_sh}", "echo refactor-merge", "gh pr view 70 --json state,mergedAt",
