@@ -24,5 +24,5 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 
 - 단계 이름 쉬운 말: SETUP 준비 · MAP 코드 지도 · CHECKUP 건강검진 · DEEP 정밀검사 · VERIFY 반박 검증 · BASELINE_PLAN 기준선 계획(승인 대기) · BASELINE 기준선 작성 · PLAN 계획서(승인 대기) · EXECUTE 단계 실행 · DONE 완료
 - 결과가 `NO_STATE`로 시작하면: "아직 시작하지 않았어요. `/refactor:go`로 시작하면 준비 질문부터 합니다. 안전장치는 `/refactor:go` 로 리팩토링을 시작하면 켜집니다." 두 문장만.
-- 커밋 안 된 변경이 있으면 "다음 단계 전에 커밋해 두면 되돌리기 쉬워요"를 덧붙인다(단계 커밋은 `/refactor:go` 가 단계 끝에 한다 — 남아 있으면 멈춘 단계일 수 있음).
+- 커밋 안 된 변경이 있으면 "다음 단계 전에 커밋해 두면 되돌리기 쉬워요"를 덧붙인다(기준선 커밋은 `/refactor:go` 가 기준선 작성 끝에, 단계 커밋은 단계마다 끝에 한다 — 남아 있으면 멈춘 단계일 수 있음).
 - 파일을 고치거나 다른 명령을 실행하지 않는다.

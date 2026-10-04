@@ -43,7 +43,7 @@ fi
 
 printf '[Vibe Refactor] 이 프로젝트는 리팩토링이 진행 중입니다 (docs/refactor/STATE.md).\n'
 printf '%s' "$front"
-printf '규칙: 승인은 사용자가 /refactor:approve 로만 한다(근거는 APPROVALS.log — 계획서 체크 표시가 아님) · 푸시·합치기·배포·운영 DB는 사람이 한다(단계 커밋은 /refactor:go 가 단계 끝에 그 단계 파일만 · 작업 가지 push 는 사용자가 /refactor:approve 푸시 로 허락한 차례에만) · 테스트·빌드는 안전 실행기(refactor-safe-run)로 한다 · 비밀값은 출력하지 않는다 · [refactor 안전장치] 차단은 우회하지 말고 보고한다.\n'
+printf '규칙: 승인은 사용자가 /refactor:approve 로만 한다(근거는 APPROVALS.log — 계획서 체크 표시가 아님) · 푸시·PR 합치기는 사용자가 입력창 명령으로 한다(작업 가지 push 는 사용자가 /refactor:approve 푸시 로 허락한 차례에만 · 합치기는 /refactor:approve 합치기 · 합친 뒤 새 작업 가지는 /refactor:approve 새 가지) · 배포·운영 DB는 사람이 한다 · 기준선 커밋과 단계 커밋은 /refactor:go 가 그 파일만 한다 · 테스트·빌드는 안전 실행기(refactor-safe-run)로 한다 · 비밀값은 출력하지 않는다 · [refactor 안전장치] 차단은 우회하지 말고 보고한다.\n'
 printf '이어서 하려면 사용자가 /refactor:go, 현황만 보려면 /refactor:status 를 실행한다. 사용자가 이어서 하자고 하면 이 명령을 안내한다.\n'
 
 for f in "$proj"/docs/refactor/.allow-*; do

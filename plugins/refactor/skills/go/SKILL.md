@@ -39,11 +39,11 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
    - 준비·지도·건강검진·정밀검사·반박 검증·기준선 계획·계획서: `docs/refactor/` 아래 파일만 쓴다. 코드는 한 줄도 고치지 않는다(`/refactor:go` 실행 중에는 안전장치도 막는다).
    - 기준선 작성: 여기에 더해 `tests/baseline/` 아래 새 파일, 승인된 기준선 계획에 적힌 테스트 설정 파일, 승인된 개발용 도구 설치로 바뀌는 패키지 파일, 그리고 껍데기 확인용 한 줄 임시 수정(바로 원복)만.
    - 단계 실행: 승인된 단계 카드의 "건드릴 파일"과 그 단계의 새 테스트(`tests/baseline/` 밖), `docs/refactor/` 기록만.
-3. **돈·메시지·운영 데이터를 건드리지 않는다.** 실제 결제·환불, 알림톡·문자·메일 발송, 운영 DB 접속·쿼리·마이그레이션 적용, 수집 대상 사이트 요청, 배포를 하지 않는다. push·merge는 사람이 한다. 단계 커밋은 7-execute 순서 5-1 대로 그 단계 파일만 한다(기준선 커밋은 사람이). 작업 가지 push 는 사용자가 /refactor:approve 푸시 로 허락한 차례에만 한다.
-   - **리팩토링 중에는 다른 가지로 옮기지 않는다**(`git switch <가지>`·`git checkout <가지>`) — 리팩토링 기록(`docs/refactor`)이 없는 가지로 가면 안전장치가 통째로 꺼진다. 가지를 옮겨야 하면 멈추고 사람에게 부탁한다. (준비 단계에서 허락받은 작업 가지를 **새로 만드는 것**(`git switch -c refactor/…`)은 `phases/0-setup.md` 지시대로 한다.) (안전장치도 막는다 — 지금 위치에서 새 가지 만들기만 통과)
+3. **돈·메시지·운영 데이터를 건드리지 않는다.** 실제 결제·환불, 알림톡·문자·메일 발송, 운영 DB 접속·쿼리·마이그레이션 적용, 수집 대상 사이트 요청, 배포를 하지 않는다. push·merge는 사람이 한다. 커밋은 두 곳에서만, 그 파일만 한다: 기준선 커밋은 5-baseline 2부 순서 5-1 대로, 단계 커밋은 7-execute 순서 5-1 대로. 작업 가지 push 는 사용자가 /refactor:approve 푸시 로 허락한 차례에만 한다. PR 합치기는 사용자가 입력창에 /refactor:approve 합치기 를 쳐서 한다(Claude 는 합치지 않는다).
+   - **리팩토링 중에는 다른 가지로 옮기지 않는다**(`git switch <가지>`·`git checkout <가지>`) — 리팩토링 기록(`docs/refactor`)이 없는 가지로 가면 안전장치가 통째로 꺼진다. 가지를 옮겨야 하면 멈추고 사람에게 부탁한다. PR 을 합친 뒤 최신 기본 가지에서 새 작업 가지를 시작할 때는 사용자에게 입력창에 `/refactor:approve 새 가지` 를 쳐 달라고 한다(이름은 `refactor/<날짜>` 로 저절로 정해진다). (준비 단계에서 허락받은 작업 가지를 **새로 만드는 것**(`git switch -c refactor/…`)은 `phases/0-setup.md` 지시대로 한다.) (안전장치도 막는다 — 지금 위치에서 새 가지 만들기만 통과)
    - **테스트·빌드·개발 서버·스크립트 실행은 항상 안전 실행기로 한다**(운영일 수 있는 DB 주소·키를 가짜 값으로 바꿔 실행한다. `/refactor:go` 중에는 안전장치가 강제한다):
      `bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-safe-run -- <명령>` — `&&`·`;`로 이은 명령마다 각각 붙인다(여러 명령을 한 번에 감싸려면 `… refactor-safe-run -- sh -c "npm test && npm run build"`). 안전장치가 모르는 실행 명령(예: 새 도구)에도 붙인다. 무엇이 바뀌는지(이름만) 보려면 `… refactor-safe-run --check`. **Bash 도구(Git Bash)로만 실행한다** — PowerShell 도구에서 `bash`를 치면 Windows 자체의 WSL bash가 잡혀 실패한다.
-   - 개발용 DB가 원격이라 가짜 값으로 바뀌면 DB 테스트를 못 한다 — 사람이 개발용이라고 확인한 값을 `docs/refactor/.allow-env`에 적어야 한다(사람만. 주소 값은 `이름=호스트`, 키 값은 이름만: 터미널에서 `printf 'DATABASE_URL=<개발용 호스트>\n' >> "<프로젝트>/docs/refactor/.allow-env"` (CLI 라면 입력창에 `! printf …` 도 됨)). 네가 만들지 않는다.
+   - 개발용 DB가 원격이라 가짜 값으로 바뀌면 DB 테스트를 못 한다 — 사람이 개발용이라고 확인한 값을 `docs/refactor/.allow-env`에 적어야 한다(사람만. 주소 값은 `이름=호스트`, 키 값은 이름만: 터미널에서 `printf 'DATABASE_URL=<개발용 호스트>\n' >> "<프로젝트>/docs/refactor/.allow-env"` (CLI 라면 입력창에 `! printf …` 도 됨 · 리다이렉트가 든 명령이라 아래 「사람에게 주는 명령」의 리다이렉트 줄대로)). 네가 만들지 않는다.
    - 안전 실행기로 만든 빌드 결과(.next·dist)에는 가짜 값이 들어 있다. 배포용으로 쓰지 말라고 보고에 적는다.
    - PROFILE에 운영 DB와 개발 DB가 "하나뿐" 또는 "모름"이면 DB·외부 API를 쓰는 테스트는 돌리지 않는다. 결과에 `127.0.0.1:9` 연결 실패가 보이면 안전 실행기가 제대로 막은 것이다 — 우회하지 말고 "개발용 DB 필요"로 보고한다.
 4. **비밀값은 한 글자도 출력하지 않는다**(`****`). `.env`·키 파일은 열지 않고, 이름과 git 추적 여부만 본다. 비밀값을 찾을 때는 `grep -l`·`git log --all --oneline -S "<접두어>"`처럼 값이 화면에 찍히지 않는 방법만 쓴다. 원격 저장소 주소는 `git remote -v | sed -E 's#//[^/@]*@#//****@#'`처럼 가려서 본다.
@@ -58,15 +58,15 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 
 1. 위 "지금 상태"를 본다. `NO_STATE`면 **준비(SETUP)** 부터 시작한다.
 2. 인자를 해석한다.
-   - 비었거나 "계속": 아래 단계표에서 다음 단계를 진행한다.
-   - "하나씩": 이번 호출에서는 단계 하나만 하고 멈춘다(자동으로 이어 가지 않는다).
-   - "다시 <단계>"(예: "다시 CHECKUP"): 그 단계**와 그 뒤 단계들**의 산출물(AUDIT_REPORT·audit/·AUDIT_VERIFY·BASELINE·REFACTOR_PLAN 중 해당하는 것)을 `*-prev.md`(폴더는 `*-prev/`)로 이름을 바꿔 두고 그 단계부터 새로 한다. 옛 승인은 새 계획에 이어지지 않는다(사용자가 `/refactor:go 다시 …`를 입력하면 훅이 승인 기록에 재설정 줄을 남기고, 그 이전 승인은 무효가 된다). `tests/baseline/`의 기존 기준선은 그대로 두고, 새 기준선 계획은 "이미 있음"으로 적는다. 지금 기본 가지(`main`·`master`) 위라면 사용자 허락을 받고 지금 위치에서 `git switch -c refactor/<날짜>` 로 작업 가지를 만든다.
+   - 비었거나 "계속": 아래 단계표에서 다음 단계를 진행한다. 단계 실행(EXECUTE)에서는 이번 차례를 시작할 때의 실행 대기 단계를 계획서 순서로 하나씩 차례로 이어서 한다(멈춤 조건은 `phases/7-execute.md` 「0-2」).
+   - "하나씩": 이번 호출에서는 단계 하나만 하고 멈춘다(자동으로 이어 가지 않는다 — 단계 실행에서는 승인된 단계 하나만 실행하고 멈춘다).
+   - "다시 <단계>"(예: "다시 CHECKUP"): 그 단계**와 그 뒤 단계들**의 산출물(AUDIT_REPORT·audit/·AUDIT_VERIFY·BASELINE·REFACTOR_PLAN 중 해당하는 것)을 `*-prev.md`(폴더는 `*-prev/`)로 이름을 바꿔 두고 그 단계부터 새로 한다. 옛 승인은 새 계획에 이어지지 않는다(사용자가 `/refactor:go 다시 …`를 입력하면 훅이 승인 기록에 재설정 줄을 남기고, 그 이전 승인은 무효가 된다). `tests/baseline/`의 기존 기준선은 그대로 두고, 새 기준선 계획은 "이미 있음"으로 적는다. 지금 기본 가지(`main`·`master`) 위라면 사용자 허락을 받고 지금 위치에서 `git switch -c refactor/<날짜>` 로 작업 가지를 만든다. 지난 작업 가지 위이고 그 가지의 PR 이 이미 합쳐졌으면, 사용자에게 입력창에 `/refactor:approve 새 가지` 를 쳐 달라고 한다(최신 기본 가지에서 새 작업 가지를 만든다 — Claude 는 다른 가지로 옮기지 못한다).
    - "마무리": 실행 대기 단계가 없으면 완료 보고(아래 7)를 하고, 사용자에게 `/refactor:approve 마무리`를 입력해 달라고 한다(그 명령이 DONE을 기록한다). 실행 대기 단계가 있으면 목록을 보여 주고 "먼저 실행하거나 `/refactor:approve 보류 <ID>`로 보류하세요"라고 안내한다.
 3. 게이트(`gate`)가 걸려 있으면 "지금 상태"로 풀렸는지 확인한다.
    - `G1-baseline`: "기준선 계획: 승인됨"이면 **기준선 작성**으로, 아니면(승인 대기·승인 뒤 계획이 바뀜·승인 취소됨) `/refactor:approve baseline`을 안내하고 멈춘다.
    - `G2-plan`: "▶ 실행 대기" 단계가 있으면 **단계 실행**으로, 없으면 승인 방법을 안내하고 멈춘다. 그 밖의 목록(카드 바뀜·기록 없는 체크 표시·같은 번호)은 실행하지 않고 안내만 한다.
-   - `G3-step`: 지난 단계 보고를 사용자가 봤다는 뜻이므로 다음 실행 대기 단계를 실행한다. 실행 대기 단계가 없으면: 승인 대기 단계가 남았으면 `G2-plan`으로 두고 "남은 단계를 승인하거나, 여기서 끝내려면 `/refactor:go 마무리`"라고 안내한다. 남은 단계가 하나도 없으면 **완료(DONE)**.
-   - `ask-user`: STATE의 "대기 중인 결정·질문"을 다시 물어본다. 사용자가 이번 메시지에서 답했다면 기록하고 진행한다.
+   - `G3-step`: 지난 단계 보고를 사용자가 봤다는 뜻이므로 남은 실행 대기 단계를 이어서 실행한다(지난 차례가 멈춤 조건에 걸려 멈췄으면 그 까닭이 풀렸는지 `7-execute.md` 1. 시작 전 확인에서 다시 본다). 실행 대기 단계가 없으면: 승인 대기 단계가 남았으면 `G2-plan`으로 두고 "남은 단계를 승인하거나, 여기서 끝내려면 `/refactor:go 마무리`"라고 안내한다. 남은 단계가 하나도 없으면 **완료(DONE)**.
+   - `ask-user`: STATE의 "대기 중인 결정·질문"을 다시 물어본다. 사용자가 이번 메시지에서 답했다면 기록하고 진행한다. 단, `phase: BASELINE` 이고 가장 최근 멈춤 이유가 `기준선 커밋 실패: …` 이면 다시 묻지 않고 `phases/5-baseline.md` 의 5-1(커밋)부터 한다(이미 커밋돼 있으면 5-1 이 건너뛰고 6 으로 간다) — 그 표시는 지운다.
    - `current_step`이 "(진행 중)"으로 끝나면 지난번 단계 실행이 중간에 멈춘 것이다 — `7-execute.md`의 "중간에 멈췄던 단계 이어 하기"를 따른다.
 4. `git status --short`와 현재 브랜치를 본다(읽기만). 단계 실행 전에는 `git status --porcelain -- . ':!docs/refactor'`가 비어 있어야 한다(리팩토링 기록 파일은 예외).
 
@@ -82,9 +82,9 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 | DEEP | 정밀검사 | `phases/3-deep.md` | audit/*.md | 자동 → VERIFY |
 | VERIFY | 반박 검증 | `phases/4-verify.md` | AUDIT_VERIFY.md | 자동 → BASELINE_PLAN |
 | BASELINE_PLAN | 기준선 계획 | `phases/5-baseline.md` 1부 | BASELINE.md(계획) | ⏸ G1: 사용자 `/refactor:approve baseline` |
-| BASELINE | 기준선 작성 | `phases/5-baseline.md` 2부 | tests/baseline/, BASELINE.md | ⏸ 사람이 기준선 커밋 → `/refactor:go` → PLAN |
+| BASELINE | 기준선 작성 | `phases/5-baseline.md` 2부 | tests/baseline/, BASELINE.md, 기준선 커밋 | Claude 가 기준선 커밋 → ⏸ 결과 보고 후 멈춤 → `/refactor:go` → PLAN |
 | PLAN | 계획서 | `phases/6-plan.md` | REFACTOR_PLAN.md | ⏸ G2: 사용자 `/refactor:approve <단계ID…>` |
-| EXECUTE | 단계 실행 | `phases/7-execute.md` | 코드 변경 1단계, EXECUTION_LOG.md | ⏸ G3: 보고 후 멈춤, 다음 `/refactor:go` |
+| EXECUTE | 단계 실행 | `phases/7-execute.md` | 단계마다 코드 변경·커밋, EXECUTION_LOG.md | 승인된 단계를 차례로 이어서 → ⏸ G3: 멈춤 조건에 걸리거나 모두 끝나면 묶음 보고 후 멈춤(`하나씩`이면 한 단계 뒤), 다음 `/refactor:go` |
 | DONE | 완료 | 아래 7 | STATE.md | — |
 
 - 모든 산출물 경로는 `docs/refactor/` 기준이다.
@@ -108,20 +108,23 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 📍 지금: <끝낸 단계들> 완료 → <다음 단계 또는 대기 중인 게이트>
 🔎 핵심 3줄: (비유 하나 포함, 전문용어는 괄호로 쉽게)
 🚨 바로 알아야 할 것: (🔴가 있으면 1~3개, 없으면 생략)
-🙋 사장님이 할 일: (예: /refactor:approve baseline — 또는 질문에 답하기, 커밋하기)
+🙋 사장님이 할 일: (예: /refactor:approve baseline — 또는 질문에 답하기, /refactor:approve 푸시)
 📄 자세히: docs/refactor/<파일>
 ```
 
 - 긴 표·원문을 대화에 붙이지 마라. 파일에 남기고 경로만 알려 준다.
 - 치명적인 발견(예: 비밀 키가 공개 저장소에 올라감, 로그인 없이 전체 주문이 보임)은 자동 진행 중이라도 **보고 맨 위**에 올리고 "지금 사람이 할 일"을 먼저 말한다.
-- 사람에게 명령을 부탁할 때는 **터미널에서 그대로 붙여 넣을 한 줄**로 주고, CLI 사용자는 입력창에 `! ` 를 붙여 쳐도 된다고 덧붙인다(VS Code 확장은 `!` 미지원)(예: 기준선 커밋 — 터미널에서 `git add -A` 와 `git commit -m "test: 기준선 테스트 추가"` 를 한 줄씩 (CLI 라면 입력창에 `! git add …` 도 됨)). 명령이 여럿이면 `&&`·`;` 로 잇지 말고 한 줄에 하나씩 준다(Windows PowerShell 5.1 은 `&&` 를 모른다). 단계 커밋은 사람에게 부탁하지 않고 `phases/7-execute.md` 5-1 대로 직접 한다.
+- 사람에게 명령을 부탁할 때는 **터미널에서 그대로 붙여 넣을 한 줄**로 주고, CLI 사용자는 입력창에 `! ` 를 붙여 쳐도 된다고 덧붙인다(VS Code 확장은 `!` 미지원)(예: 완료 보고 뒤 기록 커밋 — 터미널에서 `git add -- docs/refactor` 와 `git commit -m "docs: 리팩토링 완료 보고"` 를 한 줄씩 (CLI 라면 입력창에 `! git add …` 도 됨)). 명령이 여럿이면 `&&`·`;` 로 잇지 말고 한 줄에 하나씩 준다(Windows PowerShell 5.1 은 `&&` 를 모른다). 기준선 커밋과 단계 커밋은 사람에게 부탁하지 않고 `phases/5-baseline.md` 2부 5-1·`phases/7-execute.md` 5-1 대로 직접 한다(커밋이 실패했을 때만 사람이 고를 길로 준다).
 - **사람에게 주는 명령은 그 사람의 터미널에 맞게**: 사람의 터미널에 그대로 붙여 넣으면 도는 꼴로 준다. 이 대화가 WSL(리눅스) 안에서 돌고 있으면(`WSL_DISTRO_NAME` 환경 변수 이름이 있거나 `/proc/version` 에 `microsoft` — 대소문자 무시, WSL1 은 `Microsoft`) 사람이 Windows 터미널(PowerShell)을 쓸 수 있다 — 처음 한 번 "어느 터미널에서 치시나요(Ubuntu / Windows PowerShell)?"를 묻고 `docs/refactor/PROFILE.md` 의 "사람이 명령을 치는 터미널" 칸에 적어 두고(이미 적혀 있으면 그대로 쓴다), Windows 면 `wsl -d <배포판 이름> --cd <프로젝트 절대경로> -- <명령>` 꼴로 **명령마다 한 줄** 준다(`--cd` 가 없으면 PowerShell 의 지금 폴더에서 돌아 "git 저장소가 아님"이 된다 · `&&`·`;` 로 잇지 않는다 · 경로는 `~` 대신 절대경로 `/home/<사용자>/…`). 예: `wsl -d Ubuntu --cd /home/me/shop -- git status` 다음 줄에 `wsl -d Ubuntu --cd /home/me/shop -- git log --oneline -5`. 배포판 이름은 `WSL_DISTRO_NAME` 값이다. 될 수 있으면 터미널 명령 대신 입력창 명령(`/refactor:approve 허용 …`·`/refactor:approve 푸시`)을 먼저 안내한다.
+- **리다이렉트(`>`·`>>`)·파이프(`|`)·따옴표 속 `\n` 이 든 명령은 위 Windows 꼴로 바꾸지 않는다** — PowerShell 이 `>>`·`|` 를 Windows 쪽에서 먼저 처리해 엉뚱한 곳에 쓰거나 실패한다. 사람이 WSL 이면 "**Ubuntu 터미널에서** 치세요(Windows 터미널이면 먼저 wsl -d <배포판 이름> 만 쳐서 Ubuntu 로 들어간 뒤)"라고 하고, 명령은 bash 꼴 그대로 준다(예: `.allow-env` 에 한 줄 더하는 `printf … >> …`).
+- **PR 합치기 방식**: 사용자에게 `/refactor:approve 합치기` 를 처음 안내할 때, `docs/refactor/PROFILE.md` 의 "PR 합치는 방식" 칸이 비어 있거나 괄호 안 안내 글뿐이면 한 번 묻는다(rebase / squash / merge 중 이 저장소가 쓰는 것). 답은 그 칸에 낱말 하나(`rebase`·`squash`·`merge`)로 적고, 그 뒤로는 다시 묻지 않는다. 사용자가 이번만 다른 방식을 쓰려면 `/refactor:approve 합치기 squash` 처럼 뒤에 붙이면 된다고 알려 준다.
 
 ---
 
 ## 5. 멈추는 때
 
-- 게이트(G1·G2·G3)에 도달했을 때
+- 게이트(G1·G2·G3)에 도달했을 때 — 단계 실행(G3)은 승인된 단계를 이어서 하다가 `phases/7-execute.md` 「0-2」의 멈춤 조건(ⓐ~ⓗ)에 걸렸거나, 이번 차례의 실행 대기 단계를 모두 끝냈을 때
+- 기준선을 커밋하고 결과를 보고했을 때(`phases/5-baseline.md` 2부 6)
 - 인자가 "하나씩"일 때 — 단계 하나가 끝나면
 - 사람의 결정이 꼭 필요할 때(`gate: ask-user`)
 - 안전장치가 막았거나 "보호된 파일이 바뀌어 있습니다" 알림을 받았을 때, 같은 문제로 두 번 실패했을 때

@@ -304,6 +304,110 @@ rl_done_confirmed() { # $1 docs/refactor 폴더
   case "$last" in *"| 마무리 |"*) rl_log_intact "$1" ;; *) return 1 ;; esac
 }
 
+# origin 의 기본 가지(0.3.4 — 새 가지·합치기): refs/remotes/origin/HEAD 가 가리키는 가지(그것이 refs/remotes/origin/ 아래일 때만)
+#   → 없으면 origin/main → origin/master(그 자체가 심볼릭이면 기준이 아님 — guard.sh br_judge_in 과 같은 규칙). 로컬 참조만 본다(네트워크 없음)
+#   $1 = 프로젝트 폴더 → RL_BNAME(가지 이름, origin/ 뺀 것)·RL_BOID(커밋)·RL_BTREE(트리). 못 정하면 1
+rl_origin_base() {
+  local out l r c t s
+  RL_BNAME=""; RL_BOID=""; RL_BTREE=""
+  out=$(git --no-replace-objects -c core.fsmonitor=false -C "$1" for-each-ref --format='%(refname) %(objectname) %(tree) %(symref)' \
+        refs/remotes/origin/HEAD refs/remotes/origin/main refs/remotes/origin/master 2>/dev/null) || return 1
+  out="$RL_NL$out$RL_NL"
+  for r in HEAD main master; do
+    case "$out" in *"${RL_NL}refs/remotes/origin/$r "*) ;; *) continue ;; esac
+    l=${out#*"${RL_NL}refs/remotes/origin/$r "}; l=${l%%"$RL_NL"*}
+    c=${l%% *}; l=${l#* }; t=${l%% *}; s=${l#* }
+    [ "$s" = "$t" ] && s=""
+    if [ "$r" = HEAD ]; then
+      # %(symref) 는 심볼릭을 끝까지 따라간 대상 — 그것이 origin 아래가 아니면 기준으로 쓰지 않는다
+      case "$s" in refs/remotes/origin/HEAD) continue ;; refs/remotes/origin/?*) ;; *) continue ;; esac
+      r=${s#refs/remotes/origin/}
+    else
+      [ -n "$s" ] && continue
+    fi
+    [ -n "$c" ] && [ -n "$t" ] || continue
+    RL_BNAME=$r; RL_BOID=$c; RL_BTREE=$t
+    return 0
+  done
+  return 1
+}
+
+# 지금 위치(HEAD)의 내용이 커밋 $2 에 다 들어 있나(0.3.4 — 새 가지 R8): $1 = 프로젝트 폴더
+#   반환 0 = 들어 있음 · 1 = 안 들어 있음(깨끗이 합쳐지는데 결과가 $2 와 다름) · 2 = 판정 불가(까닭은 RL_MERGED_WHY 에 한 줄)
+#   판정 순서(0.3.4 보완 F3): ① HEAD 가 $2 의 조상 ② 트리가 같음(HEAD^{tree} == $2^{tree} — git 판과 상관없이)
+#   ③ git cherry $2 HEAD: 범위 $2..HEAD 에 병합 커밋이 없고, 출력이 1줄 이상이며 전부 "-"(같은 변경이 $2 에 이미 있음 — rebase 로 합친 꼴.
+#      옛 git·합친 뒤 기본 가지에 같은 줄을 또 고친 커밋이 와도 통함) ④ git merge-tree --write-tree $2 HEAD 의 결과 트리 == $2 의 트리
+#   안전장치(guard.sh br_judge_in)와 같은 방어: 대체 객체 무시 · fsmonitor 끔 · renormalize 끔 ·
+#   합치기 드라이버(merge.<이름>.driver) 설정이 있으면 merge-tree 를 부르지 않는다(판정 불가 — 드라이버 프로그램이 이 안에서 돌고,
+#   늘 "우리 쪽"을 남기는 드라이버면 안 합친 내용도 합친 것처럼 보인다). git 2.38 미만(--write-tree 없음)·충돌도 판정 불가
+rl_merged_into() {
+  local rc bt ht t m c l
+  local G=(git --no-replace-objects -c core.fsmonitor=false -C "$1")
+  RL_MERGED_WHY=""
+  "${G[@]}" merge-base --is-ancestor HEAD "$2" 2>/dev/null; rc=$?
+  [ "$rc" = 0 ] && return 0
+  [ "$rc" = 1 ] || { RL_MERGED_WHY="git 이 두 커밋을 비교하지 못했습니다"; return 2; }
+  bt=$("${G[@]}" rev-parse -q --verify "$2^{tree}" 2>/dev/null)
+  ht=$("${G[@]}" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)
+  [ -n "$bt" ] && [ -n "$ht" ] || { RL_MERGED_WHY="git 이 두 커밋을 비교하지 못했습니다"; return 2; }
+  [ "$ht" = "$bt" ] && return 0
+  m=$("${G[@]}" rev-list --merges --count "$2..HEAD" 2>/dev/null)
+  if [ "$m" = 0 ] && c=$("${G[@]}" cherry "$2" HEAD 2>/dev/null) && [ -n "$c" ]; then
+    rc=0
+    while IFS= read -r l; do case "$l" in "- "?*) ;; *) rc=1; break ;; esac; done <<RLCH
+$c
+RLCH
+    [ "$rc" = 0 ] && return 0
+  fi
+  "${G[@]}" config --name-only --get-regexp '^merge[.].+[.]driver$' >/dev/null 2>&1; rc=$?
+  [ "$rc" = 0 ] && { RL_MERGED_WHY="이 저장소에 합치기 드라이버(merge.<이름>.driver) 설정이 있어 내용 비교를 하지 않았습니다"; return 2; }
+  [ "$rc" = 1 ] || { RL_MERGED_WHY="git 이 저장소 설정을 읽지 못했습니다"; return 2; }
+  t=$("${G[@]}" -c merge.renormalize=false merge-tree --write-tree "$2" HEAD 2>/dev/null); rc=$?
+  case "$rc" in
+    0) [ "${t%%"$RL_NL"*}" = "$bt" ] && return 0; return 1 ;;
+    1) RL_MERGED_WHY="합친 뒤 기본 가지에서 같은 곳이 다시 바뀌어 git 이 내용을 맞춰 보지 못했습니다(겹침)" ;;
+    *) RL_MERGED_WHY="이 PC 의 git 이 내용 비교(git merge-tree --write-tree — git 2.38 이상)를 하지 못했습니다" ;;
+  esac
+  return 2
+}
+
+# 시간 한도 안에서 명령 실행(0.3.4 — 합치기의 gh 호출): $1 = 초, 나머지 = 명령. 종료 코드는 명령의 것, 한도에 걸렸으면 124
+#   bash 만으로(외부 timeout·perl 에 기대지 않는다 — 맥에는 timeout 이 없고, gh(Go)는 perl alarm 의 SIGALRM 을 무시하며,
+#   Windows 는 System32 의 다른 timeout.exe 가 먼저 잡힐 수 있다). bash 3.2 에서도 돈다(bash 4.3 의 '아무 하나 끝나기를 기다리기' 옵션은 안 씀)
+#   명령을 백그라운드로 띄우고, 감시(출력을 /dev/null 로 — 안 그러면 $( ) 가 감시가 끝날 때까지 기다린다)가 N초 뒤 표시 파일을 만들고
+#   TERM → 1초 뒤에도 살아 있으면 KILL. 명령이 먼저 끝나면 감시를 끈다(감시는 TERM 을 받으면 자기 sleep 도 끄고 나간다)
+rl_bounded() {
+  local s=$1 md pid wpid rc
+  shift
+  md=$(mktemp -d 2>/dev/null) || md=$(mktemp -d -t rlbound 2>/dev/null) || md=""
+  if [ -z "$md" ]; then "$@"; return; fi
+  "$@" &
+  pid=$!
+  (
+    sp=""
+    trap '[ -n "$sp" ] && kill "$sp" 2>/dev/null; exit 0' TERM
+    sleep "$s" &
+    sp=$!
+    wait "$sp"
+    kill -0 "$pid" 2>/dev/null || exit 0
+    : > "$md/t"
+    kill -TERM "$pid" 2>/dev/null
+    sleep 1 &
+    sp=$!
+    wait "$sp"
+    kill -KILL "$pid" 2>/dev/null
+    exit 0
+  ) >/dev/null 2>&1 &
+  wpid=$!
+  wait "$pid"
+  rc=$?
+  kill -TERM "$wpid" 2>/dev/null
+  wait "$wpid" 2>/dev/null
+  [ -f "$md/t" ] && rc=124
+  rm -rf "$md"
+  return "$rc"
+}
+
 # 기준선 허용 파일(docs/refactor/.allow-baseline-edit) 읽기(0.3.2 #10) — $1 docs/refactor 폴더. 표준출력 1줄째:
 #   NONE            파일 없음(기준선은 잠김)
 #   ALL             공백만(개행·BOM·CR·NUL 포함) — 예전처럼 기준선 전부 허용(사람이 지운다)
@@ -464,6 +568,10 @@ rl_protected_dirty() {
     [ "${#ent}" -gt 3 ] || continue
     xy=${ent:0:2}; path=${ent:3}
     case "$xy" in *R*|*C*) IFS= read -r -d '' old ;; esac   # 이름 바꾸기·복사: 다음 칸은 옛 경로
+    # HEAD 에 없는 새 파일(index 에 막 올림 = 첫 칸 A · 올릴 예정 표시 git add -N = 둘째 칸만 A)은 "이미 커밋된 파일"이 아니다(0.3.4 보완 F1 —
+    #   기준선 단계의 새 기준선·단계 실행의 새 마이그레이션을 git add 하면 헛경보가 났다). 고침·지움·이름 바꾸기·복사(M·D·R·C)는 그대로 잡는다.
+    #   합치기 충돌(AA·AU — HEAD 에 파일이 있음)은 새 파일이 아니라 잡는다(재검사 R)
+    case "$xy" in "A "|AM|AD|" A") continue ;; esac
     case "$path" in *"$RL_NL"*|*"$RL_TAB"*|docs/refactor/*) continue ;; esac
     keep=0
     if [ "$abl" != ALL ] && [[ $path =~ $re_bl ]] && ! { [ -n "$ablp" ] && case "$path" in "$pfx"*) rl_abl_hit "${path#"$pfx"}" "$ablp" ;; *) false ;; esac; }; then keep=1; fi
