@@ -8,11 +8,12 @@
 #   $1 = 프로젝트 폴더, $2 = --from-hook (입력 훅이 부를 때만)
 #   표준입력 = 인자 (예: "P0-1 P1-2" / "P1" / "baseline" / "보류 P1-2" / "확인" / "마무리" / "허용 P1-1" / "허용 닫기" / "푸시" /
 #              "새 가지" / "새 가지 refactor/hotfix-1" / "합치기" / "합치기 68 rebase" / 비움=현황)
-#   환경변수 REFACTOR_TURN_SID = 입력 훅이 넘기는 세션 ID("푸시"의 허락 파일 이름에 쓴다)
+#   환경변수 REFACTOR_TURN_SID = 입력 훅이 넘기는 세션 ID("푸시"·"합치기"의 허락 파일 이름에 쓴다)
 # "허용"(0.3.3)은 승인된 🛠 단계의 기준선 허용 파일(.allow-baseline-edit)에 단계 ID 를 적는다.
 #   0.3.4 부터는 승인할 때도 🛠 카드의 기준선 칸에 백틱 경로가 있으면 같은 루틴으로 자동으로 적는다(보류하면 뺀다 · 🔧·종류 칸 없는 카드는 안 연다) — '허용'은 닫은 뒤 다시 열 때 쓴다.
 # "새 가지"(0.3.4)는 지금 가지의 내용이 origin/<기본 가지> 에 다 들어 있을 때 거기서 새 작업 가지를 만들어 옮긴다(네트워크 없음).
-# "합치기"(0.3.4)는 지금 가지의 PR 을 gh 로 확인(열림·검사 초록·기본 가지에 새 커밋 없음 등)한 뒤 합친다 — 승인 모드 중 유일하게 네트워크를 쓴다.
+# "합치기"(0.3.5)는 이번 차례에만 지금 가지의 PR 을 합쳐도 된다는 허락 파일(docs/refactor/.turn-merge.<세션ID>)만 만든다(네트워크 없음) —
+#   gh 확인·합치기는 Claude 가 그 차례에 허락된 명령(scripts/refactor-merge.sh)으로 한다(0.3.4 는 여기서 gh 로 했으나 입력 훅 30초 안에 못 끝냈다).
 # "허용 닫기"는 그 파일을 지운다(기록에 줄을 남기지 않는다 — 닫는 쪽은 안전한 방향이고, 마무리 뒤에 닫아도 "마지막 줄 = 마무리"가 그대로).
 # "푸시"(0.3.3)는 지금 작업 가지를 이번 차례에만 올리도록 허락하는 표시(docs/refactor/.turn-push.<세션ID>)를 만든다(기본 가지는 거절).
 # --from-hook 이 없으면 인자가 있어도 파일을 하나도 바꾸지 않고, 안내 한 줄 + 현황을 출력하고 exit 0.
@@ -301,7 +302,7 @@ if [ "$mode" = "push" ]; then
   esac
   if [ -n "$defb" ]; then
     say "⛔ 기본 가지는 올리지 않습니다 — 작업 가지에서(지금 가지: $br). push 허락을 만들지 않았습니다."
-    say "   기본 가지 올리기와 PR 합치기는 사람이 터미널에서 합니다."
+    say "   기본 가지 올리기는 사람이 터미널에서 · PR 합치기는 /refactor:approve 합치기 로 합니다."
     exit 0
   fi
   # 안전장치가 허락 push 를 통과시키는 저장소 설정인지 먼저 본다(허락을 내 놓고 안전장치가 막는 헛걸음 방지 — git 1회, 주소 값은 출력하지 않음):
@@ -346,7 +347,7 @@ EOF
 $(git -C "$proj" status --porcelain -- . ':!docs/refactor' 2>/dev/null)
 EOF
   [ "$dn" -gt 0 ] && say "   ⚠️ 커밋 안 된 변경 ${dn}개는 올라가지 않습니다."
-  say "   기본 가지 올리기·강제 push·PR 합치기는 계속 막힙니다."
+  say "   기본 가지 올리기·강제 push 는 계속 막힙니다 · PR 합치기는 /refactor:approve 합치기 로."
   exit 0
 fi
 
@@ -459,20 +460,21 @@ EOF
   exit 0
 fi
 
-# ── PR 합치기(0.3.4): 지금 가지의 PR 을 gh 로 확인한 뒤 합친다 — 승인 모드 중 유일하게 네트워크를 쓴다 ──
-#   안전장치의 gh pr merge 차단은 그대로(Claude 는 계속 못 합친다). gh 호출은 셋뿐: pr view(조회) · api compare(기본 가지에 새 커밋?) · pr merge
-#   gh 로그인 정보는 다루지 않는다(gh 기본 로그인 그대로). --admin·--auto·--delete-branch 는 어떤 입력으로도 넘기지 않는다(인자는 번호·방식만 받음)
-#   입력 훅 제한 30초(turn.sh 가 앞뒤로 하는 일·Windows 의 느린 프로세스 띄우기 몫을 남김): 조회 6 · 비교 5 · 합치기 8초,
-#   받아 오기는 그때까지 10초 이하를 썼을 때만(6초). 최악 = 6+5+8(+TERM 을 무시하면 KILL 까지 1초씩) ≈ 22초 · 받아 오기 길 ≈ 11+6+1 = 18초
+# ── PR 합치기 허락(0.3.5): 이번 차례에만 지금 가지의 PR 을 합쳐도 된다는 표시 docs/refactor/.turn-merge.<세션ID> 를 만든다 ──
+#   0.3.4 는 여기서 gh 로 확인·합치기까지 했으나 입력 훅 30초 안에 끝나지 못했다 → 이 모드는 로컬 확인 + 허락 파일 + 기록 한 줄만(네트워크 0 —
+#   gh·fetch·mktemp·rl_bounded 를 부르지 않는다). 확인·합치기는 Claude 가 이번 차례에 허락 파일 3줄째 명령(scripts/refactor-merge.sh)으로 한다.
+#   허락 파일 3줄(LF): "merge <가지> <PR번호|-> <rebase|squash|merge> <HEAD 커밋>" / 만든 시각(초) / 허락된 명령 글자 그대로
+#     bash "<REFACTOR_ROOT>/hooks/run.sh" refactor-merge "<프로젝트 폴더>" <세션ID>   — 안전장치(guard)는 이 줄과 글자 그대로 같은 명령만 통과시킨다
+#   입력 훅이 그 세션의 다음 사람 입력 때 지우고, 안전장치·합치기 스크립트는 30분이 지난 것을 무시한다
 if [ "$mode" = "merge" ]; then
-  mg_no() { say "$1"; say "   (합치지 않았습니다 — 아무것도 바꾸지 않았습니다.)"; exit 0; }
-  MG_AUTH="   권한·저장소를 찾지 못함 오류라면: gh 로그인 계정이 이 저장소에 쓰기 권한이 있는지 사람이 확인해 주세요(gh auth status) — 다른 계정이면 사람이 터미널에서 바꾼 뒤 다시 입력"
+  mg_no() { say "$1"; say "   (아무것도 바꾸지 않았습니다 — 합치기 허락을 만들지 않았습니다)"; exit 0; }
   [ -n "$bad" ] && mg_no "   예: /refactor:approve 합치기 68 rebase  (PR 번호와 방식 rebase·squash·merge 만 받습니다)"
   if rl_done_confirmed "$dir"; then
     say "ℹ️ 이미 마무리되어 안전장치가 꺼져 있습니다 — 평소처럼 합칠 수 있습니다(아무것도 바꾸지 않았습니다)."
     exit 0
   fi
-  t0=$SECONDS
+  msid=${REFACTOR_TURN_SID:-}
+  [[ $msid =~ ^[A-Za-z0-9_-]{1,128}$ ]] || mg_no "⚠️ 대화(세션) 정보를 받지 못했습니다 — 입력창에 /refactor:approve 합치기 를 다시 쳐 주세요"
   command -v git >/dev/null 2>&1 || mg_no "❓ git 을 찾지 못했습니다"
   br=$("${G[@]}" symbolic-ref -q --short HEAD 2>/dev/null); grc=$?
   [ "$grc" -gt 1 ] && mg_no "❓ 이 폴더는 git 저장소가 아니라(또는 git 이 저장소 설정을 읽지 못해) 합칠 수 없습니다: $proj"
@@ -480,7 +482,11 @@ if [ "$mode" = "merge" ]; then
   rl_origin_base "$proj" || mg_no "❓ origin 의 기본 가지를 찾지 못했습니다(origin/HEAD·origin/main·origin/master 참조 없음)"
   bname=$RL_BNAME
   [ "$br" = "$bname" ] && mg_no "⛔ 지금 가지가 기본 가지($bname)입니다 — 작업 가지의 PR 만 합칩니다"
+  # 안전장치·합치기 스크립트가 허락 파일 1줄을 읽는 꼴과 같게: 첫 글자는 영문·숫자·_, 나머지는 영문·숫자·._/-
+  [[ $br =~ ^[A-Za-z0-9._/-]+$ ]] || mg_no "❓ 가지 이름($br)에 영문·숫자·._/- 밖의 글자가 있어 허락할 수 없습니다 — 사람이 GitHub 화면에서 합쳐 주세요"
+  [[ $br =~ ^[A-Za-z0-9_] ]] || mg_no "❓ 이 가지 이름($br)은 허락할 수 없습니다(첫 글자가 - . / 임) — 사람이 GitHub 화면에서 합쳐 주세요"
   hoid=$("${G[@]}" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || mg_no "❓ 지금 커밋을 읽지 못했습니다"
+  [[ $hoid =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || mg_no "❓ 지금 커밋을 읽지 못했습니다"
   # 방식: 입력 → 없으면 PROFILE 의 "- PR 합치는 방식:" 칸(앞뒤 공백·백틱만 뗀 값이 rebase·squash·merge 중 하나와 정확히 같을 때만)
   if [ -z "$mth" ] && [ -f "$dir/PROFILE.md" ]; then
     while IFS= read -r x || [ -n "$x" ]; do
@@ -496,106 +502,29 @@ if [ "$mode" = "merge" ]; then
   fi
   [ -z "$mth" ] && mg_no "❓ 합치는 방식을 모릅니다(docs/refactor/PROFILE.md 의 '- PR 합치는 방식:' 칸이 없거나 비어 있음) — 방식을 붙여 다시: /refactor:approve 합치기 rebase"
   command -v gh >/dev/null 2>&1 || mg_no "❓ gh(GitHub CLI)를 찾지 못했습니다 — 사람이 GitHub 화면이나 터미널에서 합쳐 주세요"
-  mtmp=$(mktemp -d 2>/dev/null) || mtmp=$(mktemp -d -t rlmerge 2>/dev/null) || mtmp=""
-  [ -n "$mtmp" ] || mg_no "⚠️ 임시 폴더를 만들지 못했습니다"
-  trap 'rm -rf "$mtmp"' EXIT
-  # gh 의 첫 오류 줄(200자까지) → GE. 제어 문자는 ? 로(0.3.4 보완 F10 — 결과 블록에 터미널 제어 글자가 그대로 실리지 않게)
-  gh_err() {
-    GE=""
-    while IFS= read -r x; do x=${x%$'\r'}; [ -n "${x//[[:space:]]/}" ] && { GE=${x:0:200}; break; }; done < "$mtmp/e"
-    GE=${GE//[[:cntrl:]]/?}
-    [ -n "$GE" ] || GE="(오류 문구 없음)"
-  }
-  # gh 호출의 출력·오류는 $( ) 가 아니라 임시 파일로 받는다(0.3.4 보완 F7 — gh 감싸개가 띄운 자식이 출력 통로를 쥐고 남으면
-  #   $( ) 는 시간 한도와 상관없이 그 자식이 끝날 때까지 기다린다. 파일이면 한도에서 바로 돌아온다)
-  export GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 GIT_TERMINAL_PROMPT=0
-  # 1) PR 조회 — 첫 줄 = 번호·상태·초안·포크·기본 가지·머리 가지·머리 커밋·합칠 수 있음, 그다음 줄마다 검사 하나(종류·status·conclusion·state·이름)
-  JQV='([.number, .state, .isDraft, .isCrossRepository, .baseRefName, .headRefName, .headRefOid, .mergeable] | map(tostring) | join("\u001f")), ((.statusCheckRollup // [])[] | [(.__typename // "-"), (.status // "-"), (.conclusion // "-"), (.state // "-"), (.name // .context // "-")] | map(tostring) | join("\u001f"))'
-  set -- pr view
-  [ -n "$mprn" ] && set -- "$@" "$mprn"
-  (cd "$proj" && rl_bounded 6 gh "$@" --json number,state,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,statusCheckRollup --jq "$JQV") >"$mtmp/o" 2>"$mtmp/e"; prc=$?
-  pv=$(< "$mtmp/o")
-  if [ "$prc" != 0 ]; then
-    case "$prc" in 124|142) mg_no "⛔ PR 조회가 6초 안에 끝나지 않았습니다 — 잠시 뒤 다시 입력하세요" ;; esac
-    gh_err
-    say "⛔ PR 을 조회하지 못했습니다: $GE"
-    mg_no "$MG_AUTH"
+  # 허락된 명령의 두 경로(역슬래시는 / 로, 끝 / 뗌 — 프로젝트 폴더는 위에서 이미). 큰따옴표 한 쌍 안에 그대로 넣으므로 " $ ` \ 줄바꿈이 있으면 거절
+  mroot=${REFACTOR_ROOT:-}; mroot=${mroot//"\\"//}; mroot=${mroot%/}
+  case "$mroot$RL_TAB$proj" in *'"'*|*'$'*|*'`'*|*'\'*|*"$RL_NL"*|*$'\r'*) mroot="" ;; esac
+  { [ -n "$mroot" ] && [ -n "$proj" ]; } || mg_no "❓ 플러그인·프로젝트 폴더 경로에 특수 글자가 있어(또는 비어 있어) 허락할 수 없습니다 — 사람이 GitHub 화면에서 합쳐 주세요"
+  mcmd="bash \"$mroot/hooks/run.sh\" refactor-merge \"$proj\" $msid"
+  mf="$dir/.turn-merge.$msid"
+  if [ -d "$mf" ] || ! { printf 'merge %s %s %s %s\n%s\n%s\n' "$br" "${mprn:--}" "$mth" "$hoid" "$(date +%s)" "$mcmd" > "$mf.tmp.$$" && mv -f "$mf.tmp.$$" "$mf"; }; then
+    rm -f "$mf.tmp.$$"; mg_no "⚠️ 합치기 허락 파일을 쓰지 못했습니다"
   fi
-  first=${pv%%"$RL_NL"*}; rest=""
-  case "$pv" in *"$RL_NL"*) rest=${pv#*"$RL_NL"} ;; esac
-  IFS="$US" read -r pn pst pdr pfk pbase phead poid pmg <<EOF
-$first
-EOF
-  if ! [[ $pn =~ ^[0-9]+$ ]] || ! [[ $poid =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
-    mg_no "⛔ PR 정보를 읽지 못했습니다(gh 응답 형식이 예상과 다름)"
+  # 기록 줄의 PR 칸: "PR #<번호>" 또는 "PR(지금 가지)" — 합치기 스크립트가 기록의 마지막 줄을 이 꼴로 대조한다(0.3.5 보완 F7①)
+  if [ -n "$mprn" ]; then mprw="PR #$mprn"; mprs=" #$mprn"; else mprw="PR(지금 가지)"; mprs=""; fi
+  # 기록을 못 쓰면 기록 없는 허락이 남지 않게 허락 파일을 지운다(F13)
+  if ! { printf '%s KST | 합치기 | 허락 %s %s (%s) @%s | - | 사용자가 /refactor:approve 로 실행\n' "$now" "$br" "$mprw" "$mth" "${hoid:0:7}" >> "$log"; } 2>/dev/null; then
+    rm -f "$mf"; mg_no "⚠️ 승인 기록을 쓰지 못해 합치기 허락을 만들지 않았습니다"
   fi
-  [ "$pst" = OPEN ] || mg_no "⛔ PR #$pn 은 열려 있는 PR 이 아닙니다(상태: $pst)"
-  [ "$pdr" = false ] || mg_no "⛔ PR #$pn 은 초안(draft)입니다 — 사람이 GitHub 화면에서 '준비됨'으로 바꾼 뒤 다시"
-  [ "$pfk" = false ] || mg_no "⛔ PR #$pn 은 포크의 PR 입니다 — 사람이 GitHub 화면·터미널에서 합쳐 주세요"
-  [ "$phead" = "$br" ] || mg_no "⛔ PR #$pn 은 다른 가지($phead)의 것입니다(지금 가지: $br)"
-  [ "$poid" = "$hoid" ] || mg_no "⛔ PR #$pn 의 마지막 커밋(${poid:0:7})이 지금 커밋(${hoid:0:7})과 다릅니다 — 아직 안 올린 커밋이 있거나 원격과 다릅니다. 먼저 /refactor:approve 푸시"
-  [ "$pbase" = "$bname" ] || mg_no "⛔ PR #$pn 은 기본 가지($bname)로 가는 PR 이 아닙니다(받는 가지: $pbase)"
-  case "$pmg" in
-    MERGEABLE) ;;
-    CONFLICTING) mg_no "⛔ PR #$pn 에 충돌이 있습니다 — 충돌을 먼저 풀어야 합니다" ;;
-    UNKNOWN) mg_no "⏳ GitHub 가 아직 PR #$pn 을 합칠 수 있는지 계산 중입니다 — 잠시 뒤 다시 입력하세요" ;;
-    *) mg_no "⛔ PR #$pn 을 합칠 수 있는 상태가 아닙니다(mergeable: $pmg)" ;;
-  esac
-  # 2) 자동 검사: 0개 거절(D6) · 안 끝난 것 · 실패 · 성공(SUCCESS)이 하나도 없음(전부 NEUTRAL·SKIPPED)도 0개와 같이 거절
-  cn=0; cok=0; cpend=""; cfail=""
-  while IFS="$US" read -r ctype cstat cconc cstate cname; do
-    [ -n "$ctype" ] || continue
-    cn=$((cn + 1)); cname=${cname:0:80}; cname=${cname//[[:cntrl:]]/?}
-    case "$ctype" in
-      CheckRun)
-        if [ "$cstat" != COMPLETED ]; then cpend="$cpend, $cname"
-        else case "$cconc" in SUCCESS) cok=$((cok + 1)) ;; NEUTRAL|SKIPPED) ;; *) cfail="$cfail, $cname" ;; esac
-        fi ;;
-      StatusContext)
-        case "$cstate" in SUCCESS) cok=$((cok + 1)) ;; PENDING|EXPECTED) cpend="$cpend, $cname" ;; *) cfail="$cfail, $cname" ;; esac ;;
-      *) cfail="$cfail, $cname(알 수 없는 검사 종류 $ctype)" ;;
-    esac
-  done <<EOF
-$rest
-EOF
-  [ -n "$cfail" ] && mg_no "⛔ PR #$pn 의 자동 검사 실패(${cfail#, }) — 고친 뒤 다시"
-  [ -n "$cpend" ] && mg_no "⏳ PR #$pn 의 자동 검사가 아직 도는 중입니다(${cpend#, }) — 끝난 뒤 다시 입력하세요"
-  if [ "$cn" = 0 ] || [ "$cok" = 0 ]; then
-    mg_no "⛔ PR #$pn 에 통과한 자동 검사가 없습니다 — 검사 없이는 여기서 합치지 않습니다. 사람이 GitHub 화면·터미널에서 합쳐 주세요"
-  fi
-  # 3) 기본 가지에 PR 이 모르는 새 커밋이 들어왔나(GitHub 쪽 기준 — 로컬 참조는 옛 것일 수 있다)
-  (cd "$proj" && rl_bounded 5 gh api "repos/{owner}/{repo}/compare/$bname...$poid" --jq .behind_by) >"$mtmp/o" 2>"$mtmp/e"; crc=$?
-  cb=$(< "$mtmp/o")
-  if [ "$crc" != 0 ] || ! [[ $cb =~ ^[0-9]+$ ]]; then
-    case "$crc" in 124|142) GE="5초 안에 끝나지 않음" ;; 0) GE="응답 형식이 예상과 다름" ;; *) gh_err ;; esac
-    mg_no "⛔ 기본 가지($bname)와 PR 을 비교하지 못했습니다: $GE — 사람이 확인한 뒤 GitHub 화면·터미널에서"
-  fi
-  [ "$cb" = 0 ] || mg_no "⛔ 기본 가지($bname)에 새 커밋 ${cb}개가 들어와 있습니다 — 사람이 확인한 뒤 GitHub 화면·터미널에서"
-  # 4) 합치기 — 확인한 머리 커밋일 때만(--match-head-commit). 그 밖의 옵션은 붙이지 않는다
-  (cd "$proj" && rl_bounded 8 gh pr merge "$pn" "--$mth" --match-head-commit "$poid") >"$mtmp/o" 2>"$mtmp/e"; mrc=$?
-  if [ "$mrc" != 0 ]; then
-    case "$mrc" in
-      124|142) say "⚠️ 합치기 요청이 8초 안에 끝나지 않았습니다 — 합쳐졌는지 알 수 없습니다. Claude 에게 'gh pr view $pn --json state,mergedAt' 로 확인해 달라고 하세요."
-               say "   (기록에 줄을 남기지 않았습니다.)"; exit 0 ;;
-    esac
-    gh_err
-    say "⛔ gh 가 합치기를 거절했습니다: $GE — 합쳐지지 않았습니다."
-    say "$MG_AUTH"
-    exit 0
-  fi
-  printf '%s KST | 합치기 | PR #%s %s -> %s (%s) @%s | - | 사용자가 /refactor:approve 로 실행\n' "$now" "$pn" "$br" "$bname" "$mth" "${poid:0:7}" >> "$log"
   rl_log_seal "$dir"
-  say "✅ 합쳤습니다: PR #$pn ($br → $bname, $mth)"
-  say "   ⚠️ 기본 가지에 합쳐지면 운영 배포가 시작될 수 있습니다 — 배포 확인을 Claude 에게 부탁하세요"
-  # 바로 /refactor:approve 새 가지 를 칠 수 있게 기본 가지를 받아 온다(남은 시간이 있을 때만 · 실패해도 알림만)
-  if [ $((SECONDS - t0)) -le 10 ]; then
-    if rl_bounded 6 "${G[@]}" fetch -q origin "$bname" >/dev/null 2>&1; then say "   (origin/$bname 을 받아 왔습니다.)"
-    else say "   (origin/$bname 을 받아 오지 못했습니다 — 새 가지 전에 Claude 에게 '최신 내용 받아 와'라고 하세요.)"
-    fi
-  else
-    say "   (시간이 모자라 origin/$bname 을 받아 오지 않았습니다 — 새 가지 전에 Claude 에게 '최신 내용 받아 와'라고 하세요.)"
-  fi
-  say "다음 묶음: /refactor:approve 새 가지"
+  say "✅ 합치기 허락: 작업 가지 $br 의 PR$mprs 을 $mth 방식으로 — 이번 차례에만(다음 입력부터 다시 막힘 · 30분 안) · 지금 커밋(${hoid:0:7})일 때만."
+  say "   Claude 가 이번 차례에 Bash 도구로 아래 명령을 그대로 실행합니다(다른 것을 붙이지 않음):"
+  say "   $mcmd"
+  say "   스크립트가 확인한 뒤 합칩니다: 자동 검사가 모두 끝나 초록(도는 중이면 \"같은 명령을 다시\"가 나옵니다 — 끝날 때까지 되풀이) · 기본 가지에 새 커밋 없음 · PR 의 마지막 커밋 = 지금 커밋."
+  say "   하나라도 어긋나면 합치지 않고 허락도 끝납니다(다시 하려면 /refactor:approve 합치기)."
+  say "   ⚠️ 기본 가지에 합쳐지면 운영 배포가 시작될 수 있습니다."
+  say "   ⚠️ 허락한 뒤 최대 30분 사이에는 사람이 보고 있지 않아도 조건이 맞으면 합쳐지고 운영 배포가 시작될 수 있습니다 — 멈추려면 아무 말이나 입력하세요(다음 입력에 허락이 끝납니다 · Claude 가 실행 중이면 Esc 로 멈춘 뒤)."
   exit 0
 fi
 

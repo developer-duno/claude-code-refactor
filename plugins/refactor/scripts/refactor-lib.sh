@@ -420,10 +420,13 @@ rl_bounded() {
 #   UNKNOWN <적힌 ID…> 계획서 카드와 맞는 ID 가 하나도 없음(오타·계획서 없음), 또는 공백 아닌 글자가 있는데 ID 가 0개(주석만·* 등 — ID 자리에 ?) — 잠김, 지우지 않는다
 #   $2 = approved 이면 2줄째부터의 경로를 "실행 중인 단계" 대신 "적힌 ID 중 승인된 카드 전부(완료 포함)" 로 낸다(상태 줄은 같다 — WAIT 여도 경로를 낸다) —
 #        턴 끝 알림(rl_protected_dirty)용: 같은 턴에 카드 파일을 고친 뒤 완료 표시를 해도 그 파일을 헛경보하지 않게
+#   $2 = split 이면 approved 와 같은 카드들의 경로를 "O<TAB><경로>"(완료 아닌 카드) / "D<TAB><ID><TAB><경로>"(완료 카드) 로 낸다(0.3.5 #1 —
+#        rl_protected_dirty 가 완료 카드에만 속한 경로를 그 카드의 커밋 여부로 가른다). 한 경로가 두 꼴에 함께 나올 수 있다
 #   파일 읽기: NUL·CR 은 떼고(PowerShell 5.1 의 > 는 UTF-16), # 뒤는 주석, ID 글자([A-Za-z0-9_-]) 밖의 글자(BOM 포함)는 칸 나눔, 대소문자 무시
 #   경로: 프로젝트 폴더 기준 상대경로로 맞춘다(\ → /, 앞의 ./ 와 / 는 뗌) — 고치려는 파일과 정확히 같을 때만 연다(rl_abl_hit)
 rl_allow_baseline() {
-  local rd=$1 want=${2:-} ids tmp="" open="" left=0 matched=0 kind_ n_ id t box done_ cnt k r h hv st intact=0 ok
+  local rd=$1 want=${2:-} ids tmp="" open="" left=0 matched=0 kind_ n_ id t box done_ cnt k r h hv st intact=0 ok dm="" all=0
+  case "$want" in approved|split) all=1 ;; esac
   [ -f "$rd/.allow-baseline-edit" ] || { echo NONE; return 0; }
   ids=$(rl_allow_ids "$rd")
   [ -n "$ids" ] || { echo ALL; return 0; }
@@ -471,11 +474,15 @@ rl_allow_baseline() {
       ok=0; [ "$intact" = 1 ] && [ "$st" = approved ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ] && ok=1
       if [ "$ok" = 1 ] && [ "$done_" != 1 ]; then
         open="$open $id"
-        case "$cw" in *" $id "*) cur="$cur $id"; [ -n "$tmp" ] && [ "$want" != approved ] && set -- "$@" "$tmp/c$n_" ;; esac
+        case "$cw" in *" $id "*) cur="$cur $id"; [ -n "$tmp" ] && [ "$all" = 0 ] && set -- "$@" "$tmp/c$n_" ;; esac
       elif [ "$done_" != 1 ]; then
         left=1
       fi
-      [ "$ok" = 1 ] && [ -n "$tmp" ] && [ "$want" = approved ] && set -- "$@" "$tmp/c$n_"
+      if [ "$ok" = 1 ] && [ -n "$tmp" ] && [ "$all" = 1 ]; then
+        set -- "$@" "$tmp/c$n_"
+        # split: 카드 파일 이름 → "<ID>:<D 완료|O 아님>" (rl_card_bl_paths -n 의 파일 이름 칸으로 찾는다)
+        if [ "$done_" = 1 ]; then dm="$dm c$n_=$id:D"; else dm="$dm c$n_=$id:O"; fi
+      fi
     done <<RLAB
 $(RL_CARDDIR=$tmp rl_cards "$rd/REFACTOR_PLAN.md" "$rd/APPROVALS.log")
 RLAB
@@ -492,7 +499,15 @@ RLAB
     echo "DONE $ids"
   fi
   # 카드 본문의 "- **깨질 것으로 예상되는 기준선**:" 줄부터 다음 "- **" 칸·제목 줄 전까지, 백틱 안의 글을 경로로
-  if [ "$#" -gt 0 ] && { [ -n "$cur" ] || [ "$want" = approved ]; }; then
+  if [ "$#" -gt 0 ] && [ "$want" = split ]; then
+    local f_ p_ v_
+    rl_card_bl_paths -n "$@" | while IFS="$RL_TAB" read -r f_ p_; do
+      [ -n "$p_" ] && [ "$p_" != "?" ] || continue
+      case "$dm " in *" $f_="*) ;; *) continue ;; esac
+      v_=${dm#*" $f_="}; v_=${v_%% *}
+      case "$v_" in *:D) printf 'D\t%s\t%s\n' "${v_%:D}" "$p_" ;; *) printf 'O\t%s\n' "$p_" ;; esac
+    done
+  elif [ "$#" -gt 0 ] && { [ -n "$cur" ] || [ "$all" = 1 ]; }; then
     rl_card_bl_paths "$@"
   fi
   [ -n "$tmp" ] && rm -rf "$tmp"
@@ -549,15 +564,24 @@ rl_abl_hit() {
 # 보호된 파일(커밋된 기준선·마이그레이션) 중 커밋 안 된 변경 목록: "<상태 두 글자> <경로>\t<내용 지문>" 줄들
 #   -z 로 받아 한글·공백 파일 이름도 따옴표·\ 이스케이프 없이 그대로 쓴다(이름 바꾸기는 새 경로만)
 rl_protected_dirty() {
-  local proj=$1 rdir=$2 ent xy path old keep h specs=() abl=NONE ablp="" pfx=""
+  local proj=$1 rdir=$2 ent xy path old keep h specs=() abl=NONE ablp="" ablo="" abld="" pfx="" rp dl rest dids did subj
   command -v git >/dev/null 2>&1 || return 0
   # 기준선 허용 파일: 공백만(ALL)이면 기준선을 통째로 빼고, 단계 ID 가 적혀 있으면 그 중 승인된 카드(완료 포함)에 적힌 파일만 뺀다(0.3.2)
   #   (허용 파일이 남아 있는 동안 — 같은 턴에 카드 파일을 고치고 완료 표시를 해도 헛경보하지 않게. turn.sh 가 지우면 원래대로)
+  #   단, 완료 카드에만 속한 경로는 그 카드가 이미 커밋됐으면 빼지 않는다(0.3.5 #1 — 이어서 실행 중 뒤 단계가 앞 단계의 커밋된 기준선을
+  #   다시 바꾸면 알림). 커밋됨 = 그 경로를 적은 완료 카드 전부에 제목이 "refactor: <ID> " 로 시작하는 커밋이 있음(7-execute 의 커밋 메시지 규칙)
+  #   그리고 그 경로를 마지막으로 바꾼 커밋의 제목이 그 카드 중 하나의 것(아래 ①·②)
   #   git 은 저장소 루트 기준 경로를 내므로, 프로젝트가 저장소 하위 폴더면 그 접두를 떼고 카드 경로(프로젝트 기준)와 맞춘다
   if [ -f "$rdir/.allow-baseline-edit" ]; then
-    abl=$(rl_allow_baseline "$rdir" approved)
+    abl=$(rl_allow_baseline "$rdir" split)
     case "$abl" in *"$RL_NL"*) ablp=${abl#*"$RL_NL"}; abl=${abl%%"$RL_NL"*} ;; esac
-    [ -n "$ablp" ] && pfx=$(git -C "$proj" rev-parse --show-prefix 2>/dev/null)
+    # ablo = 완료 아닌 카드의 경로(줄마다 하나) · abld = 완료 카드의 "<ID><TAB><경로>" 줄
+    rest="$ablp$RL_NL"
+    while [ -n "$rest" ]; do
+      dl=${rest%%"$RL_NL"*}; rest=${rest#*"$RL_NL"}
+      case "$dl" in O"$RL_TAB"*) ablo="$ablo${dl#O"$RL_TAB"}$RL_NL" ;; D"$RL_TAB"*) abld="$abld${dl#D"$RL_TAB"}$RL_NL" ;; esac
+    done
+    [ -n "$ablo$abld" ] && pfx=$(git -C "$proj" rev-parse --show-prefix 2>/dev/null)
   fi
   [ "$abl" = ALL ] || specs+=('*baseline/*')
   [ -f "$rdir/.allow-migration-edit" ] || specs+=('*supabase/migrations/*' '*prisma/migrations/*' '*alembic/versions/*' '*db/migrate/*' '*database/migrations/*' 'migrations/*' '*/migrations/*' 'drizzle/*.sql' 'drizzle/meta/*')
@@ -574,7 +598,42 @@ rl_protected_dirty() {
     case "$xy" in "A "|AM|AD|" A") continue ;; esac
     case "$path" in *"$RL_NL"*|*"$RL_TAB"*|docs/refactor/*) continue ;; esac
     keep=0
-    if [ "$abl" != ALL ] && [[ $path =~ $re_bl ]] && ! { [ -n "$ablp" ] && case "$path" in "$pfx"*) rl_abl_hit "${path#"$pfx"}" "$ablp" ;; *) false ;; esac; }; then keep=1; fi
+    if [ "$abl" != ALL ] && [[ $path =~ $re_bl ]]; then
+      keep=1
+      if [ -n "$ablo$abld" ]; then
+        case "$path" in "$pfx"*) rp=${path#"$pfx"} ;; *) rp="" ;; esac
+        if [ -z "$rp" ]; then
+          :
+        elif rl_abl_hit "$rp" "$ablo"; then
+          keep=0                                  # 완료 아닌 승인 카드의 경로(그 카드의 정당한 변경)
+        else
+          dids=""; rest=$abld
+          while [ -n "$rest" ]; do
+            dl=${rest%%"$RL_NL"*}; rest=${rest#*"$RL_NL"}
+            [ "${dl#*"$RL_TAB"}" = "$rp" ] && dids="$dids ${dl%%"$RL_TAB"*}"
+          done
+          # 완료 카드에만 속한 경로일 때만 git 을 더 부른다(평소 비용 0 · 완료 카드 ID 마다 1회 + 경로 1회): 둘 다 맞을 때만 남기고(알림),
+          #   아니면 뺀다(조용).
+          #   ① 그 경로를 가진 완료 카드 **전부**가 자기 커밋(제목이 "refactor: <ID> " 로 시작 — 경로 무관)을 가짐(0.3.5 보완 F3 — 같은 기준선을
+          #      적은 뒤 카드가 완료 표시 ~ 커밋 사이면 조용)
+          #   ② 그 경로를 마지막으로 바꾼 커밋의 제목이 그 완료 카드 중 하나의 "refactor: <ID> " 로 시작(0.3.5 #1 1차 조건 — 재검사 A2·C2 🟠:
+          #      ① 만으로는 기록 전체를 보므로 되돌린 옛 커밋·지난 묶음의 같은 ID 커밋이 있으면 커밋 전에도 알렸다)
+          #   한계: 앞 단계 커밋이 이 파일을 안 건드렸으면 ② 가 맞지 않아 조용(1차와 같음)
+          if [ -n "$dids" ]; then
+            keep=1
+            for did in $dids; do
+              subj=$(git --no-replace-objects -c core.fsmonitor=false -c log.showSignature=false -c log.follow=false -c grep.patternType=basic -C "$proj" log -1 --format=%H --grep="^refactor: $did " 2>/dev/null)
+              [ -n "$subj" ] || { keep=0; break; }
+            done
+            if [ "$keep" = 1 ]; then
+              keep=0
+              subj=$(git --no-replace-objects -c core.fsmonitor=false -c log.showSignature=false -c log.follow=false -c grep.patternType=basic -C "$proj" log -1 --format=%s -- ":(top,literal)$path" 2>/dev/null)
+              for did in $dids; do case "$subj" in "refactor: $did "*) keep=1 ;; esac; done
+            fi
+          fi
+        fi
+      fi
+    fi
     if [ ! -f "$rdir/.allow-migration-edit" ] && [[ $path =~ $re_mig ]]; then keep=1; fi
     [ "$keep" = 1 ] || continue
     if [ -f "$proj/$path" ]; then h=$(git -C "$proj" hash-object -- "$path" 2>/dev/null); else h=gone; fi

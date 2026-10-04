@@ -848,6 +848,13 @@ def main():
     check_push_t8_034(res)
     check_msgs_034(res)
     check_fixed_034(res)
+    check_merge_nogrant_035(res)
+    check_merge_grant_035(res)
+    check_merge_grant_file_035(res)
+    check_merge_goturn_035(res)
+    check_gh_api_merge_035(res)
+    check_interp_plugin_write_035(res)
+    check_gh_api_write_035(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -4389,6 +4396,386 @@ def check_fixed_034(res):
     finally:
         for p in made:
             rmtree_rw(p)
+
+
+# ── 0.3.5 합치기 허락 판정(G1~G6) · gh api 합치기(X1) · 인터프리터로 플러그인 폴더 쓰기(X2) ─────────────
+W_MERGE = "PR 합치기 스크립트는 사용자가 /refactor:approve 합치기 를 입력한 그 차례에만 실행합니다."
+W_MERGE_NO = "사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐)."
+W_MERGE_FORM = "허락은 그대로입니다 — 아래 꼴 그대로 한 번만 다시 실행하세요(그래도 막히면 사용자에게 /refactor:approve 합치기 를 다시 입력해 달라고 하세요): "
+SHA40 = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _mroot_035():
+    """guard 가 받는 REFACTOR_ROOT(run.sh 가 자기 위치로 정함 — 시험은 HOOKS/run.sh 를 절대경로로 부른다)를 설계서 §2 대로: \\ → / · 끝 / 뗌"""
+    return HOOKS.parent.as_posix().replace("\\", "/").rstrip("/")
+
+
+def _mcmd_035(proj, sid="t"):
+    """설계서 §2 3줄 = 허락된 명령 글자 그대로"""
+    return f'bash "{_mroot_035()}/hooks/run.sh" refactor-merge "{pathlib.Path(proj).as_posix()}" {sid}'
+
+
+def _mgrant_035(proj, on=True, sid="t", ago=0, l1=None, l3=None, crlf=False, lines=None):
+    """사람이 /refactor:approve 합치기 로 허락한 턴(docs/refactor/.turn-merge.<sid> — 3줄)을 직접 만들거나 지운다(입력 훅은 부르지 않는다)"""
+    for p in (proj / "docs/refactor").glob(".turn-merge.*"):
+        p.unlink()
+    if not on:
+        return
+    rows = lines if lines is not None else [l1 if l1 is not None else f"merge feat 70 rebase {SHA40}", str(int(time.time()) - ago),
+                                            l3 if l3 is not None else _mcmd_035(proj, sid)]
+    nl = "\r\n" if crlf else "\n"
+    (proj / f"docs/refactor/.turn-merge.{sid}").write_bytes((nl.join(rows) + nl).encode("utf-8"))
+
+
+def check_merge_nogrant_035(res):
+    """0.3.5 G2·G4: 허락이 없으면 합치기 스크립트를 실행하는 꼴은 전부 차단(원형·따옴표 뺀 사본·변수 지운 사본·글로브·인터프리터).
+    읽기(cat·grep·head·wc·ls·git log)는 통과. 안내 = 입력창 명령"""
+    R = _mroot_035()
+    run_sh, ms = f"{R}/hooks/run.sh", f"{R}/scripts/refactor-merge.sh"
+    proj = make_project(phase="EXECUTE")
+    try:
+        _mgrant_035(proj, on=False)
+        P = proj.as_posix()
+        forms = [
+            _mcmd_035(proj), f"bash '{run_sh}' refactor-merge '{P}' t", f"bash {run_sh} refactor-merge {P} t",
+            f"sh {run_sh} refactor-merge {P} t", f"source {run_sh} refactor-merge {P} t", f". {run_sh} refactor-merge {P} t",
+            f"{run_sh} refactor-merge {P} t", f'"{run_sh}" refactor-merge "{P}" t', f"{ms} {P} t", f"bash {ms} {P} t", f"exec {ms} {P} t",
+            'bash "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" refactor-merge x t', 'bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-merge x t',
+            f"bash -c \"bash {run_sh} refactor-merge {P} t\"", f"bash -c 'bash {run_sh} refactor-merge {P} t'", f"eval bash {run_sh} refactor-merge {P} t",
+            f"cat {ms} | bash", f"cat {ms} | sh -s {P} t", f"bash < {ms}", f"echo {P} | xargs bash {ms}", f"X=1 bash {run_sh} refactor-merge {P} t",
+            f"timeout 100 bash {run_sh} refactor-merge {P} t", f"env bash {run_sh} refactor-merge {P} t", f"nohup bash {run_sh} refactor-merge {P} t",
+            f"/usr/bin/env bash {run_sh} refactor-merge {P} t", f"/bin/bash {run_sh} refactor-merge {P} t", f"bash.exe {run_sh} refactor-merge {P} t",
+            f"BASH {run_sh} REFACTOR-MERGE {P} t", f"bash  {run_sh}  refactor-merge  {P}  t", f"bash {run_sh} refactor-merge {P} t # 합치기",
+            f'bash {run_sh} refactor-mer"ge" {P} t', f"bash {run_sh} refactor-mer''ge {P} t", f"bash {run_sh} refactor-mer${{z}}ge {P} t",
+            f"bash {run_sh} refactor-mer${{z:-}}ge {P} t", f"M=merge; bash {run_sh} refactor-$M {P} t", f"bash {run_sh} refactor-merg? {P} t",
+            f"bash {run_sh} refactor-mer[g]e {P} t", f"bash {R}/scripts/refactor-merg?.sh {P} t", f"bash {R}/scripts/refactor-merge.* {P} t",
+            f"cd /tmp && bash {run_sh} refactor-merge {P} t", f"git status && bash {run_sh} refactor-merge {P} t",
+            f"bash {run_sh} \\\n refactor-merge {P} t", f"bash {run_sh} refactor-mer\\\nge {P} t",
+            f"python3 -c \"import subprocess; subprocess.run(['bash','{run_sh}','refactor-merge','{P}','t'])\"",
+            f"node -e \"require('child_process').execSync('bash {run_sh} refactor-merge {P} t')\"",
+            f"python3 - <<'EOF'\nimport os\nos.system('bash {run_sh} refactor-merge {P} t')\nEOF",
+        ]
+        _cases_034(res, proj, "G2 허락 없음 · 실행 꼴 차단", [(B, bash(c)) for c in forms], need=W_MERGE)
+        hint = [_mcmd_035(proj), f"{ms} {P} t", f"bash {run_sh} refactor-merg? {P} t", f'bash {run_sh} refactor-mer"ge" {P} t',
+                f"bash {run_sh} refactor-mer${{z}}ge {P} t", f"python3 -c \"import subprocess; subprocess.run(['bash','{run_sh}','refactor-merge','{P}','t'])\""]
+        _cases_034(res, proj, "G4 허락 없음 · 안내", [(B, bash(c)) for c in hint], need=W_MERGE_NO)
+        _cases_034(res, proj, "G2 허락 없음 · PowerShell", [(B, ps(c)) for c in [_mcmd_035(proj), f"& bash {run_sh} refactor-merge {P} t"]], need=W_MERGE)
+        reads = [f"cat {ms}", f"grep -n merge {ms}", f"head -20 {ms}", f"wc -l {ms}", f"ls {R}/scripts", f"tail -5 {ms}",
+                 "git log --oneline -3 -- plugins/refactor/scripts/refactor-merge.sh", f"grep -rn refactor-merge {R}/skills",
+                 f"python3 -c \"print(open('{ms}').read())\"", f"cat {run_sh}", "echo refactor-merge", "gh pr view 70 --json state,mergedAt",
+                 'git commit -m "docs: refactor-merge 안내"']
+        _cases_034(res, proj, "G2 읽기는 통과", [(OK, bash(c)) for c in reads])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_merge_grant_035(res):
+    """0.3.5 G3: 유효한 허락이 있으면 Bash 도구의 맨 위 명령이 허락 3줄과 글자 그대로(또는 + ' 2>&1')일 때만 통과.
+    그 밖의 꼴(붙이기·앞에 무엇·따옴표·경로 다른 글자·세션 ID·줄 이어쓰기·대소문자·인자·PowerShell·bash -c 안쪽)은 차단 + 허락된 꼴 안내"""
+    R = _mroot_035()
+    run_sh = f"{R}/hooks/run.sh"
+    proj = make_project(phase="EXECUTE")
+    try:
+        P = proj.as_posix()
+        X = _mcmd_035(proj)
+        _mgrant_035(proj)
+        _cases_034(res, proj, "G3 허락 있음 · 통과", [(OK, bash(c)) for c in [X, X + " 2>&1", "  " + X + "  ", " " + X + " 2>&1 "]])
+        bad = [
+            X + "; echo x", X + " && echo x", X + " || true", X + " | tail -5", X + " 2>&1 | tail -5", X + " > /tmp/m.txt", X + " 2>/dev/null",
+            X + " &", X + " # 합치기", X + "\necho x", "cd /tmp && " + X, "cd " + P + " && " + X, "X=1 " + X, "timeout 5 " + X, "env " + X,
+            "nohup " + X, "exec " + X, "echo x; " + X, X + " 2>&1 2>&1", X + " t2", X.replace("refactor-merge", "refactor-merge --"),
+            f"bash '{run_sh}' refactor-merge '{P}' t", f"bash {run_sh} refactor-merge {P} t", f'bash "{run_sh}" refactor-merge {P} t',
+            f'bash "{R}//hooks/run.sh" refactor-merge "{P}" t', f'bash "{R}/./hooks/run.sh" refactor-merge "{P}" t',
+            f'bash "{R}/hooks/../hooks/run.sh" refactor-merge "{P}" t', f'bash "{run_sh}" refactor-merge "{P}/" t', f'bash "{run_sh}" refactor-merge "{P}/." t',
+            _mcmd_035(proj, "t2"), _mcmd_035(proj, "T"), X.replace("bash ", "BASH ", 1), X.replace("refactor-merge", "REFACTOR-MERGE"),
+            X.replace(" refactor-merge ", " \\\n refactor-merge "), X.replace(" refactor-merge ", "  refactor-merge "), X.replace("bash ", "sh ", 1),
+            f"bash -c '{X}'", f"eval '{X}'", f"bash -c \"{X.replace(chr(34), chr(92) + chr(34))}\"", X.replace("bash ", "/bin/bash ", 1),
+            f'bash "{R}/scripts/refactor-merge.sh" "{P}" t', f'"{run_sh}" refactor-merge "{P}" t',
+        ]
+        home = pathlib.Path.home().as_posix()
+        if R.startswith(home + "/"):
+            bad.append(X.replace(home, "~", 1))
+        _cases_034(res, proj, "G3 허락 있음 · 다른 꼴 차단", [(B, bash(c)) for c in bad], need=W_MERGE)
+        hint = [X + "; echo x", "cd /tmp && " + X, f"bash {run_sh} refactor-merge {P} t", _mcmd_035(proj, "t2"), f"bash -c '{X}'"]
+        _cases_034(res, proj, "G4 허락 있음 · 허락된 꼴 안내", [(B, bash(c)) for c in hint], need=W_MERGE_FORM + X)
+        _cases_034(res, proj, "G3 허락 있음 · PowerShell 은 차단", [(B, ps(X)), (B, ps(X + " 2>&1"))], need=W_MERGE_FORM)
+        # 하위 에이전트 지시문 안의 같은 명령(맨 위 명령 아님)
+        _cases_034(res, proj, "G3 하위 에이전트 지시문은 차단", [(B, ("Agent", {"description": "합치기", "prompt": "아래를 실행:\n```\n" + X + "\n```\n"}))])
+        # Monitor 도구(셸 명령)도 Bash 가 아니면 차단
+        _cases_034(res, proj, "G3 Monitor 도구는 차단", [(B, ("Monitor", {"command": X}))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_merge_grant_file_035(res):
+    """0.3.5 G1: 허락 파일 유효성 — 다른 세션 것 · 1801초 지남 · 시각이 미래 · 1줄 꼴 틀림(방식·커밋·번호·가지) · 3줄 없음 ·
+    3줄의 세션 ID·플러그인 경로·꼴이 다름 → 차단. CRLF 줄 끝 · 64자 커밋 · 번호 없음(-) · 방식 셋 → 통과"""
+    proj = make_project(phase="EXECUTE")
+    try:
+        X = _mcmd_035(proj)
+        now = int(time.time())
+
+        def one(label, want, need=None, cmd=X, **kw):
+            _mgrant_035(proj, **kw)
+            _cases_034(res, proj, "G1 " + label, [(want, bash(cmd))], need=need)
+
+        one("다른 세션 것", B, W_MERGE_NO, sid="t2", l3=_mcmd_035(proj, "t2"))
+        one("다른 세션 것(같은 명령)", B, W_MERGE_NO, cmd=_mcmd_035(proj, "t2"), sid="t2", l3=_mcmd_035(proj, "t2"))
+        one("1801초 지남", B, W_MERGE_NO, ago=1801)
+        one("1700초는 통과", OK, ago=1700)
+        one("시각이 미래", B, W_MERGE_NO, ago=-120)
+        one("방식 틀림", B, W_MERGE_NO, l1=f"merge feat 70 fastforward {SHA40}")
+        one("방식 대문자", B, W_MERGE_NO, l1=f"merge feat 70 SQUASH {SHA40}")
+        one("커밋 39자", B, W_MERGE_NO, l1=f"merge feat 70 rebase {SHA40[:39]}")
+        one("커밋 41자", B, W_MERGE_NO, l1=f"merge feat 70 rebase {SHA40}0")
+        one("커밋 대문자", B, W_MERGE_NO, l1=f"merge feat 70 rebase {SHA40.upper()}")
+        one("번호 8자리", B, W_MERGE_NO, l1=f"merge feat 12345678 rebase {SHA40}")
+        one("번호 글자", B, W_MERGE_NO, l1=f"merge feat 7a rebase {SHA40}")
+        one("가지 첫 글자 -", B, W_MERGE_NO, l1=f"merge -feat 70 rebase {SHA40}")
+        one("가지 글자 밖", B, W_MERGE_NO, l1=f"merge fe;at 70 rebase {SHA40}")
+        one("1줄 머리 push", B, W_MERGE_NO, l1="push feat")
+        one("1줄 뒤 공백", B, W_MERGE_NO, l1=f"merge feat 70 rebase {SHA40} ")
+        one("3줄 없음", B, W_MERGE_NO, lines=[f"merge feat 70 rebase {SHA40}", str(now)])
+        one("2줄 숫자 아님", B, W_MERGE_NO, lines=[f"merge feat 70 rebase {SHA40}", "now", X])
+        # 3줄이 이 세션·이 플러그인의 꼴이 아니면(사람만 쓰는 파일이지만 한 번 더 — 허락된 명령 = 그 3줄 그대로이므로)
+        one("3줄 세션 ID 다름", B, W_MERGE_NO, cmd=_mcmd_035(proj, "t2"), l3=_mcmd_035(proj, "t2"))
+        fake = f'bash "/tmp/x/hooks/run.sh" refactor-merge "{proj.as_posix()}" t'
+        one("3줄 플러그인 경로 다름", B, W_MERGE_NO, cmd=fake, l3=fake)
+        bad3 = f'bash "{_mroot_035()}/hooks/run.sh" refactor-merge {proj.as_posix()} t'
+        one("3줄 프로젝트 따옴표 없음", B, W_MERGE_NO, cmd=bad3, l3=bad3)
+        bad3 = f'bash "{_mroot_035()}/hooks/run.sh" refactor-merge "a" "b" t'
+        one("3줄 프로젝트 칸에 따옴표", B, W_MERGE_NO, cmd=bad3, l3=bad3)
+        bad3 = X.replace("bash ", "BASH ", 1)
+        one("3줄 대소문자 다름", B, W_MERGE_NO, cmd=bad3, l3=bad3)
+        # 3줄에 글자 그대로의 \n(역슬래시+n)이 있으면, 줄바꿈이 든 명령(JSON 원문 \n)과 글자로는 같아진다 — 역슬래시가 든 원문은 비교 전에 막는다
+        weird = X.replace('" t', '\\nx" t')
+        one("3줄의 \\n 글자 ↔ 줄바꿈 명령", B, W_MERGE_FORM, cmd=X.replace('" t', '\nx" t'), l3=weird)
+        one("CRLF 줄 끝은 통과", OK, crlf=True)
+        one("64자 커밋 통과", OK, l1=f"merge feat 70 squash {SHA40}{SHA40[:24]}")
+        one("번호 없음(-) 통과", OK, l1=f"merge feat/x-1.2 - merge {SHA40}")
+        one("방식 squash 통과", OK, l1=f"merge feat 7 squash {SHA40}")
+        one("3줄 뒤 빈 줄 더 있어도 통과", OK, lines=[f"merge feat 70 rebase {SHA40}", str(now), X, ""])
+        # 허락 파일이 없으면(다음 입력에서 지워짐) 다시 막힌다
+        one("허락 지움", B, W_MERGE_NO, on=False)
+    finally:
+        rmtree_rw(proj)
+
+
+def check_merge_goturn_035(res):
+    """0.3.5 G6: go 턴 예외(re_plug)에 넣지 않았다 — go 턴 + 허락(있을 수 없는 조합을 손으로 만든 것)이면 허락된 명령 그대로도 차단.
+    G5: gh pr merge 차단과 안내는 그대로"""
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        _mgrant_035(proj)
+        _cases_034(res, proj, "G6 go 턴 + 허락", [(B, bash(_mcmd_035(proj))), (B, bash(_mcmd_035(proj) + " 2>&1"))])
+        _cases_034(res, proj, "G5 gh pr merge 그대로", [(B, bash("gh pr merge 70 --rebase"))],
+                   need="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐).")
+    finally:
+        rmtree_rw(proj)
+    # 읽기 전용 단계(PLAN)에서도 허락만으로는 통과하지 않는다(go 턴 아님 · 허락 있음 → 통과는 EXECUTE 와 같게, go 턴이면 울타리)
+    proj = make_project(phase="PLAN", allow=(".turn",))
+    try:
+        _mgrant_035(proj)
+        _cases_034(res, proj, "G6 PLAN go 턴 + 허락", [(B, bash(_mcmd_035(proj)))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_gh_api_merge_035(res):
+    """0.3.5 X1: gh api 로 PR 합치기(REST pulls/<번호>/merge · /merges · graphql mergePullRequest·enablePullRequestAutoMerge·mergeBranch)는
+    방식 옵션과 상관없이 차단(읽기 GET 도) — 안내에 조회 대안. merge 가 아닌 조회는 통과"""
+    WX = "합쳐졌는지 보려면 gh pr view <번호> --json state,mergedAt"
+    proj = make_project(phase="EXECUTE")
+    try:
+        blocked = [
+            "gh api -X PUT repos/o/r/pulls/70/merge", "gh api --method PUT repos/o/r/pulls/70/merge", "gh api --method=PUT repos/o/r/pulls/70/merge",
+            "gh api repos/o/r/pulls/70/merge", "gh api repos/o/r/pulls/70/merge -f merge_method=squash", "gh api -XPUT repos/o/r/pulls/70/merge",
+            'gh api "repos/o/r/pulls/70/merge" -X PUT', "gh api 'repos/{owner}/{repo}/pulls/70/merge' -X PUT", "gh api /repos/o/r/pulls/70/merge -X PUT",
+            "gh api -X PUT repos/o/r/pulls/$N/merge", "gh api -X PUT repos/o/r/pulls/${N}/merge", 'gh api -X PUT repos/o/r/pulls/"70"/merge',
+            "gh api -X PUT repos/o/r/pulls/70/merge?x=1", "gh api -X GET repos/o/r/pulls/70/merge", "gh api -X POST repos/o/r/merges -f base=main -f head=feat",
+            "gh api repos/o/r/merges -f base=main -f head=feat",
+            "gh api graphql -f query='mutation { mergePullRequest(input:{pullRequestId:\"x\"}) { clientMutationId } }'",
+            "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input:{pullRequestId:\"x\"}) { clientMutationId } }'",
+            "gh api graphql -f query='mutation { mergeBranch(input:{repositoryId:\"x\",base:\"main\",head:\"feat\"}) { clientMutationId } }'",
+            "gh api graphql -F query='mutation{MERGEPULLREQUEST(input:{}){x}}'", "GH API -X PUT repos/o/r/pulls/70/merge", "gh.exe api -X PUT repos/o/r/pulls/70/merge",
+            "/usr/bin/gh api -X PUT repos/o/r/pulls/70/merge", "gh  api  -X  PUT  repos/o/r/pulls/70/merge", "gh api -X PUT repos/o/r/pulls/70/merge # x",
+            "echo x && gh api -X PUT repos/o/r/pulls/70/merge", "bash -c 'gh api -X PUT repos/o/r/pulls/70/merge'", 'eval "gh api -X PUT repos/o/r/pulls/70/merge"',
+            "gh api -X PUT repos/o/r/pulls/70/mer\"ge\"", "gh api -X PUT repos/o/r/pulls/70/mer${z}ge", "timeout 30 gh api -X PUT repos/o/r/pulls/70/merge",
+            "gh api -X PUT repos/o/r/pulls/70/merge 2>&1 | tail -3", "gh api \\\n -X PUT repos/o/r/pulls/70/merge",
+        ]
+        _cases_034(res, proj, "X1 gh api 합치기 차단", [(B, bash(c)) for c in blocked], need=WX)
+        _cases_034(res, proj, "X1 PowerShell", [(B, ps(c)) for c in blocked[:3] + blocked[16:17]], need=WX)
+        ok = ["gh api repos/o/r/pulls/70", "gh api repos/o/r/pulls/70/commits", "gh api repos/o/r/pulls/70/files", "gh api repos/o/r/pulls/70/reviews",
+              "gh api repos/o/r/pulls?state=open", "gh api repos/o/r/commits/abc/check-runs", "gh api repos/o/r/branches/main",
+              "gh api graphql -f query='{ repository(owner:\"o\",name:\"r\"){ pullRequest(number:70){ state mergeable } } }'",
+              "gh pr view 70 --json state,mergedAt", "gh pr checks 70", "gh api repos/o/r/pulls/70/merged_by", "gh api repos/o/r/merge-upstream-docs",
+              'git commit -m "docs: gh api pulls/70/merge 를 막는다"']
+        _cases_034(res, proj, "X1 조회는 통과", [(OK, bash(c)) for c in ok])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_interp_plugin_write_035(res):
+    """0.3.5 X2: 인터프리터(python·node 등)로 플러그인 폴더(.claude/plugins · 지금 플러그인 폴더)에 쓰기 차단 — 조사 A2 의 뚫린 네 꼴 +
+    다른 철자(역슬래시 구분자·Git Bash 꼴 /c/…·PowerShell 도구). 읽기만 하는 코드는 통과"""
+    W = "플러그인 폴더(.claude/plugins)는 고치지 않습니다."
+    R = _mroot_035()
+    proj = make_project(phase="EXECUTE")
+    try:
+        blocked = [
+            f"python3 -c \"open('{R}/scripts/refactor-merge.sh','w').write('x')\"",
+            f"python3 -c \"open('{R}/scripts/refactor-approve.sh','a').write('x')\"",
+            f"node -e \"require('fs').appendFileSync('{R}/scripts/refactor-lib.sh','x')\"",
+            "python3 -c \"open('/home/u/.claude/plugins/cache/v/refactor/0.3.4/scripts/refactor-approve.sh','a').write('x')\"",
+            "python3 -c \"open('C:\\\\Users\\\\u\\\\.claude\\\\plugins\\\\cache\\\\v\\\\refactor\\\\0.3.4\\\\scripts\\\\refactor-approve.sh','a').write('x')\"",
+            f"python3 -c \"import pathlib; pathlib.Path('{R}/scripts/refactor-lib.sh').write_text('x')\"",
+            f"python3 -c \"import os; os.remove('{R}/skills/approve/SKILL.md')\"",
+            f"node -e \"require('fs').writeFileSync('{R}/scripts/refactor-lib.sh','x')\"",
+            f"python3 -c \"open(r'{R.replace('/', chr(92))}\\scripts\\refactor-merge.sh','w').write('x')\"",
+            f"python3 -c \"open('{R}//scripts/refactor-merge.sh','w').write('x')\"",
+            f"PYTHON3 -C \"open('{R}/scripts/refactor-merge.sh','w').write('x')\"",
+            f"cd /tmp && python3 -c \"open('{R}/scripts/refactor-merge.sh','w').write('x')\"",
+            f"python3 -c \"s=open('{R}/scripts/refactor-lib.sh').read(); open('{R}/scripts/refactor-lib.sh','w').write(s.replace('a','b'))\"",
+        ]
+        # 0.3.5 F7②: perl 의 open(F,">",…) · ">>" · 두 인자 ">파일" 꼴도(interp_writes 의 방식 글자에 >)
+        blocked += [f"perl -e 'open(F,\">\",\"{R}/scripts/refactor-merge.sh\")'", f"perl -e 'open(F,\">>\",\"{R}/scripts/refactor-lib.sh\"); print F \"x\"'",
+                    f"perl -e 'open(my $f, \">\", \"{R}/hooks/guard.sh\"); print $f 1'", f"perl -e 'open(F,\">{R}/scripts/refactor-merge.sh\")'",
+                    f"PERL -E 'OPEN(F,\">\",\"{R}/scripts/refactor-merge.sh\")'", f"perl -e \"open(F,'>>','{R}/scripts/refactor-approve.sh')\""]
+        # (아직 못 보는 꼴 — 전부터 interp_writes 의 한계로 다른 보호 경로와 같음: 괄호 없는 perl open F, ">", … · 따옴표 구분자 히어독 본문의 open(…,'w'))
+        if len(R) > 2 and R[1] == ":":   # Windows: 같은 폴더의 Git Bash 꼴(/c/…)
+            blocked.append(f"python3 -c \"open('/{R[0].lower()}{R[2:]}/scripts/refactor-merge.sh','w').write('x')\"")
+        _cases_034(res, proj, "X2 인터프리터로 플러그인 폴더 쓰기 차단", [(B, bash(c)) for c in blocked], need=W)
+        _cases_034(res, proj, "X2 PowerShell", [(B, ps(c)) for c in blocked[:3]], need=W)
+        ok = [f"python3 -c \"print(open('{R}/scripts/refactor-merge.sh').read())\"",
+              f"node -e \"console.log(require('fs').readFileSync('{R}/scripts/refactor-lib.sh','utf8').length)\"",
+              f"python3 -c \"open('/tmp/x.txt','w').write('x')\"", "python3 -c \"open('src/app.ts','a').write('')\"",
+              f"python3 -c \"import json; print(json.load(open('{R}/.claude-plugin/plugin.json'))['version'])\"",
+              f"cat {R}/scripts/refactor-lib.sh",
+              f"perl -e 'open(F,\"<\",\"{R}/scripts/refactor-merge.sh\"); print <F>'", f"perl -ne 'print if /merge/' {R}/scripts/refactor-merge.sh",
+              f"perl -e 'open(F,\"{R}/scripts/refactor-lib.sh\"); print scalar(<F>)'"]
+        _cases_034(res, proj, "X2 읽기는 통과", [(OK, bash(c)) for c in ok])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_gh_api_write_035(res):
+    """0.3.5 검사 보완 F16(다른 길로 합치기 — 전부 새로 막기) + F7②(perl open 의 > 방식):
+    a. gh api 가 …/git/refs 를 읽기가 아닌 요청으로 겨냥(방식이 GET 이 아님 · 방식 없이 필드/--input — gh 는 필드가 있으면 POST) → 차단, 읽기 통과
+    b. …/contents 도 같음  c. gh alias set·import 차단(list·delete 통과)  d. graphql 질의를 파일에서(@ 값 · --input) 차단
+    e. graphql 변이 enqueuePullRequest·updateRef·createCommitOnBranch·deleteRef 차단  f. // 를 모아 본다(pulls/70//merge · git//refs)"""
+    WG = "리팩토링 진행 중에는 GitHub API 로 가지·파일을 직접 쓰지 않습니다(PR 없이 합치는 길)."
+    WGH = "가지·파일 변경은 git 커밋과 /refactor:approve 푸시 로 합니다."
+    WQ = "GraphQL 질의는 명령 안에 그대로 적으세요(파일에서 읽으면 판정할 수 없습니다)"
+    WA = "리팩토링 진행 중에는 gh 별칭을 만들지 않습니다(명령 이름을 바꿔 판정을 피하는 길)."
+    WX = "합쳐졌는지 보려면 gh pr view <번호> --json state,mergedAt"
+    proj = make_project(phase="EXECUTE")
+    try:
+        refs = [
+            "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc", "gh api repos/o/r/git/refs/heads/main -f sha=abc",
+            "gh api --method PUT repos/o/r/git/refs/heads/main --input body.json", "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/x -f sha=abc",
+            "gh api -XPATCH repos/o/r/git/refs/heads/main -f sha=abc", "gh api --method=PATCH repos/o/r/git/refs/heads/main -f sha=abc",
+            "gh api -X 'PATCH' repos/o/r/git/refs/heads/main -f sha=abc", 'gh api -X "patch" repos/o/r/git/refs/heads/main -F sha=abc',
+            "gh api repos/o/r/git/refs/heads/main -F sha=abc", "gh api repos/o/r/git/refs/heads/main --field sha=abc",
+            "gh api repos/o/r/git/refs/heads/main --raw-field sha=abc", "gh api repos/o/r/git/refs/heads/main --raw-field=sha=abc",
+            "gh api repos/o/r/git/refs/heads/main -fsha=abc", "gh api repos/o/r/git/refs/heads/main -if sha=abc", "gh api -iX PATCH repos/o/r/git/refs/heads/main",
+            "gh api repos/o/r/git/refs/heads/main --input -", "gh api -X PATCH repos/o/r/git/refs/heads/main", "gh api -X $M repos/o/r/git/refs/heads/main",
+            "gh api -X GET -X PATCH repos/o/r/git/refs/heads/main -f sha=abc", "gh api -f sha=abc repos/o/r/git/refs/heads/main",
+            'gh api "repos/o/r/git/refs/heads/main" -X PATCH -f sha=abc', "gh api /repos/o/r/git/refs/heads/main -X PATCH -f sha=abc",
+            "gh api 'repos/{owner}/{repo}/git/refs/heads/main' -X PATCH -f sha=abc", "gh api repos/o/r/git//refs/heads/main -X PATCH -f sha=abc",
+            "gh api repos/o/r//git/refs -X POST -f ref=refs/heads/x", "gh api repos/o/r/git/re\"fs\"/heads/main -X PATCH -f sha=abc",
+            "gh api repos/o/r/git/re${z}fs/heads/main -X PATCH -f sha=abc", "GH API -X PATCH REPOS/O/R/GIT/REFS/HEADS/MAIN -F SHA=ABC",
+            "gh.exe api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc", "/usr/bin/gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc",
+            "gh  api  -X  PATCH  repos/o/r/git/refs/heads/main  -f  sha=abc", "echo x && gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc",
+            "bash -c 'gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc'", "timeout 30 gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc",
+            "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc 2>&1 | tail -3", "gh api \\\n -X PATCH repos/o/r/git/refs/heads/main -f sha=abc",
+            "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc # x", "gh api -X PATCH repos/o/r/git/refs/tags/v1 -f sha=abc",
+        ]
+        contents = [
+            "gh api -X PUT repos/o/r/contents/src/a.ts -f message=x -f content=YQ==", "gh api -X DELETE repos/o/r/contents/a.md -f message=x -f sha=abc",
+            "gh api repos/o/r/contents/src/a.ts -f message=x -f content=YQ==", "gh api --method PUT repos/o/r/contents/a.md --input body.json",
+            "gh api -X PUT repos/o/r/contents -f message=x", "gh api -X PUT 'repos/o/r/contents/src/a b.ts' -f message=x",
+            "gh api -X PUT repos/o/r//contents/a.md -f message=x", "gh api -X PUT repos/o/r/con\"tents\"/a.md -f message=x",
+            "GH API --METHOD=PUT repos/o/r/contents/a.md --FIELD message=x",
+        ]
+        _cases_034(res, proj, "F16-a refs 쓰기 차단", [(B, bash(c)) for c in refs], need=WG)
+        _cases_034(res, proj, "F16-a refs 안내", [(B, bash(c)) for c in refs[:4]], need=WGH)
+        _cases_034(res, proj, "F16-b contents 쓰기 차단", [(B, bash(c)) for c in contents], need=WG)
+        _cases_034(res, proj, "F16-ab PowerShell", [(B, ps(c)) for c in refs[:2] + contents[:1]], need=WG)
+        # 반대 방향: 읽기(GET — 방식 없음·필드 없음 · --method GET 이면 필드는 질의 문자열)와 refs·contents 가 아닌 곳은 통과
+        reads = [
+            "gh api repos/o/r/git/refs/heads/main", "gh api repos/o/r/git/ref/heads/main --jq .object.sha", "gh api repos/o/r/git/refs",
+            "gh api repos/o/r/git/refs/heads --paginate --jq '.[].ref'", "gh api -X GET repos/o/r/git/refs/heads/main", "gh api --method=get repos/o/r/git/refs",
+            "gh api -X GET repos/o/r/contents/a.md -f ref=main", "gh api --method GET repos/o/r/git/refs -F per_page=100",
+            "gh api repos/o/r/contents/README.md --jq .sha", "gh api repos/o/r/contents/src", "gh api repos/o/r/contents",
+            "gh api repos/o/r/contents/a.md -H 'Accept: application/vnd.github.raw'", "gh api -i repos/o/r/contents/a.md",
+            "gh api repos/o/r/git/refs/heads/main --template '{{.object.sha}}'", "gh api repos/o/r/git/commits/abc",
+            "gh api -X POST repos/o/r/issues/1/comments -f body=x", "gh api repos/o/r/pulls -f title=t -f head=feat -f base=main",
+            "gh api repos/o/r/contents-report -f x=1", "gh api repos/o/r/git/refsx -f x=1", "gh pr view 70 --json state,mergedAt",
+            "git log --oneline -3; echo gh api git/refs", 'git commit -m "docs: gh api -X PATCH git/refs 를 막는다"',
+        ]
+        _cases_034(res, proj, "F16-ab 읽기·다른 곳은 통과", [(OK, bash(c)) for c in reads])
+        # c. gh 별칭
+        al = ["gh alias set m 'pr merge'", "gh alias import aliases.yml", "gh alias set --shell m 'gh pr view \"$1\"'", "gh alias import -",
+              "GH ALIAS SET m 'pr merge'", "gh.exe alias set m 'pr merge'", "gh  alias  set m x", "echo x; gh alias set m 'pr merge'",
+              "bash -c \"gh alias set m 'pr merge'\"", "gh alias set --clobber m 'pr merge'", "gh alias se\"t\" m x", "gh alias import aliases.yml --clobber"]
+        _cases_034(res, proj, "F16-c gh 별칭 만들기 차단", [(B, bash(c)) for c in al], need=WA)
+        _cases_034(res, proj, "F16-c PowerShell", [(B, ps(c)) for c in al[:2]], need=WA)
+        _cases_034(res, proj, "F16-c 목록·지우기 통과", [(OK, bash(c)) for c in ["gh alias list", "gh alias delete m", "gh alias --help", "gh pr list",
+                                                                               "gh alias settings", 'git commit -m "gh alias set 차단"']])
+        # d. graphql 질의를 파일에서
+        gq = ["gh api graphql -F query=@q.graphql", "gh api graphql --input q.json", "gh api graphql -f query=@q.graphql", "gh api graphql -F 'query=@q.graphql'",
+              "gh api graphql -F query='@q.graphql'", "gh api graphql --field query=@q.graphql", "gh api graphql --raw-field=query=@q.graphql",
+              "gh api graphql -Fquery=@q.graphql", "gh api graphql -F query=@-", "gh api graphql --input=q.json", "gh api graphql --input -",
+              "gh api 'graphql' -F query=@q.graphql", "gh api /graphql -F query=@q.graphql", "GH API GRAPHQL -F QUERY=@Q.GRAPHQL",
+              "gh api graphql -f owner=o -F query=@q.graphql", "cat q.graphql | gh api graphql -F query=@-", "gh.exe api graphql -F query=@q.graphql"]
+        _cases_034(res, proj, "F16-d graphql 파일 질의 차단", [(B, bash(c)) for c in gq], need=WQ)
+        _cases_034(res, proj, "F16-d 통과", [(OK, bash(c)) for c in [
+            "gh api graphql -f query='query { viewer { login } }'", "gh api graphql -F owner=o -f query='query($owner:String!){ user(login:$owner){ id } }'",
+            "gh api graphql -f query='{ repository(owner:\"o\",name:\"r\"){ pullRequest(number:70){ state } } }' --jq .data",
+            "gh api -X GET repos/o/r/commits -F per_page=@n.txt"]])
+        # e. graphql 변이 이름 추가(X1 과 같은 차단·안내)
+        mut = ["gh api graphql -f query='mutation { enqueuePullRequest(input:{pullRequestId:\"x\"}) { clientMutationId } }'",
+               "gh api graphql -f query='mutation { updateRef(input:{refId:\"x\",oid:\"y\"}) { clientMutationId } }'",
+               "gh api graphql -f query='mutation { createCommitOnBranch(input:{}) { clientMutationId } }'",
+               "gh api graphql -f query='mutation { deleteRef(input:{refId:\"x\"}) { clientMutationId } }'",
+               "gh api graphql -f query='mutation { updateRefs(input:{}) { clientMutationId } }'", "gh api graphql -F query='mutation{ENQUEUEPULLREQUEST(input:{}){x}}'",
+               "gh api graphql -f query='mutation { upd\"ate\"Ref(input:{}) { x } }'"]
+        _cases_034(res, proj, "F16-e graphql 변이 차단", [(B, bash(c)) for c in mut], need=WX)
+        # f. // 모으기
+        sl = ["gh api -X PUT repos/o/r/pulls/70//merge", "gh api -X PUT repos/o/r/pulls//70/merge", "gh api -X PUT repos/o/r/pulls/70///merge",
+              "gh api repos/o/r//merges -f base=main -f head=feat", "gh api -X PUT repos//o/r/pulls/70//merge"]
+        _cases_034(res, proj, "F16-f // 모아 합치기 차단", [(B, bash(c)) for c in sl], need=WX)
+        _cases_034(res, proj, "F16-f 조회는 통과", [(OK, bash(c)) for c in ["gh api repos/o/r//pulls/70", "gh api repos/o/r/pulls/70//commits"]])
+        # 보완: gh api 조각이 따옴표 안의 | ; &(--jq '.a|.b' · -H 'a;b')에서 끊기면 뒤의 -X·경로·필드를 못 본다 — 따옴표 밖 구분자까지 다시 잡는다(X1·F16 모두)
+        qs = ["gh api repos/o/r/git/refs/heads/main --jq '.a|.b' -X PATCH -f sha=x", "gh api --jq '.a|.b' repos/o/r/git/refs/heads/main -X PATCH -f sha=x",
+              'gh api repos/o/r/git/refs/heads/main --jq ".a|.b" -X PATCH -f sha=x', "gh api -H 'X: a;b' repos/o/r/contents/a.md -X PUT -f message=x",
+              "gh api -H \"X: it's;b\" repos/o/r/contents/a.md -X PUT -f message=x", "gh api --jq '.a|.b' repos/o/r/git/refs -f ref=refs/heads/x"]
+        _cases_034(res, proj, "F16 따옴표 안 구분자 뒤도 본다", [(B, bash(c)) for c in qs], need=WG)
+        _cases_034(res, proj, "F16-d 따옴표 안 구분자 뒤도 본다", [(B, bash("gh api graphql --jq '.a|.b' -F query=@q.graphql"))], need=WQ)
+        _cases_034(res, proj, "X1 따옴표 안 구분자 뒤도 본다", [(B, bash(c)) for c in [
+            "gh api --jq '.a|.b' repos/o/r/pulls/70/merge -X PUT", "gh api graphql -f x='a&b' -f query='mutation { mergePullRequest(input:{}) { x } }'",
+            "gh api -H 'a;b' -X PUT repos/o/r/pulls/70/merge"]], need=WX)
+        _cases_034(res, proj, "따옴표 밖 구분자 뒤는 다른 명령", [(OK, bash(c)) for c in [
+            "gh api repos/o/r/git/refs/heads/main --jq '.a|.b' | grep -f pats.txt", "gh api repos/o/r/contents/a.md --jq '.sha' | head -1; git commit -m 'x' -F msg.txt",
+            "gh api repos/o/r/git/refs --jq '.[]|.ref' 2>&1 | tail -3", "gh api repos/o/r/contents/a.md --jq \"it's\" ; echo -f",
+            "gh api repos/o/r/contents/a.md --jq '.sha' && git log -1 --format='%H|%s' -- a.md"]])
+        # F7②: perl 로 허락 파일(.turn-merge) 위조 — 다른 규칙으로도 막히지만 판정이 이어지는지
+        P = proj.as_posix()
+        _cases_034(res, proj, "F7② perl 로 허락 파일 쓰기 차단", [(B, bash(c)) for c in [
+            f"perl -e 'open(F,\">>\",\"{P}/docs/refactor/.turn-merge.t\"); print F \"x\"'",
+            f"perl -e 'open(F,\">\",\"{P}/docs/refactor/.turn-merge.t\"); print F \"x\"'"]])
+        _cases_034(res, proj, "F7② perl 읽기 통과", [(OK, bash(f"perl -e 'open(F,\"<\",\"{P}/README.md\"); print <F>'"))])
+    finally:
+        rmtree_rw(proj)
+    # 평소(리팩토링 아님 — 기록 폴더 없음)에는 판정하지 않는다(0.3.0)
+    plain = tempfile.mkdtemp(prefix="guardtest-")
+    try:
+        pp = pathlib.Path(plain)
+        _cases_034(res, pp, "F16 평소에는 통과", [(OK, bash(c)) for c in [refs[0], contents[0], al[0], gq[0], mut[0], sl[0]]])
+    finally:
+        rmtree_rw(pp)
+    # (F7② 의 읽기 전용 단계 쪽 interp_writes_proj 도 > 를 더했지만, 그 단계에서는 perl 의 ">" 꼴이 셸 쓰기 판정(TGK)·안전 실행기 규칙에
+    #  먼저 막혀 이 함수까지 오지 않는다 — 따로 시험하지 않는다)
 
 
 if __name__ == "__main__":

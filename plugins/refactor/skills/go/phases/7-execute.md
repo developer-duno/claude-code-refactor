@@ -88,5 +88,5 @@ STATE의 `current_step`이 "<ID> (진행 중)"이면 지난번 실행이 끝나�
 - ⑨ 커밋 결과: 커밋 해시(짧은 꼴)·메시지·포함된 파일 수. 커밋하지 못했으면 그 까닭과 사람이 칠 한 줄(`../SKILL.md` 의 「사람에게 주는 명령」대로). 올리기는 사람이 — 원격이라 터미널이 없으면 입력창에 `/refactor:approve 푸시`(지금 작업 가지만, 칠 때마다 그 차례에만 — 그 턴에 Claude 가 `git push -u origin <가지>` 를 실행한다. 기본 가지 push 는 계속 사람이). 단계마다 올릴 필요는 없다 — 차례를 멈출 때 ⑩ 의 흐름으로 한 번 안내한다. 기준선 허용 파일(`.allow-baseline-edit`)의 단계가 남아 있으면 그대로 둔다(모두 끝나면 저절로 닫히고 플러그인이 지운다). 마이그레이션 허용 파일(`.allow-migration-edit`)이나 빈 기준선 허용 파일을 만들었다면 **이 커밋 다음에** 지우라고 안내(터미널에서 `rm "<프로젝트 폴더>/docs/refactor/<그 파일>"`, CLI 라면 입력창에 `! rm …` 도 됨)
 - ⑩ 다음(묶음 요약에 한 번 — 이어서 다음 단계로 갈 때는 적지 않는다):
   - 멈춤 조건에 걸려 멈췄으면: 그 까닭과 사람이 할 일, 그다음 `/refactor:go`(남은 단계를 이어서 한다).
-  - 승인된 단계를 모두 끝냈으면 이 흐름을 안내한다: `/refactor:approve 푸시` → (Claude 가 push · 사용자가 부탁하면 `gh pr create`) → PR 의 자동 검사가 초록이 되면 입력창에 `/refactor:approve 합치기` → 배포 확인(Claude 에게 부탁 — 읽기 명령만) → 다음 묶음은 `/refactor:approve 새 가지` 를 친 뒤 `/refactor:go`.
+  - 승인된 단계를 모두 끝냈으면 이 흐름을 안내한다: `/refactor:approve 푸시` → (Claude 가 push · 사용자가 부탁하면 `gh pr create`) → PR 을 만들었으면 입력창에 `/refactor:approve 합치기`(허락만 — 그 턴에 Claude 가 허락된 명령으로 자동 검사가 초록이 되기를 기다렸다 합친다) → 배포 확인(Claude 에게 부탁 — 읽기 명령만) → 다음 묶음은 `/refactor:approve 새 가지` 를 친 뒤 `/refactor:go`.
   - 승인 대기 단계가 남았으면 `/refactor:approve <ID>`(계획서를 보고).
