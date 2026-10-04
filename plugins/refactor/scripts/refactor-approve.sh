@@ -388,9 +388,11 @@ EOF
     if ! [[ $nb =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || ! "${G[@]}" check-ref-format --branch "$nb" >/dev/null 2>&1; then
       nb_no "❓ 가지 이름($nb)을 쓸 수 없습니다(영문·숫자·._/- 만, 첫 글자는 영문·숫자·_, git 가지 이름 규칙)"
     fi
-    # 0.3.4 보완 F6: 참조 이름 꼴·기본 가지 이름은 거절(대소문자 그대로 비교)
-    case "$nb" in
-      refs/*|origin/*|HEAD|main|master|"$bname")
+    # 0.3.4 보완 F6: 참조 이름 꼴·기본 가지 이름은 거절 — 영문 대소문자는 가리지 않는다(맥·Windows 는 파일 이름 대소문자를
+    #   가리지 않아 main 이 있으면 git 이 Main 을 같은 이름으로 보고 실패한다 — 어느 OS 든 같은 안내로 미리 거절)
+    upper_ascii "$nb"; nbu=$UPV; upper_ascii "$bname"
+    case "$nbu" in
+      REFS/*|ORIGIN/*|HEAD|MAIN|MASTER|"$UPV")
         nb_no "❓ 가지 이름($nb)을 쓸 수 없습니다(refs/·origin/ 으로 시작하는 이름과 HEAD·main·master·기본 가지 이름 $bname 은 새 작업 가지 이름으로 쓰지 않습니다)" ;;
     esac
   fi
@@ -402,7 +404,12 @@ EOF
   elif [ "$mrc" != 0 ]; then
     # 판정 불가(0.3.4 보완 F3): 까닭 + 사람이 터미널에서 만드는 길
     say "❓ 지금 가지($obs)의 내용이 origin/$bname 에 다 들어 있는지 판정하지 못했습니다: ${RL_MERGED_WHY:-까닭 모름}."
-    say "   Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요. 받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서: git switch -c ${nb:-refactor/$RL_TODAY} origin/$bname"
+    # 사람이 터미널에 붙여 넣을 명령에는 글자 검사를 지난 이름만 싣는다(origin/HEAD 가 가리키는 이름은 git 이 $·;·괄호를 허용 — 재검사 R)
+    if [[ $bname =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]]; then
+      say "   Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요. 받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서: git switch -c ${nb:-refactor/$RL_TODAY} origin/$bname"
+    else
+      say "   Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요. 받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서 새 작업 가지를 만들어 주세요(기본 가지 이름에 영문·숫자·._/- 밖의 글자가 있어 명령을 적지 않았습니다)."
+    fi
     say "   (새 가지를 만들지 않았습니다 — 아무것도 바꾸지 않았습니다.)"
     exit 0
   fi

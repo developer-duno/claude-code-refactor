@@ -569,8 +569,9 @@ rl_protected_dirty() {
     xy=${ent:0:2}; path=${ent:3}
     case "$xy" in *R*|*C*) IFS= read -r -d '' old ;; esac   # 이름 바꾸기·복사: 다음 칸은 옛 경로
     # HEAD 에 없는 새 파일(index 에 막 올림 = 첫 칸 A · 올릴 예정 표시 git add -N = 둘째 칸만 A)은 "이미 커밋된 파일"이 아니다(0.3.4 보완 F1 —
-    #   기준선 단계의 새 기준선·단계 실행의 새 마이그레이션을 git add 하면 헛경보가 났다). 고침·지움·이름 바꾸기·복사(M·D·R·C)는 그대로 잡는다
-    case "$xy" in A?|" A") continue ;; esac
+    #   기준선 단계의 새 기준선·단계 실행의 새 마이그레이션을 git add 하면 헛경보가 났다). 고침·지움·이름 바꾸기·복사(M·D·R·C)는 그대로 잡는다.
+    #   합치기 충돌(AA·AU — HEAD 에 파일이 있음)은 새 파일이 아니라 잡는다(재검사 R)
+    case "$xy" in "A "|AM|AD|" A") continue ;; esac
     case "$path" in *"$RL_NL"*|*"$RL_TAB"*|docs/refactor/*) continue ;; esac
     keep=0
     if [ "$abl" != ALL ] && [[ $path =~ $re_bl ]] && ! { [ -n "$ablp" ] && case "$path" in "$pfx"*) rl_abl_hit "${path#"$pfx"}" "$ablp" ;; *) false ;; esac; }; then keep=1; fi

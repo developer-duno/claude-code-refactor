@@ -2429,6 +2429,18 @@ def check_newbranch_fix_034(check):
         out, _ = _ap034(d, "새 가지")
         created("f3 같은 상태 + git 2.38 이상(merge-tree) → ④", d, out)
 
+        # 재검사 R: 판정 불가 문구의 터미널 명령에는 글자 검사를 지난 기본 가지 이름만 — origin/HEAD 가 '$'·';' 가 든 이름을 가리키면 명령을 싣지 않는다
+        d = mk(); made_dirs.append(d)
+        lf(d / "c.txt", "c\n"); g(d, "add", "-A"); g(d, "commit", "-qm", "c")
+        squash_merged(d)
+        on_base(d, {"other.txt": "o\n"})
+        weird = "w$(id);x"
+        g(d, "update-ref", f"refs/remotes/origin/{weird}", g(d, "rev-parse", "refs/remotes/origin/main"))
+        g(d, "symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{weird}")
+        out, _ = _ap034(d, "새 가지", path=old_path)
+        check("0.3.4 R: 이상한 기본 가지 이름 → 판정 불가 문구에 터미널 명령을 싣지 않음",
+              "판정하지 못했습니다" in out and "git switch -c" not in out and "명령을 적지 않았습니다" in out, out)
+
         # f3-5 반대 방향: rebase 합침 뒤 가지에 기본 가지에 없는 커밋 1개('+') → 거절(코드 1 문구 · 판정 불가 아님)
         d = mk(); made_dirs.append(d)
         rebase_merged(d)
@@ -2460,11 +2472,12 @@ def check_newbranch_fix_034(check):
         rebase_merged(d)
         for args in ("가지 새", "P1-1 새 가지", "새 가지 푸시", "새 가지 a b", "새 가지 -x", "새 가지 a..b", "새 가지 .hidden", "새 가지 a/",
                      "새 가지 a@{1}", "새 가지 HEAD", "새 가지 main", "새 가지 refs/heads/x", "새 가지 '$(id)'", "새 가지 `id`", "새 가지 a;b",
-                     "새 가지 허용", "새 합치기", "새 가지 origin/x", "새 가지 master", "새 가지 refs/x", "새 가지 origin/main"):
+                     "새 가지 허용", "새 합치기", "새 가지 origin/x", "새 가지 master", "새 가지 refs/x", "새 가지 origin/main",
+                     "새 가지 Main", "새 가지 MASTER", "새 가지 head", "새 가지 Refs/x", "새 가지 Origin/x"):
             unchanged(f"F6 {args!r} → 거절", d, args, "아무것도 바꾸지 않았습니다")
         out = unchanged("F6 'refs/heads/x' 문구", d, "새 가지 refs/heads/x", "가지 이름(refs/heads/x)을 쓸 수 없습니다(refs/·origin/ 으로 시작하는 이름과 HEAD·main·master·기본 가지 이름 main 은")
         check("0.3.4 F6 refs/heads/x 가지가 안 생김", g(d, "for-each-ref", "refs/heads/refs/") == "", out)
-        for name in ("Main", "mainline", "feat/main", "refs-x", "origin-x", "HEADS"):
+        for name in ("mainline", "feat/main", "refs-x", "origin-x", "HEADS"):
             g(d, "checkout", "-q", "feat/x")
             out, _ = _ap034(d, f"새 가지 {name}")
             created(f"F6 반대: '{name}'(비슷하지만 다른 이름)", d, out, name)
@@ -2473,6 +2486,7 @@ def check_newbranch_fix_034(check):
         g(d, "update-ref", "refs/remotes/origin/develop", g(d, "rev-parse", "refs/remotes/origin/main"))
         g(d, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
         unchanged("F6 기본 가지 이름 develop", d, "새 가지 develop", "기본 가지 이름 develop 은")
+        unchanged("F6 기본 가지 이름 대소문자만 다름(Develop)", d, "새 가지 Develop", "기본 가지 이름 develop 은")
         unchanged("F6 기본 가지가 develop 이어도 main", d, "새 가지 main", "을 쓸 수 없습니다")
     finally:
         for m in made_dirs:
@@ -2719,6 +2733,23 @@ def check_protected_new_034(check):
             undo()
             _, se, rc, _ = pc(d)
             check(f"0.3.4 f1 반대: {name} 되돌린 뒤 → 조용", rc == 0, f"{rc} {se}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 재검사 R: 합치기 충돌로 같은 기준선 파일이 양쪽에서 더해진 꼴('AA' — HEAD 에 파일이 있음)은 새 파일 예외가 아니다 → 알림
+    d = mk("EXECUTE")
+    try:
+        cur = g(d, "rev-parse", "--abbrev-ref", "HEAD")
+        g(d, "checkout", "-q", "-b", "side")
+        lf(d / "tests/baseline/aa.test.ts", "s\n"); g(d, "add", "--", "tests/baseline/aa.test.ts"); g(d, "commit", "-qm", "s")
+        g(d, "checkout", "-q", cur)
+        lf(d / "tests/baseline/aa.test.ts", "m\n"); g(d, "add", "--", "tests/baseline/aa.test.ts"); g(d, "commit", "-qm", "m")
+        hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+        g(d, "merge", "-q", "side", check_rc=False)
+        st = g(d, "status", "--porcelain", "--", "tests/baseline/aa.test.ts")
+        _, se, rc, _ = pc(d)
+        check("0.3.4 R 반대: 합치기 충돌('AA') 기준선 → 알림 그대로", st.startswith("AA") and rc == 2 and "AA tests/baseline/aa.test.ts" in se, f"{st!r} {rc} {se}")
+        g(d, "merge", "--abort", check_rc=False)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
