@@ -3391,8 +3391,9 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ -n "$lz" ] && hv_human "$lz" "$lz"
   [ -n "$hv" ] && hv_human "$hv" "$hv"
   [ -n "$hvz" ] && hv_human "$hvz" "$hvz"
-  interp_approve "$lr" && block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"
+  # 0.3.5: 합치기 스크립트 판정을 먼저 — 승인 이름 정규식(run.sh 뒤 24글자 안의 turn·guard…)이 경로 글자(예: /tmp/guardtest-…)에 걸려 안내 문구가 바뀌지 않게(둘 다 막음)
   [ "$MOK" != 1 ] && interp_approve "$lr" 'refactor-merge' && merge_block
+  interp_approve "$lr" && block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"
   if writes_to '(docs/refactor/)?\.allow-[a-z-]+|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/' || interp_writes '\.allow-|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/'; then
     block "허용 파일(.allow-*)·승인 기록(APPROVALS.log)·.turn 은 사람과 플러그인만 만들고 지웁니다." "$MSG_HUMAN"
   fi
