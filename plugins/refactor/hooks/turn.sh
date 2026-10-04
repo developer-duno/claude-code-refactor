@@ -20,8 +20,8 @@
 #    그 결과를 "[Vibe Refactor 승인 처리 결과 — 입력 훅]" 블록으로 이번 턴의 컨텍스트(stdout)에 넣는다.
 #    스킬의 ! 명령은 이 훅보다 먼저 돌기 때문에 승인·취소·마무리·확인·baseline 은 스킬이 아니라 여기서 처리한다
 #    (스킬 쪽 실행은 --from-hook 이 없어 현황만 보여 준다). 인자가 없으면 현황만(바꾸는 것 없음). 이 훅은 프롬프트를 막지 않는다(exit 0).
-#    승인 스크립트에는 REFACTOR_TURN_SID=<세션ID> 를 넘긴다("푸시"가 그 세션의 허락 파일 .turn-push.<세션ID> 를 만든다).
-#    push 허락은 그 차례에만: 사람 입력마다(알림 입력은 빼고) 승인 처리보다 먼저 그 세션의 .turn-push.<세션ID> 를 지운다.
+#    승인 스크립트에는 REFACTOR_TURN_SID=<세션ID> 를 넘긴다("푸시"·"합치기"가 그 세션의 허락 파일 .turn-push.<세션ID>·.turn-merge.<세션ID> 를 만든다).
+#    push·합치기 허락은 그 차례에만: 사람 입력마다(알림 입력은 빼고) 승인 처리보다 먼저 그 세션의 .turn-push.<세션ID>·.turn-merge.<세션ID> 를 지운다.
 # 3) 리팩토링 진행 중이면(또는 /refactor:go 턴이면) 턴이 시작될 때 "보호된 파일 중 이미 바뀌어 있던 것"과
 #    승인 기록(APPROVALS.log)의 지문을 .turn-dirty.<세션ID> 에 적어 둔다. 셸 명령 뒤 점검(post-check.sh)은
 #    이 목록에 없던 변경·이 목록에서 사라진 변경만 알리고, 턴 중에 승인 기록이 바뀌면 알린다.
@@ -71,6 +71,8 @@ re_sys='^([[:space:]]|\\[nrt])*<(task-notification|system-reminder|agent-message
 # 0.3.3: push 허락(/refactor:approve 푸시 가 만든 .turn-push.<세션ID>)은 그 차례에만 — 사람 입력마다 먼저 지운다
 # (위에서 알림 입력은 이미 걸렀으므로 지우지 않는다. 이번 입력이 /refactor:approve 푸시 면 아래 승인 처리가 새로 만든다)
 [ -f "$rdir/.turn-push.$sid" ] && rm -f "$rdir/.turn-push.$sid"
+# 0.3.5: 합치기 허락(/refactor:approve 합치기 가 만든 .turn-merge.<세션ID>)도 그 차례에만 — 같은 자리에서 지운다
+[ -f "$rdir/.turn-merge.$sid" ] && rm -f "$rdir/.turn-merge.$sid"
 
 T="$rdir/.turn.$sid"
 # 정리(하루 지난 표시 파일·0.2.0 의 세션 공용 .turn)는 외부 프로그램(find·date·rm)을 띄우므로 표시 처리(go 턴의 닫힌 표시 쓰기,

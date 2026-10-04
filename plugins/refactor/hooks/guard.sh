@@ -981,8 +981,32 @@ writes_to() {
 interp_writes() {
   has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
   has "$lr" "$1" || return 1
-  has "$lr" "open[(][^)]*['\"][wax+]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate)|[.]unlink|rmtree|os[.](remove|rename|replace)|shutil[.](move|copy)|set-content|out-file|add-content|[.]replace[(]" || return 1
+  # 0.3.5 F7②: open 의 방식 글자에 > 도(perl open(F,">",…) · ">>")
+  has "$lr" "open[(][^)]*['\"][wax+>]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate)|[.]unlink|rmtree|os[.](remove|rename|replace)|shutil[.](move|copy)|set-content|out-file|add-content|[.]replace[(]" || return 1
   return 0
+}
+# 0.3.5 X2: 인터프리터 코드가 플러그인 폴더(.claude/plugins · 지금 플러그인 폴더 plugroot)에 쓰는가. 플러그인 폴더 경로는 글자 그대로의 정규식으로
+#   (구분자 / 와 \ 는 같게 · Windows 의 c:/… 는 Git Bash 꼴 /c/… 도). 인터프리터 낱말이 없으면 경로 정규식을 만들지 않는다(평소 비용 0)
+interp_plug_writes() {
+  has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
+  interp_writes '\.claude[/\\]+plugins' && return 0
+  [ -n "$plugroot" ] || return 1
+  local p=$plugroot c i re="" alt=""
+  for ((i = 0; i < ${#p}; i++)); do
+    c=${p:i:1}
+    case "$c" in
+      [A-Za-z0-9]) re="$re$c" ;;
+      /) re="$re[/\\\\]+" ;;
+      "$BS") re="$re\\\\" ;;
+      '^') re="$re\\^" ;;
+      ']') re="$re\\]" ;;
+      '[') re="$re\\[" ;;
+      *) re="$re[$c]" ;;
+    esac
+  done
+  # c:/… 이면 Git Bash 꼴 /c/… 도(앞 세 글자 c[:][/\\]+ 를 [/\\]+c[/\\]+ 로)
+  case "$p" in [A-Za-z]:/*) alt="|[/\\\\]+${p:0:1}${re#?\[:\]}" ;; esac
+  interp_writes "$re$alt"
 }
 
 # 0.3.4 T5: $1 이 따옴표 밖에서 끝나는가(bash 의 따옴표 규칙) — 밖의 \X · '…'(안은 그대로) · "…"(안의 \X) · $'…'(안의 \X) · $"…" · $ 다음 한 글자.
@@ -1352,9 +1376,10 @@ blank_vars() {
 }
 # 와일드카드로 쓴 보호 이름을 실행하는가(bash …/refactor-appro?e.sh · bash …/hooks/tur?.sh · run.sh tu?n) — bash 글로브로 대 본다.
 # 기본 이름 글로브(* · *.sh · *.*)만 보지 않는다(bash -n hooks/*.sh 같은 문법 검사)
+#   $2 = 볼 이름 목록(없으면 승인·훅 진입점 — 0.3.5 합치기 스크립트는 따로 부른다: 막는 문구가 다르다)
 glob_protected_exec() {
   case "$1" in *[\*\?\[]*) ;; *) return 1 ;; esac
-  local s seg a b i nm names="refactor-approve.sh refactor-approve turn.sh guard.sh post-check.sh session-start.sh turn guard post-check session-start run.sh"
+  local s seg a b i nm names=${2:-"refactor-approve.sh refactor-approve turn.sh guard.sh post-check.sh session-start.sh turn guard post-check session-start run.sh"}
   cut_segs "$1"; s=$CUTS
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
@@ -1371,8 +1396,11 @@ glob_protected_exec() {
 }
 # 인터프리터 코드(python -c · node -e · perl -e · ruby -e · php -r · 인터프리터로 흘리는 히어독) 안에 승인 스크립트·훅 진입점 이름이 있는가
 # — subprocess·child_process·os.system 으로 부르는 길(문자열을 이어 붙여 --from-hook 을 만들어도). cat·grep·head 로 읽는 것은 아니다
+#   $2 = 볼 이름 정규식(없으면 승인·훅 진입점 — 0.3.5 합치기 스크립트는 'refactor-merge' 로 따로 부른다: 막는 문구가 다르다)
 interp_approve() {
-  has "$1" "refactor-approve|[/\\\\](turn|guard|post-check|session-start)[.]sh|run[.]sh[^;&|]{0,24}(turn|guard|post-check|session-start)" || return 1
+  local nre="refactor-approve|[/\\\\](turn|guard|post-check|session-start)[.]sh|run[.]sh[^;&|]{0,24}(turn|guard|post-check|session-start)"
+  [ -n "${2:-}" ] && nre=$2
+  has "$1" "$nre" || return 1
   has "$1" "${S}(python3?|py|pypy3|node|ruby|perl|php|deno|bun)([[:space:]][^;&|]*)?[[:space:]](-[a-z]*[ecpr]|--eval|--print)[[:space:]]|${S}(python3?|py|pypy3|node|ruby|perl|php|deno|bun)([[:space:]]+-)?[[:space:]]*<<" || return 1
   # 읽기만 하는 코드(print(open(…).read()) · console.log)는 통과 — 프로그램을 띄우거나 모듈을 불러올 수 있는 낱말이 하나라도 있으면 막는다
   #   (넓게 잡는다: import·require·os.·process.·getattr·eval·` 등. 승인 스크립트 이름과 같이 나올 때만 보므로 과잉차단 비용이 작다)
@@ -1390,6 +1418,11 @@ hv_human() {
   if has "$1" "(^|[^[:alnum:]._/-])claude([.](exe|cmd))?([^[:alnum:]_.-]|$)" && has "$1" 'refactor:(approve|go)|from-hook'; then block "$MSG_NESTED" "$MSG_APPROVE"; fi
   if has "$1" 'refactor-approve' && approve_exec "$1"; then block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"; fi
   glob_protected_exec "$1" && block "$MSG_HOOK_EXEC" "$MSG_APPROVE"
+  # 0.3.5 G2: 합치기 스크립트를 실행하는 꼴(승인 스크립트와 같은 판정 · 글로브 이름) — 허락된 명령 그대로(G3, MOK)일 때만 건너뛴다
+  if [ "${MOK:-0}" != 1 ]; then
+    if has "$1" 'refactor-merge' && approve_exec "$1" refactor-merge; then merge_block; fi
+    glob_protected_exec "$1" "refactor-merge.sh refactor-merge" && merge_block
+  fi
   if has "$1" "run\\.sh[\"']?[[:space:]]+[\"']?(turn|guard|post-check|session-start)([\"'[:space:];&|)]|$)" \
     || has "$1" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|exec)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
     || has "$1" "(^|[;&|({\`])[[:space:]]*(sudo[[:space:]]+)?\\.[[:space:]]+[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
@@ -1790,6 +1823,33 @@ hv_git() {
   return 0
 }
 MSG_GHDEL="원격 가지·저장소 삭제는 사람이 직접 합니다(gh api DELETE 도 같습니다)."
+MSG_GHW="리팩토링 진행 중에는 GitHub API 로 가지·파일을 직접 쓰지 않습니다(PR 없이 합치는 길)."
+MSG_GHW2="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요. 가지·파일 변경은 git 커밋과 /refactor:approve 푸시 로 합니다."
+# 0.3.5 F16: gh api 조각($1)이 읽기가 아닌 요청인가(0 = 쓰기). gh 공식 문서: 방식을 주지 않으면 GET, 필드(-f·-F·--field·--raw-field)가 있으면 POST ·
+#   --method GET 이면 필드는 질의 문자열. 그래서 -X·--method 값이 하나라도 GET 이 아니면(변수·따옴표로 쪼갠 값 포함) 쓰기 · 방식 값이 모두 GET 이면 읽기 ·
+#   방식이 없으면 필드나 --input 이 있을 때 쓰기. 짧은 옵션 묶음은 gh api 의 켜기 옵션 -i 하나뿐이라 -iX·-if 까지 본다
+gha_write() {
+  local s=$1 m any=0 re_m="[[:space:]][\"']?(-i*x[[:space:]]*=?|--method([[:space:]]+|=))[\"']?([^[:space:]\"';&|)]*)"
+  while [[ $s =~ $re_m ]]; do
+    any=1; m=${BASH_REMATCH[3]}; s=${s#*"${BASH_REMATCH[0]}"}
+    case "$m" in [Gg][Ee][Tt]) ;; *) return 0 ;; esac
+  done
+  [ "$any" = 1 ] && return 1
+  has "$1" "[[:space:]][\"']?(-i*f|--field|--raw-field|--input)"
+}
+# $1 = 'gh api' 로 시작하는 글자 → GS = 따옴표(' ") 밖의 ; & | 줄바꿈 앞까지(따옴표가 닫히지 않으면 끝까지). 따옴표 묶음 단위로 건너뛴다
+gha_scan() {
+  local r=$1 p c q
+  GS=""
+  while :; do
+    p=${r%%[\"\';\&\|$NL]*}; GS=$GS$p; r=${r#"$p"}
+    c=${r:0:1}
+    case "$c" in
+      \"|\') r=${r:1}; q=${r%%"$c"*}; GS=$GS$c$q; [ "$q" = "$r" ] && return 0; GS=$GS$c; r=${r#"$q$c"} ;;
+      *) return 0 ;;
+    esac
+  done
+}
 # 고가치 규칙(대량 삭제·기록 폴더 삭제) — hv_git 처럼 lq·lz·hv·hvz 사본마다 부른다(eval "rm -rf doc"'s/refactor').
 #   $2 = 1 이면 빈 변수를 지운 사본(hv·hvz): 머리의 $DIR 을 지우면 없던 / · . 가 생기므로(rm -rf $OUT/* → rm -rf /*)
 #   큰 폴더 판정은 하지 않고 기록 폴더(docs/refactor)·--no-preserve-root 만 본다
@@ -1855,6 +1915,32 @@ hv_deploy() {
     has "$t" "${S}gh[[:space:]]+pr[[:space:]]+merge" && dh="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요."
     block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "$dh"
   fi
+  # 0.3.5 X1: gh api 로 PR 합치기(REST pulls/<번호>/merge · 가지 합치기 /merges · graphql mergePullRequest·enablePullRequestAutoMerge·mergeBranch)
+  #   — gh pr merge 차단을 비껴가는 길. 방식 옵션(-X·--method)과 상관없이 막는다(합쳐졌는지 보는 읽기 GET 도 — 안내에 조회 대안).
+  #   번호 칸은 숫자가 아니어도(변수·따옴표) 본다. gh.exe·경로 붙은 gh 도(조각 = gh api 부터 ; & | 앞까지)
+  #   F16-e: graphql 변이 enqueuePullRequest(합치기 대기열)·updateRef(s)·createCommitOnBranch·deleteRef 도 같은 차단.
+  #   F16-f: 경로 판정 전에 // 를 / 로 모은다(pulls/70//merge · git//refs — 판정용 사본만)
+  #   F16-a·b: …/git/refs(가지 참조 옮기기 = PR 없이 합치기)·…/contents(API 로 직접 커밋)를 읽기가 아닌 요청으로 겨냥(gha_write)
+  #   F16-d: graphql 질의를 파일에서 읽으면(-f·-F·--field·--raw-field 값이 @ 로 시작 · --input) 변이 이름을 볼 수 없어 막는다
+  local mseg mn mrest=$t re_mga="gh([.]exe)?[[:space:]]+api([[:space:]][^;&|]*)?" d2=// d1=/
+  while [[ $mrest =~ $re_mga ]]; do
+    mseg=${BASH_REMATCH[0]}; mrest=${mrest#*"$mseg"}
+    # 보완: 조각이 따옴표 안의 ; & |(--jq '.a|.b' · -H 'a;b')에서 끊겼으면(따옴표 짝이 안 맞음) 따옴표 밖의 구분자까지 다시 잡는다 — 뒤의 -X·경로·필드를 놓치지 않게
+    if quote_odd "$mseg"; then gha_scan "$mseg$mrest"; mrest=${mseg}${mrest}; mrest=${mrest:${#GS}}; mseg=$GS; fi
+    mn=$mseg; while [[ $mn == *"$d2"* ]]; do mn=${mn//"$d2"/$d1}; done
+    if has "$mn" "pulls/[^/[:space:]]*/merge([^A-Za-z0-9_]|$)|/merges([^A-Za-z0-9_]|$)|mergepullrequest|enablepullrequestautomerge|mergebranch|enqueuepullrequest|updateref|createcommitonbranch|deleteref"; then
+      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요. 합쳐졌는지 보려면 gh pr view <번호> --json state,mergedAt 를 쓰세요."
+    fi
+    if has "$mn" "/git/refs([/\"'[:space:]?)]|$)|/contents([/\"'[:space:]?)]|$)" && gha_write "$mn"; then
+      block "$MSG_GHW" "$MSG_GHW2"
+    fi
+    if has "$mn" "[[:space:]][\"']?/?graphql([\"'[:space:]?)]|$)" \
+      && has "$mn" "[[:space:]][\"']?((-i*f|--field|--raw-field)([[:space:]]+|=)?[\"']?[^[:space:]=\"']*[\"']?=[\"']?@|--input([[:space:]=\"']|$))"; then
+      block "$MSG_GHW" "GraphQL 질의는 명령 안에 그대로 적으세요(파일에서 읽으면 판정할 수 없습니다)"
+    fi
+  done
+  # F16-c: gh 별칭 만들기(이름을 바꾼 pr merge 등으로 판정을 피하는 길) — 목록·지우기는 통과
+  has "$t" "gh([.]exe)?[[:space:]]+alias[[:space:]]+(set|import)([^a-z0-9_-]|$)" && block "리팩토링 진행 중에는 gh 별칭을 만들지 않습니다(명령 이름을 바꿔 판정을 피하는 길)." "원래 gh 명령을 그대로 쓰세요."
   local re_pkg_db="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?[a-z0-9_:-]*(migrat[a-z]*|(db|prisma|supabase|drizzle)[:_-](push|migrate|reset|seed|deploy|drop|up|apply))"
   # 0.3.4 T1: 마이그레이션 상태 조회(rails·rake db:migrate:status[:<DB 이름>] · artisan migrate:status · sequelize db:migrate:status)는 적용이 아니다 —
   #   그 낱말만(끝 경계까지) 공백으로 바꾼 사본으로 아래 CLI 규칙을 본다. 쓰기 꼴(db:migrate:reset·db:migrate:primary·migrate:rollback …)은 지금처럼 접두로 막힌다.
@@ -1937,15 +2023,18 @@ nested_claude_approve() {
 }
 # 승인 스크립트를 "실행"하는 모양인가(읽기·검색은 아니다): bash·sh·source·. 로 부르기, 직접 실행, run.sh refactor-approve,
 # 셸로 흘려 넣기(cat … | bash · bash < … · <( ) · eval · xargs bash · -exec bash). $1 = 판정용 명령(따옴표 정리됨)
+#   $2 = 스크립트 이름(없으면 refactor-approve — 0.3.5 합치기 스크립트 refactor-merge 도 같은 판정)
 approve_exec() {
-  local s seg
+  local s seg nm=${2:-refactor-approve} re_penv='^[[:space:]]*[^[:space:]]*[/\\]env([.]exe)?[[:space:]]'
   has "$1" "[|][[:space:]]*(sudo[[:space:]]+)?(ba|z|da|k)?sh([[:space:]]|$)|(^|[;&|({[:space:]])(bash|sh|zsh|dash|source|\\.)[[:space:]]*<|<[(]|(^|[;&|({[:space:]])eval([[:space:]]|$)|(xargs|-exec|-execdir)[[:space:]]+([^;&|]*[[:space:]])?(sudo[[:space:]]+)?(bash|sh|zsh|dash|source)([[:space:]]|$)" && return 0
   cut_segs "$1"; s=$CUTS
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
-    case "$seg" in *refactor-approve*) ;; *) continue ;; esac
+    case "$seg" in *"$nm"*) ;; *) continue ;; esac
+    # 0.3.5: 경로 붙은 env(/usr/bin/env bash …)는 env 로 — seg_words 가 그 뒤의 명령 이름을 보게
+    [[ $seg =~ $re_penv ]] && seg="env ${seg#*"${BASH_REMATCH[0]}"}"
     seg_words "$seg"
-    case "$SCMD" in *refactor-approve*|run.sh|bash|sh|zsh|dash|ksh|source|.) return 0 ;; esac
+    case "$SCMD" in *"$nm"*|run.sh|bash|sh|zsh|dash|ksh|source|.) return 0 ;; esac
   done
   return 1
 }
@@ -2642,7 +2731,7 @@ ps_getenv_sens() {
 # 읽기 전용 단계: 인터프리터 코드가 프로젝트 안(docs/refactor 밖) 파일에 쓰는가(쓰는 경로를 알 수 없으면 쓰는 것으로 본다)
 interp_writes_proj() {
   has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
-  has "$lr" "open[(][^)]*['\"][wax+]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate|mkdir)|[.]unlink|rmtree|os[.](remove|rename|replace|makedirs|mkdir)|shutil[.](move|copy)|set-content|out-file|add-content" || return 1
+  has "$lr" "open[(][^)]*['\"][wax+>]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate|mkdir)|[.]unlink|rmtree|os[.](remove|rename|replace|makedirs|mkdir)|shutil[.](move|copy)|set-content|out-file|add-content" || return 1
   local rest=$lr re_lit="[\"']([^\"'[:space:]]*[/.][^\"'[:space:]]*)[\"']" lit any=0
   while [[ $rest =~ $re_lit ]]; do
     lit=${BASH_REMATCH[1]}; rest=${rest#*"${BASH_REMATCH[0]}"}
@@ -3089,6 +3178,64 @@ push_grant() {
   PB=${l1#push }
   return 0
 }
+# 0.3.5 합치기 허락(사람이 /refactor:approve 합치기 → 입력 훅이 만든 docs/refactor/.turn-merge.<세션ID>, push_grant 와 같은 꼴):
+#   1줄 "merge <가지> <PR번호 또는 -> <rebase|squash|merge> <HEAD 40자 또는 64자>" · 2줄 만든 시각(초) · 3줄 허락된 명령 글자 그대로
+#   bash "<플러그인>/hooks/run.sh" refactor-merge "<프로젝트 폴더>" <세션ID>. 이 세션 것이고 만든 지 0~1800초이고, 3줄의 플러그인 경로가
+#   이 훅의 REFACTOR_ROOT(역슬래시 → /, 끝 / 뗌)와 같고 끝의 세션 ID 가 훅 입력의 것과 같을 때만 → ML(3줄). 줄 끝 \r 은 뗀다.
+#   refactor-merge 낱말이 보이는 명령에서만 부른다(date 1회 — 평소 도구 호출엔 비용 0)
+merge_grant() {
+  ML=""
+  hascs "$sid" '^[A-Za-z0-9_-]{1,128}$' || return 1
+  local f="$rdir/.turn-merge.$sid" l1="" l2="" l3="" now pr=${REFACTOR_ROOT:-} mid
+  [ -f "$f" ] || return 1
+  { IFS= read -r l1; IFS= read -r l2; IFS= read -r l3; } < "$f" 2>/dev/null
+  l1=${l1%$'\r'}; l2=${l2%$'\r'}; l3=${l3%$'\r'}
+  hascs "$l1" '^merge [A-Za-z0-9_][A-Za-z0-9._/-]* (-|[0-9]{1,7}) (rebase|squash|merge) [0-9a-f]{40}([0-9a-f]{24})?$' || return 1
+  hascs "$l2" '^[0-9]{1,12}$' || return 1
+  pr=${pr//"$BS"/$SL}; while [ "${pr%/}" != "$pr" ]; do pr=${pr%/}; done
+  [ -n "$pr" ] || return 1
+  # 3줄 = bash "<플러그인>/hooks/run.sh" refactor-merge "<프로젝트 폴더>" <세션ID> — 대소문자를 가려 본다(전역 nocasematch 를 여기서만 끔) ·
+  #   프로젝트 폴더 칸에는 " 가 없어야 한다
+  shopt -u nocasematch
+  case "$l3" in "bash \"$pr/hooks/run.sh\" refactor-merge \""*"\" $sid") mid=0 ;; *) mid=1 ;; esac
+  shopt -s nocasematch
+  [ "$mid" = 0 ] || return 1
+  mid=${l3#"bash \"$pr/hooks/run.sh\" refactor-merge \""}; mid=${mid%"\" $sid"}
+  case "$mid" in ""|*\"*) return 1 ;; esac
+  now=$(date +%s 2>/dev/null)
+  hascs "$now" '^[0-9]{1,12}$' || return 1
+  now=$((10#$now - 10#$l2))
+  [ "$now" -ge 0 ] && [ "$now" -le 1800 ] || return 1
+  ML=$l3
+  return 0
+}
+# 0.3.5 G3: 이 명령이 허락된 합치기 명령 그대로인가 → 0(그때만 합치기 스크립트 실행 차단 G2 를 건너뛴다 — 다른 규칙은 그대로 본다).
+#   도구가 Bash · 도구 입력의 맨 위 명령(PTOP) · 유효한 허락(merge_grant) · JSON 이스케이프(\" \/)만 푼 원문(앞뒤 공백만 뗌)이
+#   허락 3줄과 글자 그대로(대소문자도) 같거나 3줄 + " 2>&1". 그 밖의 역슬래시(줄 이어쓰기·줄바꿈·탭·\\·\u…)가 있으면 비교 전에 아니다.
+#   MG = 허락 파일이 유효했는가(막을 때 안내를 고른다)
+merge_ok() {
+  MG=0
+  merge_grant || return 1
+  MG=1
+  [ "$tool" = Bash ] && [ "$PTOP" = 1 ] || return 1
+  local r=${rawcmd//"$BS$Q"/$Q} x=1
+  r=${r//"$P_BSSL"/$SL}
+  case "$r" in *"$BS"*) return 1 ;; esac
+  while [ "${r# }" != "$r" ]; do r=${r# }; done
+  while [ "${r% }" != "$r" ]; do r=${r% }; done
+  shopt -u nocasematch
+  { [ "$r" = "$ML" ] || [ "$r" = "$ML 2>&1" ]; } && x=0
+  shopt -s nocasematch
+  return $x
+}
+MSG_MERGE_EXEC="PR 합치기 스크립트는 사용자가 /refactor:approve 합치기 를 입력한 그 차례에만 실행합니다."
+MSG_MERGE_NO="사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐)."
+# G2·G4: 합치기 스크립트 실행 차단 — 허락이 유효하면 허락된 꼴을, 아니면 입력창 명령을 안내한다(막을 때만 허락 파일을 읽는다)
+merge_block() {
+  [ "${MG:-}" = 1 ] || { [ -z "${MG:-}" ] && merge_grant && MG=1; }
+  if [ "${MG:-}" = 1 ]; then block "$MSG_MERGE_EXEC" "허락은 그대로입니다 — 아래 꼴 그대로 한 번만 다시 실행하세요(그래도 막히면 사용자에게 /refactor:approve 합치기 를 다시 입력해 달라고 하세요): $ML"; fi
+  block "$MSG_MERGE_EXEC" "$MSG_MERGE_NO"
+}
 # $1 판정용 문자열 하나가 "허락된 가지($2)로 보내는 정확한 push 한 번" 인가. 조각(&& || ; | & ( ) 백틱 줄바꿈)으로 나눠
 #   push 낱말(따옴표 뗀 뒤 대소문자 무시)이 정확히 한 번 · 그 조각이 git push [-u|--set-upstream] origin <가지>(가지는 따옴표 한 쌍까지) [2>&1] 뿐 ·
 #   그 조각에 \ 없음 · 모든 조각의 첫 낱말이 git·echo·tail·head·true·wc(0.3.4 T7 허용 목록 — 작업 폴더·저장소·git 을 바꾸는 조각이 끼지 않게) ·
@@ -3234,12 +3381,18 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ -n "$lz" ] && { blank_vars "$lz"; [ "$BV" != "$lz" ] && hvz=$BV; }
 
   # 1) 사람 전용 ------------------------------------------------------------
+  # 0.3.5 G3: 합치기 낱말(refactor-merge — 원형·따옴표 뺀 사본·변수 지운 사본)이 보일 때만 허락을 읽어 "허락된 명령 그대로"인지 본다(MOK).
+  #   MG = 허락 파일이 유효했나(빈 값 = 아직 안 읽음 — 글로브 꼴로 막힐 때 merge_block 이 그때 읽는다)
+  local MOK=0 MG="" ML=""
+  if has "$cmd0$NL$lq$NL$lz$NL$hv$NL$hvz" 'refactor-merge'; then merge_ok && MOK=1; fi
   # 승인·훅 진입점·중첩 claude(새 Claude 세션은 그 입력을 사람 입력으로 본다) — 원형과 따옴표를 모두 뺀 사본(lz) 둘 다.
   # 승인 스크립트는 실행하는 모양만 막는다(cat·grep·head 로 읽는 것은 통과)
   hv_human "$lq" "$lr"
   [ -n "$lz" ] && hv_human "$lz" "$lz"
   [ -n "$hv" ] && hv_human "$hv" "$hv"
   [ -n "$hvz" ] && hv_human "$hvz" "$hvz"
+  # 0.3.5: 합치기 스크립트 판정을 먼저 — 승인 이름 정규식(run.sh 뒤 24글자 안의 turn·guard…)이 경로 글자(예: /tmp/guardtest-…)에 걸려 안내 문구가 바뀌지 않게(둘 다 막음)
+  [ "$MOK" != 1 ] && interp_approve "$lr" 'refactor-merge' && merge_block
   interp_approve "$lr" && block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"
   if writes_to '(docs/refactor/)?\.allow-[a-z-]+|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/' || interp_writes '\.allow-|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/'; then
     block "허용 파일(.allow-*)·승인 기록(APPROVALS.log)·.turn 은 사람과 플러그인만 만들고 지웁니다." "$MSG_HUMAN"
@@ -3261,6 +3414,8 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
     fi
   fi
   writes_to '\.claude/plugins' && block "플러그인 폴더(.claude/plugins)는 고치지 않습니다." "플러그인 수정은 사람이 원본 저장소에서 합니다."
+  # 0.3.5 X2: 인터프리터 코드(python -c open(…,'w') · node -e appendFileSync …)로 플러그인 폴더에 쓰기 — 같은 경로(.claude/plugins + 지금 플러그인 폴더)
+  interp_plug_writes && block "플러그인 폴더(.claude/plugins)는 고치지 않습니다." "플러그인 수정은 사람이 원본 저장소에서 합니다."
   # 쓰기 대상(목적지) 기준: 사람 전용 파일, 기록 폴더 이동·개명, 플러그인 폴더, 읽기 전용 단계의 프로젝트 파일
   norm_dirvars "$lq"; local tq=$NV pb=${plugroot##*/} tchk=0
   has "$tq" 'approvals|allow-|[.]turn|approved|refactor|state[.]md|docs|[.][.]|plugins|>' && tchk=1
