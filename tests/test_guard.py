@@ -863,6 +863,7 @@ def main():
     check_netlify_api_040(res)
     check_vercel_read_040(res)
     check_readme_040(res)
+    check_fg_040(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -5022,8 +5023,9 @@ AUTO_POST = ("deploy-wait", "verify")                 # .turn-merged.<B> 가 있
 
 
 def _acmd_040(proj, stage, tail=None):
-    """자동 모드 스크립트 호출(설계서 §2-2 `refactor-auto.sh <단계>` 를 run.sh 로) — 인자는 WA 가 정한다(guard 는 인자 꼴만 본다)"""
-    tail = f' "{pathlib.Path(proj).as_posix()}" t' if tail is None else tail
+    """자동 모드 스크립트 호출(7-execute 「8. 자동 마감」 꼴 — run.sh refactor-auto <단계> "<프로젝트 폴더>" <B1> <세션ID>).
+    보완(검사 A#5): guard 는 인자 셋 꼴 + 프로젝트 = 이 대화 프로젝트 + 세션 = 훅 입력 세션까지 본다(시험 세션 ID = t)"""
+    tail = f' "{pathlib.Path(proj).as_posix()}" B1 t' if tail is None else tail
     return f'bash "{_mroot_035()}/hooks/run.sh" refactor-auto {stage}{tail}'
 
 
@@ -5179,11 +5181,12 @@ def check_auto_call_040(res):
         # 허락 있음 — 통과하는 꼴(인자·경로 표기)
         _agrant_040(proj, "auto")
         X = _acmd_040(proj, "push")
-        ok_forms = [X, X + " 2>&1", "  " + X + "  ", _acmd_040(proj, "push", ""), _acmd_040(proj, "push", ' "$CLAUDE_PROJECT_DIR"'),
-                    _acmd_040(proj, "push", ' "${CLAUDE_PROJECT_DIR}" t'), _acmd_040(proj, "merge", " squash"),
-                    f'bash "{R}/skills/go/../../hooks/run.sh" refactor-auto push "{P}" t', f"bash {run_sh} refactor-auto push {P} t",
-                    f'bash "{R}//hooks/./run.sh" refactor-auto pr',
-                    'bash "' + R.replace("/", "\\") + '\\hooks\\run.sh" refactor-auto push']   # Windows 역슬래시 경로(따옴표 경로 안만)
+        ok_forms = [X, X + " 2>&1", "  " + X + "  ", _acmd_040(proj, "push", ' "$CLAUDE_PROJECT_DIR" B1 t'),
+                    _acmd_040(proj, "push", ' "${CLAUDE_PROJECT_DIR}" B1 t'), _acmd_040(proj, "merge"), _acmd_040(proj, "push", f' "{P}/" B1 t'),
+                    _acmd_040(proj, "push", f' "{P}/docs/.." B1 t'), _acmd_040(proj, "push", " . B1 t"), _acmd_040(proj, "push", f' "{P}" B12 t'),
+                    f'bash "{R}/skills/go/../../hooks/run.sh" refactor-auto push "{P}" B1 t', f"bash {run_sh} refactor-auto push {P} B1 t",
+                    f'bash "{R}//hooks/./run.sh" refactor-auto pr "{P}" B1 t',
+                    'bash "' + R.replace("/", "\\") + '\\hooks\\run.sh" refactor-auto push "' + P + '" B1 t']   # Windows 역슬래시 경로(따옴표 경로 안만)
         _cases_034(res, proj, "G2 허락 있음 · 통과", [(OK, bash(c)) for c in ok_forms])
         bad = [X + "; echo x", X + " && echo x", X + " || true", X + " | tail -5", X + " > /tmp/a.txt", X + " 2>/dev/null", X + " &", X + " # 메모",
                X + "\necho x", "cd /tmp && " + X, "X=1 " + X, "timeout 100 " + X, "env " + X, "nohup " + X, "exec " + X, "echo x; " + X,
@@ -5193,7 +5196,15 @@ def check_auto_call_040(res):
                _acmd_040(proj, "deploy"), _acmd_040(proj, "push2"), _acmd_040(proj, "", ""),
                f'bash "/tmp/x/hooks/run.sh" refactor-auto push', f'bash "{R}/scripts/refactor-auto.sh" push', f'"{run_sh}" refactor-auto push',
                f'bash "{R}/hooks/run.sh" refactor-auto push "{P}" t\\', f"bash '{run_sh}' refactor-auto push",
-               _acmd_040(proj, "push", ' "a\\b"'), "bash " + run_sh.replace("/", "\\") + " refactor-auto push"]
+               _acmd_040(proj, "push", ' "a\\b"'), "bash " + run_sh.replace("/", "\\") + " refactor-auto push",
+               # 보완(검사 A#5): 인자 셋 꼴 · 다른 프로젝트 폴더 · 다른 세션
+               _acmd_040(proj, "push", ""), _acmd_040(proj, "push", ' "$CLAUDE_PROJECT_DIR"'), _acmd_040(proj, "push", f' "{P}" t'),
+               _acmd_040(proj, "push", f' "{P}" B1 t x'), _acmd_040(proj, "push", f' "{P}" B1'), _acmd_040(proj, "push", f' "{P}" b1 t'),
+               _acmd_040(proj, "push", f' "{P}" B1x t'), _acmd_040(proj, "push", ' "/tmp/other" B1 t'), _acmd_040(proj, "push", " /tmp B1 t"),
+               _acmd_040(proj, "push", f' "{P}/sub" B1 t'), _acmd_040(proj, "push", f' "{P}/.." B1 t'), _acmd_040(proj, "push", f' "{P}x" B1 t'),
+               _acmd_040(proj, "push", ' "~/x" B1 t'), _acmd_040(proj, "push", ' "$HOME" B1 t'), _acmd_040(proj, "push", ' "$PWD" B1 t'),
+               _acmd_040(proj, "push", f' "{P}" B1 t2'), _acmd_040(proj, "push", f' "{P}" B1 T'), _acmd_040(proj, "push", f' "{P}" B1 "t"'),
+               _acmd_040(proj, "push", f' "{P}" B1 t 2>&1 x'), _acmd_040(proj, "verify", ' "/tmp/other" B1 t')]
         _cases_034(res, proj, "G2 허락 있음 · 다른 꼴 차단", [(B, bash(c)) for c in bad], need=W_AUTO)
         _cases_034(res, proj, "G2 허락 있음 · 안내는 정해진 꼴", [(B, bash(c)) for c in [X + "; echo x", f"bash -c '{X}'"]], need=W_AUTO_FORM)
         _cases_034(res, proj, "G2 허락 있음 · 인터프리터·새 세션", [(B, bash(c)) for c in forms[-7:]], need=W_AUTO)
@@ -5328,6 +5339,110 @@ def check_readme_040(res):
             res["total"] += 1
             if w not in sec:
                 res["fails"].append(("0.4.0 G8 README " + label, "있음", "없음", "", w, ""))
+
+
+def check_fg_040(res):
+    """0.4.0 보완 FG(검사 A#1·#2·#5·#9 · C#5): ① gh 바로 뒤 -R|--repo <저장소> 를 걷어내고 gh 규칙(pr merge·release·workflow run·repo rename/delete/edit·
+    api·pr checkout) ② vercel 조회 조각은 $( ` <( >( 앞에서 끊음(안의 진짜 --prod 는 막음) ③ 자동 모드 스크립트 인자 = 이 프로젝트·B 번호·이 세션 ID
+    ④ vercel --target production · ntl · gh run rerun · gh workflow enable|disable · gh api …/rerun·…/environments/<이름> 쓰기 · GraphQL 배포·저장소 설정 변이 ·
+    %XX 경로 ⑤ claude 세션 이어서(--resume·-r·--continue·-c) + 출력 모드(-p·--print). 반대 방향(읽기·새 세션)과 평소(STATE 없음)는 통과"""
+    W_SET = "리팩토링 중에는 저장소 설정(기본 가지·이름·공개 여부·가지 보호·강제 동기화)을 바꾸지 않습니다"
+    W_RES = "리팩토링 진행 중에는 Claude 세션을 이어서(--resume·--continue) 출력 모드(-p)로 부르지 않습니다"
+    W_PRM = "PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요"
+    proj = make_project(phase="EXECUTE")
+    try:
+        P = proj.as_posix()
+        # ① gh -R 앞 순서
+        _cases_034(res, proj, "FG F1 gh -R 앞 · 합치기", [(B, bash(c)) for c in [
+            "gh -R o/r pr merge 5 --squash", 'gh -R "o/r" pr merge 1', "gh -R=o/r pr merge 1", "gh --repo o/r pr merge 1", "gh --repo=o/r pr merge 1",
+            "gh --repo 'o/r' pr merge 1", "GH -R o/r PR MERGE 1", "echo x; gh -R o/r pr merge 1", "gh -R o/r pr merge 1 # 메모", "npx gh -R o/r pr merge 1",
+            "gh.exe -R o/r pr merge 1", "gh -R a/b --repo c/d pr merge 1", "bash -c 'gh -R o/r pr merge 1'", "gh  -R  o/r  pr  merge 1"]], need=W_PRM)
+        _cases_034(res, proj, "FG F1 gh -R 앞 · 배포", [(B, bash(c)) for c in [
+            "gh --repo o/r workflow run x", "gh --repo=o/r release upload v1 a", "gh -R o/r release create v1", "gh -R o/r release delete v1 -y",
+            "gh -R o/r workflow run deploy.yml"]], need=W_DEP)
+        _cases_034(res, proj, "FG F1 gh -R 앞 · 저장소 설정·삭제·가지", [(B, bash(c)) for c in [
+            "gh -R o/r repo rename y", "gh -R o/r repo edit --default-branch x", "gh --repo 'o/r' repo delete o/r --yes", "gh -R o/r repo archive -y",
+            "gh -R o/r api -X PUT repos/o/r/pulls/5/merge", "gh -R o/r pr checkout 5",
+            # 반대 방향: 저장소 값의 명령 치환은 걷어내지 않는다(그 안의 명령을 판정에서 지우지 않게)
+            'gh -R "$(vercel --prod)" pr view 5', "gh --repo $(vercel --prod) pr view 5", "gh -R `vercel --prod` pr list"]])
+        _cases_034(res, proj, "FG F1 gh -R 앞 · 읽기는 통과", [(OK, bash(c)) for c in [
+            "gh -R o/r pr view 5", "gh -R o/r pr list", "gh --repo o/r run list", "gh -R o/r release list", "gh --repo=o/r issue list", "gh pr view 5 -R o/r",
+            "gh -R o/r pr view 5 --json state", "gh -R o/r repo view", 'git commit -m "docs: gh -R o/r pr merge 안내"']])
+        # ② vercel 조회 조각 안의 명령 치환
+        _cases_034(res, proj, "FG F2 조회 안 명령 치환 차단", [(B, bash(c)) for c in [
+            "vercel ls $(vercel --prod)", "vercel ls `vercel --prod`", "vercel ls <(vercel --prod)", "vercel ls >(vercel --prod)", "vercel inspect $(vercel . --prod)",
+            'vercel ls "$(vercel --prod)"', "vercel logs x $(npx vercel --prod)", "vercel ls --prod\nvercel --prod", "VERCEL LS $(VERCEL --PROD)"]], need=W_DEP)
+        _cases_034(res, proj, "FG F2 조회는 통과", [(OK, bash(c)) for c in [
+            "vercel ls --prod", "vercel inspect https://x.vercel.app --wait", "vercel ls -m githubCommitSha=abc", "vercel ls --prod | head -5",
+            "vercel inspect $(cat /tmp/url.txt) --wait", "vercel ls --prod > /tmp/v.txt"]])
+        # ④ 배포 구멍
+        _cases_034(res, proj, "FG F4 배포 차단", [(B, bash(c)) for c in [
+            "vercel --target production", "vercel --target=production", "vercel deploy --target production", "VERCEL --TARGET PRODUCTION",
+            "npx vercel --target production", "vercel --target 'production'", "vercel --yes --target=production # 메모",
+            "ntl deploy", "ntl deploy --prod", "npx ntl deploy", "NTL DEPLOY --prod", "echo x; ntl deploy", "ntl rollback", "ntl api createSiteDeploy",
+            "ntl api updateSite --data '{}'", "gh run rerun 5", "gh run rerun 5 --failed", "gh -R o/r run rerun 5", "gh run -R o/r rerun 5", "GH RUN RERUN 5",
+            "gh workflow enable deploy.yml", "gh workflow disable deploy.yml", "gh workflow -R o/r enable x", "gh --repo o/r workflow disable x",
+            "gh api -X POST repos/o/r/actions/runs/5/rerun", "gh api repos/o/r/actions/runs/5/rerun -f x=1", "gh api --method POST repos/o/r/actions/runs/5/rerun-failed-jobs",
+            "gh api -X POST repos/o/r/actions/jobs/9/rerun", "gh api graphql -f query='mutation{createDeployment(input:{}){clientMutationId}}'",
+            "gh api graphql -F query='mutation { createDeploymentStatus(input:{}) { clientMutationId } }'",
+            "gh api -X POST repos/o/r/deploy%6Dents", "gh api repos/o/r/deploy%6dents -f ref=main", "gh api -X POST repos/o/r/actions/runs/5/rer%75n",
+            "gh api -X POST repos/o/r/actions/runs/5/rerun%2Dfailed-jobs", "gh api repos/o/r/pages%2Fbuilds -X POST"]], need=W_DEP)
+        _cases_034(res, proj, "FG F4 저장소 설정 차단", [(B, bash(c)) for c in [
+            "gh api -X PUT repos/o/r/environments/production", "gh api -X DELETE repos/o/r/environments/production", "gh api repos/o/r/environments/production -f wait_timer=0",
+            "gh api -X PUT repos/o/r/environments/production/deployment-branch-policies/1", "gh api -X PUT repos/o/r/environments%2Fproduction",
+            "gh api graphql -f query='mutation{updateRepository(input:{}){clientMutationId}}'",
+            "gh api graphql -f query='mutation{updateBranchProtectionRule(input:{}){clientMutationId}}'",
+            "gh api graphql -f query='mutation{deleteBranchProtectionRule(input:{}){clientMutationId}}'",
+            "gh api graphql -f query='mutation{createBranchProtectionRule(input:{}){clientMutationId}}'", "gh api -X PATCH repo%73/o/r -f default_branch=x"]], need=W_SET)
+        _cases_034(res, proj, "FG F4 원격 가지 삭제 %XX", [(B, bash("gh api -X DELETE repos/o/r/git/re%66s/heads/x"))])
+        _cases_034(res, proj, "FG F4 읽기는 통과", [(OK, bash(c)) for c in [
+            "vercel ls", "vercel inspect x", "ntl status", "ntl api listSites", "ntl api getSite --data '{\"site_id\":\"x\"}'", "ntl sites:list",
+            "gh run list", "gh run view 5", "gh run watch 5", "gh run view 5 --log-failed", "gh workflow list", "gh workflow view x",
+            "gh api repos/o/r/environments", "gh api repos/o/r/environments/production", "gh api repos/o/r/actions/runs/5", "gh api repos/o/r/actions/runs/5/rerun",
+            "gh api graphql -f query='query{repository(owner:\"o\",name:\"r\"){name}}'", "gh api repos/o/r/deploy%6Dents", "gh api 'repos/o/r/issues?q=a%20b'"]])
+        # ⑤ claude 세션 이어서 + 출력 모드
+        _cases_034(res, proj, "FG F5 이어서 출력 모드 차단", [(B, bash(c)) for c in [
+            "claude -p --resume abc < /tmp/f", "cat /tmp/f | claude -p --resume x", "claude --resume x -p < /tmp/f", 'claude -c -p "다음"',
+            "claude --continue --print hi", "claude -r abc -p hi", "claude --resume=abc -p hi", "npx claude -p --resume x", "echo hi | claude -pc",
+            "claude -p --resume x # 메모", "x=1; claude -p -c hi", '"$(which claude)" -p --resume x < /tmp/f', "CLAUDE -P --RESUME x",
+            'claude -p --res"ume" x', "claude.exe -p -r x", "bash -c 'claude -p --resume x < /tmp/f'"]], need=W_RES)
+        _cases_034(res, proj, "FG F5 새 세션·대화형은 통과", [(OK, bash(c)) for c in [
+            "claude --version", 'claude -p "질문"', "claude --print hi", "grep -r claude src && claude -p hi", 'bash -c "claude -p hi"', "claude -c", "claude --resume x",
+            'claude -p "cp -r 와 -c 차이를 설명"', 'git commit -m "docs: claude -p --resume 막음"', "grep -rn 'claude -p --resume' src"]])
+    finally:
+        rmtree_rw(proj)
+    # ③ 자동 모드 스크립트 — 셸 폴더(cwd)가 하위 폴더여도 프로젝트 칸은 이 프로젝트여야(. 은 하위 폴더가 됨)
+    proj = make_project(phase="EXECUTE")
+    try:
+        P = proj.as_posix()
+        (proj / "src").mkdir(exist_ok=True)
+        _agrant_040(proj, "auto")
+        sub = {"cwd": str(proj / "src")}
+        _cases_034(res, proj, "FG F3 하위 폴더에서 · 프로젝트 칸 맞으면 통과", [(OK, bash(_acmd_040(proj, "push"))), (OK, bash(_acmd_040(proj, "push", " .. B1 t")))], extra=sub)
+        _cases_034(res, proj, "FG F3 하위 폴더에서 · 다른 폴더 차단", [(B, bash(_acmd_040(proj, "push", " . B1 t"))), (B, bash(_acmd_040(proj, "push", f' "{P}/src" B1 t')))],
+                   need=W_AUTO, extra=sub)
+        _cases_034(res, proj, "FG F3 다른 세션 ID 로 부른 훅", [(B, bash(_acmd_040(proj, "push")))], need=W_AUTO, extra={"session_id": "t2"})
+    finally:
+        rmtree_rw(proj)
+    # 평소(STATE 없음·스위치 없음)는 판정하지 않는다
+    plain = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-"))
+    try:
+        for c in ["gh -R o/r pr merge 5 --squash", "vercel ls $(vercel --prod)", "vercel --target production", "ntl deploy --prod", "gh run rerun 5",
+                  "claude -p --resume x < /tmp/f", "gh api -X PUT repos/o/r/environments/production"]:
+            res["total"] += 1
+            code, err = _gate_run_040(plain, bash(c))
+            if code != OK:
+                res["fails"].append(("0.4.0 FG 평소(STATE 없음) 통과", OK, code, "Bash", c, err.strip()[:200]))
+    finally:
+        rmtree_rw(plain)
+    # README §6-1 한 줄씩(F1·F4·F5)
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    s61 = rd[rd.find("### 6-1. 막는 것"):rd.find("### 6-2.")]
+    for w in ["`gh -R <저장소> pr merge`", "`vercel --target production`", "`ntl deploy`", "`gh run rerun`", "`gh workflow enable`", "`…/environments/<이름>`",
+              "`createDeployment`", "`%6D`", "`claude -p --resume <세션>`"]:
+        res["total"] += 1
+        if w not in s61:
+            res["fails"].append(("0.4.0 FG README §6-1", "있음", "없음", "", w, ""))
 
 
 if __name__ == "__main__":

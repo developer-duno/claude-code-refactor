@@ -1829,6 +1829,7 @@ hv_git() {
   local gseg grest=$t re_gha="gh[[:space:]]+api([[:space:]][^;&|]*)?"
   while [[ $grest =~ $re_gha ]]; do
     gseg=${BASH_REMATCH[0]}; grest=${grest#*"$gseg"}
+    case "$gseg" in *%*) pct_dec "$gseg"; gseg=$PD ;; esac   # 0.4.0 보완: git/re%66s 같은 %XX 철자
     # 0.3.7 G2: -H 'X-HTTP-Method-Override: DELETE' 도 DELETE 와 같게
     if { has "$gseg" "[[:space:]](-X[[:space:]]*|--method([[:space:]]+|=))[\"']?delete([\"'[:space:])]|$)" \
         || { [[ $gseg =~ $RE_HMO ]] && has "$gseg" "x-http-method-override[[:space:]]*:[[:space:]]*[\"']?delete([\"'[:space:])]|$)"; }; } \
@@ -1855,6 +1856,17 @@ MSG_REPOSET="리팩토링 중에는 저장소 설정(기본 가지·이름·공�
 MSG_REPOSET2="읽기(gh repo view · gh api repos/<주인>/<저장소>)는 됩니다. 꼭 지금 바꿔야 하면 멈추고 사람에게 부탁하세요."
 MSG_GHW="리팩토링 진행 중에는 GitHub API 로 가지·파일을 직접 쓰지 않습니다(PR 없이 합치는 길)."
 MSG_GHW2="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요. 가지·파일 변경은 git 커밋과 /refactor:approve 푸시 로 합니다."
+# 0.4.0 보완(검사 A#9): gh api 조각의 %XX 중 영문·숫자·/ - _ . 를 풀어 판정한다(deploy%6Dents = deployments) → PD. 그 밖의 %XX 는 그대로
+pct_dec() {
+  local s=$1 out="" h c m re='%([0-9A-Fa-f]{2})'
+  while [[ $s =~ $re ]]; do
+    m=${BASH_REMATCH[0]}; h=${BASH_REMATCH[1]}
+    out=$out${s%%"$m"*}; s=${s#*"$m"}
+    printf -v c "\\x$h"
+    case "$c" in [A-Za-z0-9/_.-]) out=$out$c ;; *) out=$out%$h ;; esac
+  done
+  PD=$out$s
+}
 # 0.3.5 F16: gh api 조각($1)이 읽기가 아닌 요청인가(0 = 쓰기). gh 공식 문서: 방식을 주지 않으면 GET, 필드(-f·-F·--field·--raw-field)가 있으면 POST ·
 #   --method GET 이면 필드는 질의 문자열. 그래서 -X·--method 값이 하나라도 GET 이 아니면(변수·따옴표로 쪼갠 값 포함) 쓰기 · 방식 값이 모두 GET 이면 읽기 ·
 #   방식이 없으면 필드나 --input 이 있을 때 쓰기. 짧은 옵션 묶음은 gh api 의 켜기 옵션 -i 하나뿐이라 -iX·-if 까지 본다
@@ -1941,10 +1953,10 @@ hv_db() {
 #   --data·-d·--auth·--filter·--http-proxy·--http-proxy-certificate-filename 은 값까지 건너뜀). 그 밖(create…·update…·delete…·restore…·rollback…·
 #   cancel…·lock…·unlock…·모르는 이름·변수)은 쓰기로 본다. 메서드가 없으면(목록 --list·도움말·# 주석 뒤) 아니다. npx netlify-cli@x api … 도 같게
 netlify_api_write() {
-  local rest=$1 seg i m w=() re="${S}netlify(-cli)?(@[^[:space:];&|]*)?[[:space:]]+api([[:space:]][^;&|]*)?"
+  local rest=$1 seg i m w=() re="${S}(netlify(-cli)?|ntl)(@[^[:space:];&|]*)?[[:space:]]+api([[:space:]][^;&|]*)?"   # 보완: ntl = netlify 별칭
   while [[ $rest =~ $re ]]; do
     seg=${BASH_REMATCH[0]}; rest=${rest#*"$seg"}
-    seg=${BASH_REMATCH[4]}; seg=${seg//\"/ }; seg=${seg//\'/ }
+    seg=${BASH_REMATCH[5]}; seg=${seg//\"/ }; seg=${seg//\'/ }
     set -f; w=($seg); set +f
     m=""; i=0
     while [ "$i" -lt "${#w[@]}" ]; do
@@ -1969,14 +1981,16 @@ hv_deploy() {
   #   0.3.7 G1: heroku rollback·releases:rollback·pg:reset · netlify rollback·sites:delete(같은 경계 — heroku releases·releases:info·restart 는 통과)
   #   보완(검사 A#7): heroku apps:destroy(netlify sites:delete 와 같은 성격 — apps:info 는 통과)
   #   0.4.0 G4: gh release create·delete·edit·upload · gh pr|release|workflow 뒤 하위명령 앞의 -R|--repo <저장소>(옵션 순서만 다른 철자)도 같게
+  #   0.4.0 보완(검사 C#5·A#9): vercel --target production(=) · ntl(netlify 별칭) deploy·rollback·sites:delete · gh workflow enable·disable · gh run rerun
   local ghr="([[:space:]]+(-r|--repo)(=|[[:space:]]+)[^[:space:];&|]+)?"
-  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|netlify[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr${ghr}[[:space:]]+merge|release${ghr}[[:space:]]+(create|delete|edit|upload)|workflow${ghr}[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
+  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|--target([[:space:]]+|=)[\"']?production|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|(netlify|ntl)[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|(netlify|ntl)[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr${ghr}[[:space:]]+merge|release${ghr}[[:space:]]+(create|delete|edit|upload)|workflow${ghr}[[:space:]]+(run|enable|disable)|run${ghr}[[:space:]]+rerun)|ssh[[:space:]]|scp[[:space:]])"
   local re_pkg_deploy="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?([a-z0-9_-]+:)?(deploy|release|publish|ship)([[:space:]:]|$)"
   # 0.4.0 G6(#10): vercel 의 첫 하위 명령이 조회(ls·list·inspect·logs)인 조각에서만 --prod 는 배포가 아니다(vercel ls --prod = 운영 배포 목록) —
   #   그 조각(; & | 앞까지)의 --prod 만 지운 사본(tv)으로 배포 규칙을 본다. 하위 명령 앞에 옵션이 있거나(vercel --prod ls) 다른 하위 명령이면 그대로 막는다
   local tv=$t
   if has "$t" 'vercel' && has "$t" '--prod'; then
-    local vrest=$t vout="" vm re_vro="${S}vercel[[:space:]]+(ls|list|inspect|logs)([[:space:]][^;&|]*)?"
+    # 보완(검사 A#2): 조각은 $( · ` · <( · >( · 줄바꿈 앞에서도 끊는다 — 그 안의 진짜 배포 명령(vercel ls $(vercel --prod))의 --prod 를 지우지 않게
+    local vrest=$t vout="" vm re_vro="${S}vercel[[:space:]]+(ls|list|inspect|logs)([[:space:]][^;&|\`(${NL}]*)?"
     while [[ $vrest =~ $re_vro ]]; do
       vm=${BASH_REMATCH[0]}; vout=$vout${vrest%%"$vm"*}; vrest=${vrest#*"$vm"}
       while [[ $vm =~ --prod ]]; do vm=${vm/"${BASH_REMATCH[0]}"/--x}; done
@@ -2003,7 +2017,8 @@ hv_deploy() {
     mseg=${BASH_REMATCH[0]}; mrest=${mrest#*"$mseg"}
     # 보완: 조각이 따옴표 안의 ; & |(--jq '.a|.b' · -H 'a;b')에서 끊겼으면(따옴표 짝이 안 맞음) 따옴표 밖의 구분자까지 다시 잡는다 — 뒤의 -X·경로·필드를 놓치지 않게
     if quote_odd "$mseg"; then gha_scan "$mseg$mrest"; mrest=${mseg}${mrest}; mrest=${mrest:${#GS}}; mseg=$GS; fi
-    mn=$mseg; while [[ $mn == *"$d2"* ]]; do mn=${mn//"$d2"/$d1}; done
+    mn=$mseg; case "$mn" in *%*) pct_dec "$mn"; mn=$PD ;; esac
+    while [[ $mn == *"$d2"* ]]; do mn=${mn//"$d2"/$d1}; done
     if has "$mn" "pulls/[^/[:space:]]*/merge([^A-Za-z0-9_]|$)|/merges([^A-Za-z0-9_]|$)|mergepullrequest|enablepullrequestautomerge|mergebranch|enqueuepullrequest|updateref|createcommitonbranch|deleteref"; then
       block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요. 합쳐졌는지 보려면 gh pr view <번호> --json state,mergedAt 를 쓰세요."
     fi
@@ -2023,6 +2038,19 @@ hv_deploy() {
     #   쓰기 판정은 gha_write(-X·--method 가 GET 이 아님 · 방식 없이 -f·-F·--field·--raw-field·--input) — 읽기(GET)는 통과
     if has "$mn" "/(deployments|dispatches|releases)([/?\"'[:space:])]|$)|/pages/builds([/?\"'[:space:])]|$)" && gha_write "$mn"; then
       block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+    fi
+    # 0.4.0 보완(검사 C#5·A#9): 워크플로 다시 돌리기(…/actions/runs|jobs/<번호>/rerun · rerun-failed-jobs) 쓰기 = 배포(gh run rerun 과 같은 묶음) ·
+    #   배포 환경 설정(…/environments/<이름>(/…) — 보호 규칙·대기 시간·비밀값) 쓰기 = 저장소 설정 · GraphQL 변이 createDeployment(배포 기록) ·
+    #   updateRepository·create|update|deleteBranchProtectionRule(저장소 설정) — 질의 글자에서 본다. 읽기(GET·query)는 통과
+    if has "$mn" "/actions/(runs|jobs)/[^/[:space:]\"']+/(rerun|rerun-failed-jobs)([/?\"'[:space:])]|$)" && gha_write "$mn"; then
+      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+    fi
+    if has "$mn" "/environments/[^/[:space:]\"'?]+" && gha_write "$mn"; then
+      block "$MSG_REPOSET" "$MSG_REPOSET2"
+    fi
+    if has "$mn" "[[:space:]][\"']?/?graphql([\"'[:space:]?)]|$)"; then
+      has "$mn" "createdeployment" && block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+      has "$mn" "updaterepository|(create|update|delete)branchprotectionrule" && block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
     if has "$mn" "[[:space:]][\"']?/?graphql([\"'[:space:]?)]|$)" \
       && has "$mn" "[[:space:]][\"']?((-i*f|--field|--raw-field)([[:space:]]+|=)?[\"']?[^[:space:]=\"']*[\"']?=[\"']?@|--input([[:space:]=\"']|$))"; then
@@ -2111,6 +2139,37 @@ nested_claude_approve() {
           break
         done ;;
     esac
+  done
+  return 1
+}
+# 0.4.0 보완(검사 A#9 #23): 다른(또는 이) Claude 세션을 이어서(--resume·-r·--continue·-c) 출력 모드(-p·--print)로 부르는가 — 넘긴 글(파이프·< 파일 포함)은
+#   그 세션의 입력 훅이 사람 입력으로 보고 처리한다(승인 낱말을 글 안에 숨기면 판정할 수 없다). 조각(&& || ; | ` $( 로 나눔)마다 claude 낱말 뒤의 낱말만 본다 —
+#   띄어쓰기가 든 따옴표 글은 한 낱말로 비우고(질문 글 속 -r 은 옵션이 아님) 남은 따옴표 글자는 떼며(--res"ume"), 짧은 옵션 묶음(-pc)도 글자로 본다.
+#   새 세션(claude -p "질문")·대화형(claude -c)은 통과. 따옴표를 모두 뺀 사본(lz)에는 쓰지 않는다(질문 글이 낱말로 풀려 헛막힘) — lq·hv 로 본다
+MSG_RESUME="리팩토링 진행 중에는 Claude 세션을 이어서(--resume·--continue) 출력 모드(-p)로 부르지 않습니다 — 넘긴 글이 그 세션에서 사람 입력처럼 처리됩니다."
+MSG_RESUME2="새 질문은 새 세션(claude -p \"<질문>\")으로 하세요. 다른 세션에 이어서 할 일은 사람에게 부탁하세요."
+claude_resume_print() {
+  has "$1" 'claude' || return 1
+  local s seg w pr rs re_cl="(^|[^[:alnum:]._/-])claude([.](exe|cmd))?([^[:alnum:]_.-]|$)" re_q="\"[^\"]*[[:space:]][^\"]*\"|'[^']*[[:space:]][^']*'"
+  cut_segs "$1"; s=$CUTS
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    [[ $seg =~ $re_cl ]] || continue
+    seg=${seg#*"${BASH_REMATCH[0]}"}
+    while [[ $seg =~ $re_q ]]; do seg=${seg/"${BASH_REMATCH[0]}"/ Q }; done
+    pr=0; rs=0
+    set -f
+    for w in $seg; do
+      w=${w//\"/}; w=${w//\'/}
+      case "$w" in
+        --print|--print=*) pr=1 ;;
+        --resume|--resume=*|--continue) rs=1 ;;
+        --*) ;;
+        -[A-Za-z]*) case "$w" in *[!A-Za-z-]*) ;; *) case "$w" in *p*) pr=1 ;; esac; case "$w" in *[rc]*) rs=1 ;; esac ;; esac ;;
+      esac
+    done
+    set +f
+    [ "$pr" = 1 ] && [ "$rs" = 1 ] && return 0
   done
   return 1
 }
@@ -3138,6 +3197,10 @@ mk_views() {
   while [[ $r =~ $re_null ]]; do r=${r/"${BASH_REMATCH[0]}"/ }; done
   local re_gopt="git[[:space:]]+(-[Cc][[:space:]]+(\"[^\"]*\"|'[^']*'|[^[:space:]]+)|--no-pager|-P|--paginate|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--namespace=[^[:space:]]+|--bare|--no-replace-objects|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-optional-locks)[[:space:]]+"
   while [[ $r =~ $re_gopt ]]; do r=${r/"${BASH_REMATCH[0]}"/git }; done
+  # 0.4.0 보완(검사 A#1): gh 바로 뒤 저장소 옵션(gh -R o/r pr merge · gh --repo=o/r release upload)도 옵션 순서만 다른 철자 — 걷어낸 사본으로 gh 규칙을 본다.
+  #   값에 $ ` ( ) < > 가 든 것(명령 치환)은 걷어내지 않는다(그 안의 명령을 판정에서 지우지 않게)
+  local re_ghopt="(^|[;&|({\`\"'[:space:]])gh([.]exe)?[[:space:]]+(-r|--repo)(=|[[:space:]]+)(\"[^\"\$\`]*\"|'[^']*'|[^[:space:];&|\"'\$\`()<>]+)[[:space:]]+"
+  while [[ $r =~ $re_ghopt ]]; do r=${r/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}gh${BASH_REMATCH[2]} "}; done
   LR=$r
 
   # lx: 비밀값 판정용 — 따옴표 속 파일 경로는 남기고(grep KEY ".env" 도 잡게), 검색어·커밋 메시지·echo 문구만 뺀다
@@ -3370,13 +3433,24 @@ auto_ok() {
   # Windows 경로(C:\…\run.sh — JSON 원문에서는 \\)는 첫 따옴표 경로 안에서만 / 로 바꿔 본다(그 밖의 역슬래시는 아래에서 막는다)
   case "$r" in 'bash "'*'"'*) p=${r#bash \"}; p=${p%%\"*}; st=${r#"bash \"$p\""}; p=${p//"$BS$BS"/$SL}; r="bash \"$p\"$st" ;; esac
   case "$r" in *"$BS"*) return 1 ;; esac
-  re="^bash +(${qa}|${ua}) +refactor-auto +(preflight|push|pr|merge|deploy-wait|verify)(( +(${pd}|${qa}|${ua}))*)( +2>&1)?\$"
+  # 보완(검사 A#5): 인자는 정확히 셋 — <프로젝트 폴더> <B 번호> <세션 ID>(7-execute 「8. 자동 마감」·입력 훅이 알려 주는 꼴). 프로젝트 폴더는 . .. 를 정리하면
+  #   이 대화 프로젝트($proj — "$CLAUDE_PROJECT_DIR" 도 됨) · 세션 ID 는 훅 입력의 session_id 와 글자 그대로 같을 때만(합치기 0.3.5 처럼 꼴 고정)
+  local pa sa
+  re="^bash +(${qa}|${ua}) +refactor-auto +(preflight|push|pr|merge|deploy-wait|verify) +(${pd}|${qa}|${ua}) +B[0-9]{1,6} +([A-Za-z0-9_-]{1,128})( +2>&1)?\$"
   hascs "$r" "$re" || return 1
-  p=${BASH_REMATCH[1]}; st=${BASH_REMATCH[2]}
+  p=${BASH_REMATCH[1]}; st=${BASH_REMATCH[2]}; pa=${BASH_REMATCH[3]}; sa=${BASH_REMATCH[4]}
+  [ "$sa" = "$sid" ] || return 1
   p=${p#\"}; p=${p%\"}
   case "$p" in "~"*) return 1 ;; esac
   normpath "$p" "$cwd"
   [ "$NP" = "$plugroot/hooks/run.sh" ] || return 1
+  case "$pa" in
+    '"$CLAUDE_PROJECT_DIR"'|'"${CLAUDE_PROJECT_DIR}"') ;;
+    *) pa=${pa#\"}; pa=${pa%\"}
+       case "$pa" in "~"*) return 1 ;; esac
+       normpath "$pa" "$cwd"; pa=$NP; normpath "$proj" /
+       [ "$pa" = "$NP" ] || return 1 ;;
+  esac
   case "$st" in deploy-wait|verify) kind=.turn-merged. ;; *) kind=.turn-auto. ;; esac
   auto_grant "$kind"
 }
@@ -3549,6 +3623,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ -n "$lz" ] && hv_human "$lz" "$lz"
   [ -n "$hv" ] && hv_human "$hv" "$hv"
   [ -n "$hvz" ] && hv_human "$hvz" "$hvz"
+  if claude_resume_print "$lq" || { [ -n "$hv" ] && claude_resume_print "$hv"; }; then block "$MSG_RESUME" "$MSG_RESUME2"; fi
   # 0.3.5: 합치기 스크립트 판정을 먼저 — 승인 이름 정규식(run.sh 뒤 24글자 안의 turn·guard…)이 경로 글자(예: /tmp/guardtest-…)에 걸려 안내 문구가 바뀌지 않게(둘 다 막음)
   #   0.3.7 G5: 승인 스크립트 낱말(refactor-approve)도 보이면 합치기 안내 대신 아래 승인 문구로(허락이 살아 있을 때 합치기 명령을 다시 권하지 않게)
   [ "$MOK" != 1 ] && ! has "$lr" 'refactor-approve' && interp_approve "$lr" 'refactor-merge' && merge_block
