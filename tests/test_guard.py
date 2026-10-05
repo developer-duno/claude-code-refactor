@@ -5630,6 +5630,16 @@ def check_copy_dir_040(res):
         _cases_034(res, proj, "FC4 풀기 통과", [(OK, bash(c)) for c in fc4_ok])
         _cases_034(res, proj, "FC4 하위 폴더에서 C 애매", [(B, bash("tar -xfC x.tar /tmp/out")), (B, bash("tar xfC x.tar")), (B, bash("tar -xvfC x.tar ../docs")),
                                                          (OK, bash("tar xfC x.tar /tmp/out")), (OK, bash("tar -xf x.tar"))], extra={"cwd": str(proj / "src")})
+        # FC5(보안 검사 b960654): E1 풀기와 환경을 바꾸는 명령(export·declare·typeset·local·readonly·set·eval·source·. ·env -S)이 같은 명령에 있으면 막음
+        fc5_b = ['export TAR_OPT""IONS=-P; tar -xf /tmp/e.tar -C /tmp/out', "export TAR_\\OPTIONS=-P; tar -xf /tmp/e.tar -C /tmp/out",
+                 'eval "export TAR_$X=-P"; tar -xf /tmp/e.tar -C /tmp/out', "source f.env; tar -xf /tmp/e.tar -C /tmp/out",
+                 "typeset -x TAR_OPTIONS=-P; tar -xf /tmp/e.tar -C /tmp/out", "set -a; . ./e.env; tar -xf /tmp/e.tar -C /tmp/out",
+                 "env -S 'TAR_OPTIONS=-P tar' -xf /tmp/e.tar -C /tmp/out", "readonly A=1; unzip x.zip -d /tmp/out", "set -o allexport; 7z x a.7z -o/tmp/y",
+                 "tar -xf /tmp/e.tar -C /tmp/out; export A=1"]
+        fc5_ok = ["cd /tmp && tar -xf x.tar -C /tmp/out", "npm ci && tar -xzf x.tgz -C vendor", "export FOO=1", "source .venv/bin/activate && pytest", "tar -tf x.tar",
+                  "export FOO=1; tar -tf x.tar", "unzip -l x.zip; export A=1"]
+        _cases_034(res, proj, "FC5 풀기+환경 바꾸기 막힘", [(B, bash(c)) for c in fc5_b], need=W_ARC)
+        _cases_034(res, proj, "FC5 통과", [(OK, bash(c)) for c in fc5_ok])
         _cases_034(res, proj, "FC2 통과", [(OK, bash(c)) for c in ["cp -r /tmp/x/other ..", "cp -rT src/a src/b", "mv -b /tmp/notes.md docs/refactor/notes.md",
                                                                   "mv -b /tmp/a.md docs/", "cp -r /tmp/x/src ..", 'gh pr create --body "$(cat /tmp/b.md)"',
                                                                   "npm run dev &", 'cp "a b"/c.txt docs/refactor/', "cp -rT /tmp/x build", "robocopy c:/tmp/x build /E",

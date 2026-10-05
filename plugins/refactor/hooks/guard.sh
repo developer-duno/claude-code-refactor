@@ -3090,6 +3090,7 @@ copy_dir_seg1() {
       [[ $rawcmd =~ $RE_UNPACK_ENV ]] && envx=1
       # FC3 H3: TAR_OPTIONS·UNZIP·UNZIPOPT 대입이 붙은 풀기(unzip 의 목록 보기 -l·-t·-p 같은 것만 통과 — tar 는 -O 여도 막음)
       [ "$envx" = 1 ] && { [ "$out" = 0 ] || [ "$k" != unzip ]; } && block "$MSG_UNPACK" "$MSG_HUMAN"
+      { [ "$out" = 0 ] || [ "$k" != unzip ]; } && UNPK=1   # FC5 E1: 풀기가 있다 — 같은 명령에 환경을 바꾸는 명령이 있으면 끝에서 막는다
       [ "$out" = 0 ] || return 0
       [ "${#dirs[@]}" -eq 0 ] && dirs=(.)
       for d in "${dirs[@]}"; do cpd_where "$d"; [ "$CW" != no ] && block "$MSG_UNPACK" "$MSG_HUMAN"; done
@@ -3182,16 +3183,22 @@ copy_dir_targets() {
   s="$s$in"
   s=${s//'{}'/'$bt'}
   for m in -execdir -exec -okdir -ok; do s=${s//" $m "/"$NL"}; done
+  UNPK=0; ENVSET=0
   cd_all copy_dir_targets1 "$s"
+  # FC5 E1: 풀기와 함께 환경을 바꾸는 명령(export·declare·typeset·local·readonly·set·eval·source·. ·env -S)이 같은 명령에 있으면
+  #   TAR_OPTIONS·UNZIP 를 글자를 꼬아(TAR_OPT""IONS·TAR_\OPTIONS·eval·source 파일) 넣을 수 있어 막는다(애매하면 막기)
+  [ "$UNPK" = 1 ] && [ "$ENVSET" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"
 }
 copy_dir_targets1() {
-  local s=$1 seg CWD_BASE=$cwd CD_PREV=$cwd
+  local s=$1 seg CWD_BASE=$cwd CD_PREV=$cwd j
   s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//&/$NL}
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
     case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
     cd_seg "$seg" && continue
     seg_targets "$seg"
+    case "$SCMD" in export|declare|typeset|local|readonly|set|eval|source|.) ENVSET=1 ;; esac
+    for ((j = 0; j < SI; j++)); do [ "${SW[$j]}" = eval ] || [ "${SW[$j]}" = -S ] && ENVSET=1; case "${SW[$j]}" in --split-string*|-[a-zA-Z]*S) ENVSET=1 ;; esac; done
     copy_dir_seg
   done
   cwd=$CWD_BASE
