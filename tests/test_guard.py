@@ -5640,6 +5640,17 @@ def check_copy_dir_040(res):
                   "export FOO=1; tar -tf x.tar", "unzip -l x.zip; export A=1"]
         _cases_034(res, proj, "FC5 풀기+환경 바꾸기 막힘", [(B, bash(c)) for c in fc5_b], need=W_ARC)
         _cases_034(res, proj, "FC5 통과", [(OK, bash(c)) for c in fc5_ok])
+        # FC6(보안 검사 95dbd95): S1 풀기 후보 = 목록 보기·다른 분명한 모드만 뺀 전부(모드 없음·--ex·--ext 줄임 포함) ·
+        #   S2 후보가 있는 명령에 환경을 바꾸는 명령(따옴표·역슬래시 지운 이름)·꾸민 명령 이름·NAME=VALUE 대입(이름 무관)이 있으면 막음
+        fc6_b = ['export TAR_OPTIONS="-x -P"; tar -f e.tar', "tar --ex -f e.tar -C /tmp/out", "tar --ext -f e.tar -C /tmp/out", "TAR_OPTIONS=-x tar -f e.tar",
+                 "env A=1 tar -xf x.tar -C /tmp/out", 'ex""port TAR_OPTIONS=-P; tar -xf /tmp/e.tar -C /tmp/out', "\\export TAR_OPTIONS=-P; tar -xf /tmp/e.tar -C /tmp/out",
+                 '"tar" -xf e.tar -C docs/refactor', '"tar" -xf e.tar -C /tmp/out', "A=1; tar -xf x.tar -C /tmp/out", "FOO=1 tar -xf x.tar -C /tmp/out",
+                 "env tar -xf x.tar -C /tmp/out", "tar -f e.tar", "A=1 7z x a.7z -o/tmp/y", "'unzip' x.zip -d /tmp/out", "e\\nv A=1 unzip x.zip -d /tmp/out"]
+        fc6_ok = ["tar -tf x.tar", "unzip -l x.zip", "7z l x.7z", "7z t x.7z", "npm ci && tar -xzf x.tgz -C vendor", "cd /tmp && tar -xf x.tar -C /tmp/out",
+                  "tar czf b.tgz src", "tar -cvf /tmp/b.tar src", "export FOO=1", "tar --exclude=node_modules -czf /tmp/b.tgz .", "tar -rf /tmp/b.tar x",
+                  "tar --list -f x.tar", "tar --create -f /tmp/b.tar src", "tar -f e.tar -C /tmp/out", "export FOO=1; tar -tf x.tar", "7z a /tmp/b.7z src"]
+        _cases_034(res, proj, "FC6 풀기 후보 막힘", [(B, bash(c)) for c in fc6_b], need=W_ARC)
+        _cases_034(res, proj, "FC6 통과", [(OK, bash(c)) for c in fc6_ok])
         _cases_034(res, proj, "FC2 통과", [(OK, bash(c)) for c in ["cp -r /tmp/x/other ..", "cp -rT src/a src/b", "mv -b /tmp/notes.md docs/refactor/notes.md",
                                                                   "mv -b /tmp/a.md docs/", "cp -r /tmp/x/src ..", 'gh pr create --body "$(cat /tmp/b.md)"',
                                                                   "npm run dev &", 'cp "a b"/c.txt docs/refactor/', "cp -rT /tmp/x build", "robocopy c:/tmp/x build /E",

@@ -2955,7 +2955,7 @@ cpd_short() {
 # 긴 옵션 이름($1, -- 뗀 = 앞)이 $2 의 줄임인가(--targ → target-directory)
 cpd_long() { [ -n "$1" ] && case "$2" in "$1"*) return 0 ;; esac; return 1; }
 copy_dir_seg1() {
-  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 ab=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=() tvl=gCTXfFLbHVIKN tq="" o c cfail=0
+  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 ab=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=() tvl=gCTXfFLbHVIKN tq="" o c cfail=0 tm="" lst=0
   case "$sc" in cp|mv|ln) vl=tS ;; install) vl=tSmog ;; scp) vl=PiFoclJS ;; rsync) vl=efTBM ;; bsdtar) tvl="${tvl}s" ;; esac
   for ((i = 0; i < ${#SARGS[@]}; i++)); do
     a=${SARGS[$i]}; nx=${SARGS[$((i + 1))]:-}
@@ -3014,7 +3014,10 @@ copy_dir_seg1() {
         esac ;;
       tar)
         case "$a" in
-          --extract|--get|--extr*) ext=1 ;;
+          --extract|--get) ext=1 ;;
+          --ex|--ext|--extr*) ext=1; cfail=1 ;;   # FC6 S1: 모드를 줄여 쓴 꼴은 풀기 · 줄임은 판정을 비껴가는 데 쓰이니 애매 → 막음
+          --list) tm="${tm}t" ;;
+          --create|--append|--update|--catenate|--concatenate|--diff|--compare|--delete|--test-label) tm="${tm}c" ;;
           --ab|--abs*|--insecure) ab=1 ;;   # 보안 검사(10-06): 절대경로·.. 를 그대로 풀면 풀 곳과 상관없이 어디든 씀(GNU 긴 옵션 줄임 · bsdtar --insecure = -P)
           --to-stdout|--to-command*) out=1 ;;
           --directory=*) dirs+=("${a#*=}") ;;
@@ -3026,6 +3029,7 @@ copy_dir_seg1() {
             #   O 는 값 글자 앞부분만(파일 이름의 O 로 판정을 건너뛰지 않게) · C 가 있는데 풀 곳으로 못 잡았으면 애매 → 막음(cfail)
             case "$a" in *x*) ext=1 ;; esac; case "$OL" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac
             case "$a" in *C*) [ "$OC" = C ] || cfail=1 ;; esac
+            case "$OL" in *[tcruAd]*) tm="$tm$OL" ;; esac   # FC6 S1: 값 글자 앞의 분명한 모드(t 목록 · c r u A d)
             if [ -n "$OC" ]; then
               if [ "$OVN" = 1 ]; then [ "$OC" = C ] && dirs+=("$nx"); skip=1
               else [ "$OC" = C ] && dirs+=("$OV"); fi
@@ -3036,6 +3040,7 @@ copy_dir_seg1() {
                 *[!A-Za-z]*) ;;
                 *)   # 옛꼴 첫 낱말(xfC): 글자는 모두 옵션 · 값 받는 글자마다 뒤 위치 인자를 차례로 소비(tq)
                   case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac
+                  case "$a" in *[tcruAd]*) tm="$tm$a" ;; esac
                   o=$a; while [ -n "$o" ]; do c=${o:0:1}; o=${o:1}; case "$tvl" in *"$c"*) tq="$tq$c" ;; esac; done ;;
               esac
             elif [ -n "$tq" ]; then
@@ -3082,15 +3087,24 @@ copy_dir_seg1() {
   case "$k" in
     tar|unzip|7z|xa)
       [ "$k" = xa ] && [ "${#dirs[@]}" -eq 0 ] && [ "${#pos[@]}" -ge 2 ] && dirs=("${pos[1]}")
-      [ "$ext" = 1 ] || return 0
+      # FC6 S1: 풀기 후보 = 목록 보기·다른 분명한 모드만 뺀 전부(모드가 없거나 애매하면 후보 — TAR_OPTIONS="-x" 로 모드를 몰래 넣는 꼴)
+      #   tar: x 가 없고 t·c·r·u·A·d 같은 모드가 분명하면 아님 · unzip: -l·-v·-t·-Z·-p 면 아님 · 7z: l·t 면 아님
+      case "$k" in
+        tar) [ "$ext" = 1 ] || [ -z "$tm" ] || return 0 ;;
+        unzip) for a in "${SARGS[@]}"; do case "$a" in --*) ;; -*[lvtZp]*) lst=1 ;; esac; done; [ "$lst" = 0 ] || return 0 ;;
+        7z) case "${pos[0]:-}" in l|t) return 0 ;; esac ;;
+      esac
+      UNPK=1   # FC5 E1·FC6 S2: 풀기 후보가 있다 — 같은 명령에 환경을 바꾸는 명령·꾸민 명령 이름·대입이 있으면 끝에서 막는다
       [ "$ab" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"     # FC3 H1: 절대경로·.. 그대로 풀기는 표준출력 표시와 상관없이
+      # FC4 K2·FC6 S2(d): 명령 원문 어디에든 풀기 옵션 환경 변수 이름이 보이면(ext 로 돌아가기 전에)
+      [[ $rawcmd =~ $RE_UNPACK_ENV ]] && envx=1
+      [ "$envx" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"
+      # 모드가 없는 tar·7z 는 풀기로 본다(애매하면 막기)
+      [ "$k" = tar ] && [ -z "$tm" ] && ext=1
+      [ "$k" = 7z ] && [ "${#pos[@]}" -eq 0 ] && ext=1
+      [ "$ext" = 1 ] || return 0
       case "$tq" in *C*) cfail=1 ;; esac                    # FC4 K1: 옛꼴 C 의 값 낱말이 모자람 → 애매
       [ "$cfail" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"  # FC4 K1: 묶음 안 C 의 풀 곳을 판정할 수 없음
-      # FC4 K2: 명령 원문 어디에든(앞 조각의 export·declare -x·set·대입 포함) 풀기 옵션 환경 변수 이름이 보이면 — 이름은 대소문자를 가린다(unzip 명령은 아님)
-      [[ $rawcmd =~ $RE_UNPACK_ENV ]] && envx=1
-      # FC3 H3: TAR_OPTIONS·UNZIP·UNZIPOPT 대입이 붙은 풀기(unzip 의 목록 보기 -l·-t·-p 같은 것만 통과 — tar 는 -O 여도 막음)
-      [ "$envx" = 1 ] && { [ "$out" = 0 ] || [ "$k" != unzip ]; } && block "$MSG_UNPACK" "$MSG_HUMAN"
-      { [ "$out" = 0 ] || [ "$k" != unzip ]; } && UNPK=1   # FC5 E1: 풀기가 있다 — 같은 명령에 환경을 바꾸는 명령이 있으면 끝에서 막는다
       [ "$out" = 0 ] || return 0
       [ "${#dirs[@]}" -eq 0 ] && dirs=(.)
       for d in "${dirs[@]}"; do cpd_where "$d"; [ "$CW" != no ] && block "$MSG_UNPACK" "$MSG_HUMAN"; done
@@ -3185,9 +3199,40 @@ copy_dir_targets() {
   for m in -execdir -exec -okdir -ok; do s=${s//" $m "/"$NL"}; done
   UNPK=0; ENVSET=0
   cd_all copy_dir_targets1 "$s"
+  # FC6 S2: 풀기 후보가 있으면 명령 원문(JSON 이스케이프만 풀어)의 조각마다 명령 자리 낱말을 본다 — 판정 문자열은 단순 따옴표를 이미 벗겨("tar" → tar)
+  #   꾸민 이름을 못 보므로 원문으로 · ( · 백틱도 조각 경계(안 명령)
+  if [ "$UNPK" = 1 ] && [ "$ENVSET" = 0 ]; then
+    local rr=${rawcmd//'\n'/$NL} rs
+    rr=${rr//'\t'/ }; rr=${rr//'\"'/'"'}
+    rr=${rr//&&/$NL}; rr=${rr//||/$NL}; rr=${rr//;/$NL}; rr=${rr//|/$NL}; rr=${rr//&/$NL}; rr=${rr//\(/$NL}; rr=${rr//\`/$NL}
+    while [ -n "$rr" ] && [ "$ENVSET" = 0 ]; do
+      rs=${rr%%"$NL"*}; if [ "$rs" = "$rr" ]; then rr=""; else rr=${rr#*"$NL"}; fi
+      cdt_cmdword "$rs"
+    done
+  fi
   # FC5 E1: 풀기와 함께 환경을 바꾸는 명령(export·declare·typeset·local·readonly·set·eval·source·. ·env -S)이 같은 명령에 있으면
   #   TAR_OPTIONS·UNZIP 를 글자를 꼬아(TAR_OPT""IONS·TAR_\OPTIONS·eval·source 파일) 넣을 수 있어 막는다(애매하면 막기)
   [ "$UNPK" = 1 ] && [ "$ENVSET" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"
+}
+# FC6 S2: 조각의 명령 자리 낱말(원문 그대로)을 본다 → ENVSET=1 이면 같은 명령의 풀기 후보를 막는다
+#   (a) 따옴표·역슬래시를 지운 이름이 export·declare·typeset·local·readonly·set·eval·source·. ·env (ex""port · \export)
+#   (b) 명령 자리 낱말에 따옴표·역슬래시·$·백틱(꾸민 명령 이름) (c) 조각 앞·env 뒤의 NAME=VALUE 대입(이름과 상관없이)
+cdt_cmdword() {
+  local rest=$1 w c nm n=0
+  while [ "$n" -lt 24 ]; do
+    n=$((n + 1))
+    rest=${rest#"${rest%%[![:space:](\{\!]*}"}
+    [ -n "$rest" ] || return 0
+    w=${rest%%[[:space:]]*}; rest=${rest#"$w"}
+    case "$w" in *=*) nm=${w%%=*}; case "$nm" in ''|[0-9]*|*[!A-Za-z0-9_]*) ;; *) ENVSET=1; continue ;; esac ;; esac
+    case "$w" in *[\"\'\\\$\`]*) ENVSET=1 ;; esac
+    c=${w//[\"\'\\]/}
+    case "$c" in
+      export|declare|typeset|local|readonly|set|eval|source|.|env) ENVSET=1; return 0 ;;
+      command|builtin|exec|nohup|sudo|time|nice|then|do|else|elif|if|while|until) ;;
+      *) return 0 ;;
+    esac
+  done
 }
 copy_dir_targets1() {
   local s=$1 seg CWD_BASE=$cwd CD_PREV=$cwd j
