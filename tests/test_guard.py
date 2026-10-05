@@ -5619,6 +5619,17 @@ def check_copy_dir_040(res):
                   "tar -xf /tmp/Ox.tar -C /tmp/out", "tar --to-stdout -xf x.tar"]
         _cases_034(res, proj, "FC3 풀기 막힘", [(B, bash(c)) for c in fc3_b], need=W_ARC)
         _cases_034(res, proj, "FC3 풀기 통과", [(OK, bash(c)) for c in fc3_ok])
+        # FC4(보안 검사 2445d81): K1 x·P 는 묶음 어디서든(맥 bsdtar 값 글자 차이) · C 를 풀 곳으로 못 잡으면 막음 · K2 명령 원문 어디든 풀기 옵션 환경 변수 이름
+        fc4_b = ["tar -xHPf /tmp/e.tar -C /tmp/out", "tar -xKPf /tmp/e.tar -C /tmp/out", "tar -xfPC x.tar /tmp/out", "tar -xfC x.tar /tmp/out", "tar xfC x.tar",
+                 "tar -cfx.tar b", "export TAR_OPTIONS=-P; tar -xf /tmp/e.tar -C /tmp/out", "declare -x UNZIP=-:; unzip x.zip -d /tmp/out",
+                 "TAR_OPTIONS=-P; export TAR_OPTIONS; tar xf /tmp/e.tar -C /tmp/out", "set UNZIPOPT=-:; unzip x.zip -d /tmp/out",
+                 "export TAR_OPTIONS=-P && cd /tmp && tar -xOf x.tar"]
+        fc4_ok = ["tar -xvf /tmp/x.tar -C /tmp/out", "tar -xOf x.tar", "unzip x.zip -d /tmp/out", "echo $TAR_OPTIONS", "tar xfC x.tar /tmp/out",
+                  "export TAR_OPTIONS=-v; tar -tf x.tar", "unzip -l x.zip; echo $UNZIP_X", "tar -xvzf /tmp/x.tgz -C /tmp/out"]
+        _cases_034(res, proj, "FC4 풀기 막힘", [(B, bash(c)) for c in fc4_b], need=W_ARC)
+        _cases_034(res, proj, "FC4 풀기 통과", [(OK, bash(c)) for c in fc4_ok])
+        _cases_034(res, proj, "FC4 하위 폴더에서 C 애매", [(B, bash("tar -xfC x.tar /tmp/out")), (B, bash("tar xfC x.tar")), (B, bash("tar -xvfC x.tar ../docs")),
+                                                         (OK, bash("tar xfC x.tar /tmp/out")), (OK, bash("tar -xf x.tar"))], extra={"cwd": str(proj / "src")})
         _cases_034(res, proj, "FC2 통과", [(OK, bash(c)) for c in ["cp -r /tmp/x/other ..", "cp -rT src/a src/b", "mv -b /tmp/notes.md docs/refactor/notes.md",
                                                                   "mv -b /tmp/a.md docs/", "cp -r /tmp/x/src ..", 'gh pr create --body "$(cat /tmp/b.md)"',
                                                                   "npm run dev &", 'cp "a b"/c.txt docs/refactor/', "cp -rT /tmp/x build", "robocopy c:/tmp/x build /E",

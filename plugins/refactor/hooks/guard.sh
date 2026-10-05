@@ -2822,6 +2822,7 @@ shell_targets1() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨) — cd·push
 # 0.4.0 WC: 기록 폴더(docs/refactor) 자체나 그 상위 폴더(docs · 프로젝트 · 절대경로)로 폴더째·와일드카드 복사·옮기기, 거기에 압축 풀기,
 #   그 폴더를 잇거나 그 자리에 링크 만들기 → 막는다. 이름을 적은 파일 복사·기록 폴더 밖·기록 폴더에서 밖으로는 그대로 통과.
 #   (지금까지는 목적지가 기록 폴더 자체일 때 원본 이름만 봐서 cp -r /tmp/d/. docs/refactor · cp /tmp/d/.t* docs/refactor/ · cp -r /tmp/refactor docs/ 가 지나갔다)
+RE_UNPACK_ENV='(^|[^A-Za-z0-9_])(TAR_OPTIONS|UNZIPOPT|UNZIP)([^A-Za-z0-9_]|$)'   # FC4 K2
 MSG_CPDIR="폴더째·와일드카드 복사는 기록 폴더 안의 허락 파일·승인 기록을 덮어쓸 수 있어 막습니다 — 파일 이름을 하나씩 적어 복사하세요."
 MSG_UNPACK="리팩토링 기록 폴더(docs/refactor)에 압축을 풀거나 파일을 한꺼번에 넣지 않습니다(사람 전용 파일을 덮어쓸 수 있음)."
 MSG_LINK="기록 폴더(docs/refactor)나 그 상위 폴더를 잇거나 그 자리에 링크를 만들면 허락 파일·승인 기록을 다른 이름으로 바꿀 수 있어 막습니다 — 링크 없이 파일을 하나씩 다루세요."
@@ -2954,7 +2955,7 @@ cpd_short() {
 # 긴 옵션 이름($1, -- 뗀 = 앞)이 $2 의 줄임인가(--targ → target-directory)
 cpd_long() { [ -n "$1" ] && case "$2" in "$1"*) return 0 ;; esac; return 1; }
 copy_dir_seg1() {
-  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 ab=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=() tvl=gCTXfFLbHVIKN tq="" o c
+  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 ab=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=() tvl=gCTXfFLbHVIKN tq="" o c cfail=0
   case "$sc" in cp|mv|ln) vl=tS ;; install) vl=tSmog ;; scp) vl=PiFoclJS ;; rsync) vl=efTBM ;; bsdtar) tvl="${tvl}s" ;; esac
   for ((i = 0; i < ${#SARGS[@]}; i++)); do
     a=${SARGS[$i]}; nx=${SARGS[$((i + 1))]:-}
@@ -3021,7 +3022,10 @@ copy_dir_seg1() {
           --*) ;;
           -[A-Za-z]*)   # FC3 H1·H2: 앞 글자부터 보다가 값 받는 글자에서 멈춘다(-xPfOevil.tar 의 O 는 파일 이름) · C 의 값은 풀 곳
             cpd_short "$a" "$tvl"
-            case "$OL" in *x*) ext=1 ;; esac; case "$OL" in *O*) out=1 ;; esac; case "$OL" in *P*) ab=1 ;; esac
+            # FC4 K1: x·P 는 묶음 어디에 있든(맥 bsdtar 의 값 글자는 GNU 와 달라 -xHPf 의 P 를 놓칠 수 있음 — 파일 이름 속 P 헛막힘은 받아들임) ·
+            #   O 는 값 글자 앞부분만(파일 이름의 O 로 판정을 건너뛰지 않게) · C 가 있는데 풀 곳으로 못 잡았으면 애매 → 막음(cfail)
+            case "$a" in *x*) ext=1 ;; esac; case "$OL" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac
+            case "$a" in *C*) [ "$OC" = C ] || cfail=1 ;; esac
             if [ -n "$OC" ]; then
               if [ "$OVN" = 1 ]; then [ "$OC" = C ] && dirs+=("$nx"); skip=1
               else [ "$OC" = C ] && dirs+=("$OV"); fi
@@ -3080,6 +3084,10 @@ copy_dir_seg1() {
       [ "$k" = xa ] && [ "${#dirs[@]}" -eq 0 ] && [ "${#pos[@]}" -ge 2 ] && dirs=("${pos[1]}")
       [ "$ext" = 1 ] || return 0
       [ "$ab" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"     # FC3 H1: 절대경로·.. 그대로 풀기는 표준출력 표시와 상관없이
+      case "$tq" in *C*) cfail=1 ;; esac                    # FC4 K1: 옛꼴 C 의 값 낱말이 모자람 → 애매
+      [ "$cfail" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"  # FC4 K1: 묶음 안 C 의 풀 곳을 판정할 수 없음
+      # FC4 K2: 명령 원문 어디에든(앞 조각의 export·declare -x·set·대입 포함) 풀기 옵션 환경 변수 이름이 보이면 — 이름은 대소문자를 가린다(unzip 명령은 아님)
+      [[ $rawcmd =~ $RE_UNPACK_ENV ]] && envx=1
       # FC3 H3: TAR_OPTIONS·UNZIP·UNZIPOPT 대입이 붙은 풀기(unzip 의 목록 보기 -l·-t·-p 같은 것만 통과 — tar 는 -O 여도 막음)
       [ "$envx" = 1 ] && { [ "$out" = 0 ] || [ "$k" != unzip ]; } && block "$MSG_UNPACK" "$MSG_HUMAN"
       [ "$out" = 0 ] || return 0
