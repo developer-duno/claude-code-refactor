@@ -14,6 +14,8 @@
 #   ③ 이 세션 ④ 지금 가지 = 승인 때 가지 ⑪ go= 채워짐 — 사람이 인자 없는 /refactor:go 를 침). 합치기 전 단계의 거절(1)은 그 묶음의 자동 모드를 끝낸다
 #   (.turn-auto·.turn-autopre 를 지움 — 사람 입력이면 끝 규칙과 같게, 다시 만들지 않는다). 합친 뒤(deploy-wait·verify)는 .turn-merged.<B> 만 본다
 #   (입력 훅이 지우지 않음 — 결정 다: 합친 뒤 읽기 단계는 시간·사람 입력과 무관하게 끝까지). verify 가 끝나면(통과·실패) .turn-merged 를 지운다.
+#   허락을 지울 때는 끝 표시 .turn-autoend.<B> 를 남긴다(셸 명령 뒤 점검 전용 — 그 차례에 더한 자동 줄을 알리지 않게 · 다음 사람 입력에 입력 훅이 지움).
+#   0.4.0 보완: 허락은 봉인된 기록의 "| 자동 | B<n> | - | <시각> <가지> <방식>" 줄과 같아야 하고, push·merge 는 preflight 때 커밋(.turn-autopre ③)일 때만.
 # 기록: 푸시·합치기 허락 줄만 승인 기록에 "| - | 자동 B1 으로 실행" 꼴로 더하고 봉인한다(셸 명령 뒤 점검은 이 꼴만 더해졌으면 알리지 않는다 — §2-3).
 # 되돌리기·배포·자동 되돌리기는 하지 않는다(검증 실패면 멈추고 사람에게 되돌리는 길을 알린다).
 #
@@ -54,8 +56,10 @@ US=$RL_US; NL=$RL_NL
 dir="$proj/docs/refactor"
 log="$dir/APPROVALS.log"
 AF="$dir/.turn-auto.$B"       # 자동 허락(승인 스크립트가 만듦 — 합치기 전 단계)
-PF="$dir/.turn-autopre.$B"    # preflight 가 적은 판 표지 옛 값(1줄 = 시각 · 2줄 = 옛 값)
+PF="$dir/.turn-autopre.$B"    # preflight 가 적은 것(1줄 = 시각 · 2줄 = 판 표지 옛 값(merge 첫 호출이 합치기 직전 값으로 고침) · 3줄 = 그때 커밋 — push·merge 는 이 커밋일 때만)
 MF="$dir/.turn-merged.$B"     # 합친 뒤 허락(merge 단계가 만듦 — deploy-wait·verify)
+EF="$dir/.turn-autoend.$B"    # 끝 표시(자동 모드가 끝날 때 남김 — ① B ② 끝난 시각 ③ 세션 ④ 가지 ⑤ 방식). 셸 명령 뒤 점검이 이 차례의 자동 줄을 알리지 않게만 쓴다
+                              #   (자동 단계의 허락 근거가 아니다 — 이 스크립트·합치기 스크립트는 읽지 않음). 입력 훅이 다음 사람 입력에 지운다
 
 lim() {
   LIMV=$2
@@ -80,8 +84,41 @@ TD=$(mktemp -d 2>/dev/null) || TD=$(mktemp -d -t rlauto 2>/dev/null) || TD=""
 trap 'rm -rf "$TD"' EXIT
 
 END_PRE="   (자동 모드가 끝났습니다 — 코드·커밋은 그대로입니다. 이어 가려면 사람이 /refactor:approve 푸시 · /refactor:approve 합치기 로, 또는 고친 뒤 다시 /refactor:approve $B 자동 → /refactor:go)"
-end_auto() { [ -e "$AF" ] && rm -f "$AF"; [ -e "$PF" ] && rm -f "$PF"; return 0; }
-end_merged() { [ -e "$MF" ] && rm -f "$MF"; return 0; }
+# 끝 표시(검사 C#1 — 성공한 자동 마감 끝의 헛경보 없애기): 지우기 전에 이 세션의 허락이면 .turn-autoend.<B> 를 남긴다
+end_mark() { # $1 세션 $2 가지 $3 방식
+  { printf '%s\n%s\n%s\n%s\n%s\n' "$B" "$(date +%s)" "$1" "$2" "$3" > "$EF.tmp.$$" && mv -f "$EF.tmp.$$" "$EF"; } 2>/dev/null || rm -f "$EF.tmp.$$"
+  return 0
+}
+# 합치기 전 허락: 이 세션 · go= 채워짐(자동 차례가 시작됨) · 봉인된 기록의 자동 줄과 같을 때만 끝 표시
+end_auto() {
+  local x i=0 e1="" e2="" e3="" e4="" e5="" e11=""
+  if [ -f "$AF" ]; then
+    while IFS= read -r x || [ -n "$x" ]; do
+      x=${x%$'\r'}; i=$((i + 1))
+      case "$i" in 1) e1=$x ;; 2) e2=$x ;; 3) e3=$x ;; 4) e4=$x ;; 5) e5=$x ;; 11) e11=$x ;; esac
+    done < "$AF"
+    if [ "$e1" = "$B" ] && [ "$e3" = "$sid" ] && [[ $e11 =~ ^go=[0-9]{1,12}$ ]] && rl_log_intact "$dir" && rl_auto_rec "$dir" "$B" \
+       && [ "$RL_AEP" = "$e2" ] && [ "$RL_ABR" = "$e4" ] && [ "$RL_AMTH" = "$e5" ]; then
+      end_mark "$sid" "$e4" "$e5"
+    fi
+    rm -f "$AF"
+  fi
+  [ -e "$PF" ] && rm -f "$PF"
+  return 0
+}
+# 합친 뒤 허락: 이 세션의 것이면 끝 표시(방식은 파일에 없음 — 셸 명령 뒤 점검의 .turn-merged 와 같게 아무거나 '*')
+end_merged() {
+  local x i=0 e1="" e3="" e12=""
+  if [ -f "$MF" ]; then
+    while IFS= read -r x || [ -n "$x" ]; do
+      x=${x%$'\r'}; i=$((i + 1))
+      case "$i" in 1) e1=$x ;; 3) e3=$x ;; 12) e12=$x ;; esac
+    done < "$MF"
+    [ "$e1" = "$B" ] && [ "$e3" = "$sid" ] && [ -n "$e12" ] && end_mark "$sid" "$e12" "*"
+    rm -f "$MF"
+  fi
+  return 0
+}
 # 합치기 전 거절(허락을 지우고 1) · 다시(3) · 허락을 건드리지 않는 거절(다른 대화·순서 틀림 — 1)
 no() { end_auto; say "$1"; [ -n "${2:-}" ] && say "$2"; say "$END_PRE"; exit 1; }
 again() { say "$1"; [ -n "${2:-}" ] && say "$2"; say "   (자동 허락은 그대로입니다 — 같은 명령을 그대로 다시 실행하세요.)"; exit 3; }
@@ -123,7 +160,20 @@ auto_valid() {
   ABR=${L[3]}; AMTH=${L[4]:-}; ATP=${L[5]:-}; AURL=${L[6]:-}; AHOST=${L[7]:-}; AMARK=${L[8]:-}; ASCR=${L[9]:-}; AMODE=auto
   [ "${L[11]:-}" = merge-only ] && AMODE=merge-only
   case "$AMTH" in rebase|squash|merge) ;; *) no "⛔ $B 의 자동 허락에 합치는 방식이 없습니다." ;; esac
+  # 사람이 B<n> 자동 을 쳤나(ⓐ — 검사 A#4): 봉인된 승인 기록의 마지막 "| 자동 | B<n> | - | <시각> <가지> <방식>" 줄이 허락 파일 ②④⑤ 와 같아야 한다
+  rl_log_intact "$dir" || no "⛔ 승인 기록이 봉인과 다릅니다 — 사람이 /refactor:approve 확인 먼저"
+  { rl_auto_rec "$dir" "$B" && [ "$RL_AEP" = "${L[1]}" ] && [ "$RL_ABR" = "$ABR" ] && [ "$RL_AMTH" = "$AMTH" ]; } \
+    || no "⛔ $B 의 자동 허락이 승인 기록과 맞지 않습니다(기록에 사람이 친 '$B 자동' 줄이 없거나 시각·가지·방식이 다름) — 사람이 /refactor:approve $B 자동 을 다시"
   return 0
+}
+# preflight 가 적은 커밋(.turn-autopre ③)과 지금 커밋이 같은가(검사 A#3·C#2 — 묶음 밖 커밋 확인은 preflight 에서 하므로 그 뒤 새 커밋은 올리거나 합치지 않는다)
+head_same() {
+  local p1="" p2="" p3="" h
+  { IFS= read -r p1; IFS= read -r p2; IFS= read -r p3; } < "$PF"
+  p3=${p3%$'\r'}
+  h=$("${G[@]}" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || h=""
+  { [[ $p3 =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] && [ "$h" = "$p3" ]; } \
+    || no "⛔ preflight 뒤에 새 커밋이 생겼습니다 — 묶음 밖 커밋 확인을 다시 하려면 사람이 /refactor:approve $B 자동 을 다시"
 }
 # 합친 뒤: .turn-merged.<B> ① B ② 합친 시각(초) ③ 세션 ④ 합친 커밋(또는 -) ⑤ 합친 시각(글) ⑥ 운영 주소 ⑦ 배포 끝 보는 법 ⑧ 판 표지
 #   ⑨ 확인할 화면 ⑩ 판 표지 옛 값 ⑪ auto|merge-only ⑫ 작업 가지 ⑬ deployed=<배포 끝을 본 판 표지 값>(deploy-wait 가 더함)
@@ -177,18 +227,29 @@ screen_get() {
 }
 
 # ── 묶음 승인 기록 → BIDS(그 묶음의 카드 ID — 승인 기록 정본, 마지막 '재설정' 뒤) ─────────────
+#   BFOUND = 그 줄이 있음(카드 0개 — 묶음 카드가 모두 이미 완료라 자동 마감만 켠 승인 — 도 있음) · UIDS = 계획서에서 묶음 칸이 그 B 인 모든 카드(완료 포함 — 검사 C#4:
+#   진행 중 계획서에서 앞서 끝낸 그 묶음 카드의 커밋이 아직 안 합쳐져 가지에 있을 수 있다) + BIDS. 묶음 밖 커밋 판정과 PR 본문은 UIDS 로
 bundle_ids() {
-  local x a b v
-  BIDS=""
+  local x a b v k_ n_ id_ b_ rest_
+  BIDS=""; BFOUND=0; UIDS=""
   [ -f "$log" ] || return 0
   while IFS= read -r x || [ -n "$x" ]; do
     x=${x%$'\r'}
-    case "$x" in *" KST | 재설정 |"*) BIDS="" ; continue ;; esac
-    case "$x" in *" KST | 묶음 승인 | $B | - | 카드 "*) ;; *" KST | 묶음 보류 | $B | "*) BIDS=""; continue ;; *) continue ;; esac
+    case "$x" in *" KST | 재설정 |"*) BIDS=""; BFOUND=0; continue ;; esac
+    case "$x" in *" KST | 묶음 승인 | $B | - | 카드 "*) ;; *" KST | 묶음 보류 | $B | "*) BIDS=""; BFOUND=0; continue ;; *) continue ;; esac
     v=${x#*" | 묶음 승인 | $B | - | 카드 "}; v=${v#*개:}
-    BIDS=$v
+    BIDS=$v; BFOUND=1
   done < "$log"
   a=""; for b in $BIDS; do a="$a $b"; done; BIDS=${a# }
+  a=""
+  while IFS="$US" read -r k_ n_ id_ b_ rest_; do
+    [ "$k_" = CB ] && [ "$b_" = "$B" ] && [ -n "$id_" ] || continue
+    case " $a " in *" $id_ "*) ;; *) a="$a $id_" ;; esac
+  done <<EOF
+$(rl_card_bundles "$dir/REFACTOR_PLAN.md")
+EOF
+  for b in $BIDS; do case " $a " in *" $b "*) ;; *) a="$a $b" ;; esac; done
+  UIDS=${a# }
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -198,7 +259,7 @@ preflight)
   auto_valid
   rl_log_intact "$dir" || no "⛔ 승인 기록이 봉인과 다릅니다 — 사람이 /refactor:approve 확인 먼저"
   bundle_ids
-  [ -n "$BIDS" ] || no "⛔ 승인 기록에 $B 의 묶음 승인 줄이 없습니다"
+  [ "$BFOUND" = 1 ] || no "⛔ 승인 기록에 $B 의 묶음 승인 줄이 없습니다"
   # 묶음 카드가 모두 끝났나(계획서 완료 칸 — 승인 기록의 그 묶음 카드 목록 기준)
   left=""; last=""
   recs=$(rl_cards "$dir/REFACTOR_PLAN.md" "$log" 2>/dev/null)
@@ -210,6 +271,9 @@ EOF
     [ "$d_" = 1 ] || left="$left $x"
   done
   [ -z "$left" ] || no "⛔ $B 묶음에 아직 안 끝난 카드가 있습니다:$left — 묶음 카드가 모두 끝나야 자동 마감을 합니다"
+  # 승인 때 카드 0개(모두 이미 완료 — 자동 마감만 켬)면 기준선 결과는 계획서의 그 묶음 마지막 카드로
+  if [ -z "$last" ]; then for x in $UIDS; do last=$x; done; fi
+  [ -n "$last" ] || no "⛔ 계획서에 $B 묶음 카드가 없습니다"
   # 기준선 통과(#6): 묶음 마지막 카드의 EXECUTION_LOG "- 기준선 결과: <ID> 통과 N/N"(N > 0, 같은 수) — 사장님 결정 10-05: STATE red_open(프로젝트 전체의
   #   안 막은 🔴 수)은 보지 않는다(다른 묶음의 🔴 가 이 묶음 자동 마감을 막지 않게 · 이 묶음 카드가 다 끝났는지는 위에서 봄)
   bok=0
@@ -221,20 +285,37 @@ EOF
     done < "$dir/EXECUTION_LOG.md"
   fi
   [ "$bok" = 1 ] || no "⛔ 기준선 통과를 확인하지 못했습니다: EXECUTION_LOG.md 에 묶음 마지막 카드($last)의 '- 기준선 결과: $last 통과 N/N' 줄이 없습니다"
-  # 묶음 밖 커밋(#5): origin/<기본>..HEAD 의 제목이 전부 "refactor: <묶음 카드 ID> …" 또는 기준선 커밋
+  # 묶음 밖 커밋(#5): origin/<기본>..<지금 커밋> 의 제목이 전부 "refactor: <묶음 카드 ID> …"(완료 카드 포함 — UIDS) 또는 기준선 커밋 꼴.
+  #   지금 커밋을 먼저 읽어 그 커밋까지만 보고 .turn-autopre ③ 에 적는다(push·merge 는 이 커밋일 때만 — 검사 A#3·C#2)
   rl_origin_base "$proj" || no "❓ origin 의 기본 가지를 찾지 못했습니다(origin/HEAD·origin/main·origin/master 참조 없음)"
-  subs=$("${G[@]}" log --format=%s "$RL_BOID..HEAD" 2>/dev/null) || no "⛔ 커밋 목록을 읽지 못했습니다"
+  hoid=$("${G[@]}" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || hoid=""
+  [[ $hoid =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || no "⛔ 지금 커밋을 읽지 못했습니다"
+  subs=$("${G[@]}" log --format='%H %s' "$RL_BOID..$hoid" 2>/dev/null) || no "⛔ 커밋 목록을 읽지 못했습니다"
   [ -n "$subs" ] || no "⛔ origin/$RL_BNAME 위에 올릴 커밋이 없습니다"
+  # 기준선 커밋 꼴(검사 C#9): 제목이 "test: 기준선" 으로 시작하고, 바꾼 파일(하나 이상)이 tests/baseline/ 아래와 기록 폴더 docs/refactor/ 아래뿐
+  #   (5-baseline 이 기록 파일을 같은 커밋에 싣는다 · 합치기 커밋은 파일 목록이 비어 거절 · 이름만 같은 커밋은 거절)
+  base_only() {
+    local fl f n=0
+    fl=$("${G[@]}" diff-tree --no-commit-id --name-only --no-renames -r --root "$1" 2>/dev/null) || return 1
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      case "$f" in tests/baseline/*|docs/refactor/*) n=$((n + 1)) ;; *) return 1 ;; esac
+    done <<EOF
+$fl
+EOF
+    [ "$n" -gt 0 ]
+  }
   outside=""; on=0
   while IFS= read -r x; do
     [ -n "$x" ] || continue
+    c_=${x%% *}; x=${x#"$c_"}; x=${x# }
     ok=0
-    case "$x" in "test: 기준선 테스트 추가") ok=1 ;; "refactor: "*) i=${x#refactor: }; i=${i%% *}; case " $BIDS " in *" $i "*) [ "$i" != "${x#refactor: }" ] && ok=1 ;; esac ;; esac
+    case "$x" in "test: 기준선"*) base_only "$c_" && ok=1 ;; "refactor: "*) i=${x#refactor: }; i=${i%% *}; case " $UIDS " in *" $i "*) [ "$i" != "${x#refactor: }" ] && ok=1 ;; esac ;; esac
     if [ "$ok" = 0 ]; then on=$((on + 1)); [ "$on" -le 3 ] && outside="$outside · $(clean "$x" 60)"; fi
   done <<EOF
 $subs
 EOF
-  [ "$on" = 0 ] || no "⛔ 묶음 밖 커밋이 ${on}개 있습니다(${outside# · }) — $B 카드(${BIDS})의 'refactor: <ID> …' 커밋과 기준선 커밋만 자동으로 올립니다"
+  [ "$on" = 0 ] || no "⛔ 묶음 밖 커밋이 ${on}개 있습니다(${outside# · }) — $B 카드(${UIDS})의 'refactor: <ID> …' 커밋과 기준선 커밋(tests/baseline·docs/refactor 만 바꾼 'test: 기준선 …')만 자동으로 올립니다"
   # 운영 주소 200 · 판 표지 옛 값 · 확인할 화면(옛 판)
   http_get "$(bust "$AURL/")" "$TD/u" || no "⛔ 운영 주소($AURL)가 지금 $HC 입니다 — 자동 시작 전 멈춤(코드는 그대로)"
   old=""
@@ -249,8 +330,9 @@ EOF
     screen_get "${one%%"→"*}" "${one#*"→"}" "$AURL" || no "⛔ 확인할 화면(옛 판): $SWHY — 자동 시작 전 멈춤(PROFILE.md 의 확인할 화면은 옛 판·새 판 모두에 나오는 글자로)"
     sn=$((sn + 1))
   done
-  { printf '%s\n%s\n' "$(date +%s)" "$old" > "$PF.tmp.$$" && mv -f "$PF.tmp.$$" "$PF"; } 2>/dev/null || { rm -f "$PF.tmp.$$"; again "⚠️ 판 표지 옛 값을 적지 못했습니다"; }
-  say "✅ 자동 마감 시작 전 확인 끝($B): 카드$(for x in $BIDS; do printf ' %s' "$x"; done) 모두 완료 · 기준선 통과 · 묶음 밖 커밋 없음 · 운영 주소 200 · 확인할 화면 ${sn}개$([ -n "$old" ] && printf ' · 판 표지 지금 값 %s' "$old")"
+  { printf '%s\n%s\n%s\n' "$(date +%s)" "$old" "$hoid" > "$PF.tmp.$$" && mv -f "$PF.tmp.$$" "$PF"; } 2>/dev/null || { rm -f "$PF.tmp.$$"; again "⚠️ 판 표지 옛 값을 적지 못했습니다"; }
+  say "✅ 자동 마감 시작 전 확인 끝($B): 카드$(for x in ${BIDS:-$UIDS}; do printf ' %s' "$x"; done) 모두 완료 · 기준선 통과 · 묶음 밖 커밋 없음 · 운영 주소 200 · 확인할 화면 ${sn}개$([ -n "$old" ] && printf ' · 판 표지 지금 값 %s' "$old")"
+  say "   올릴 커밋: ${hoid:0:12} — 이 뒤에 커밋을 더하면 push·merge 가 멈춥니다(묶음 밖 커밋 확인은 여기서만 함)"
   [ "$AMODE" = merge-only ] && say "   배포 방식이 '수동'이라 합치기까지만 합니다."
   say "다음: refactor-auto push"
   exit 0 ;;
@@ -259,6 +341,7 @@ EOF
 push)
   auto_valid
   [ -f "$PF" ] || refuse "⛔ 먼저 preflight 를 실행해야 합니다(7-execute 「8. 자동 마감」 순서)."
+  head_same
   rl_log_intact "$dir" || no "⛔ 승인 기록이 봉인과 다릅니다 — 사람이 /refactor:approve 확인 먼저"
   [[ $ABR =~ ^[A-Za-z0-9._/-]+$ ]] && [[ $ABR =~ ^[A-Za-z0-9_] ]] || no "⛔ 가지 이름($ABR)을 올릴 수 없습니다"
   case "$ABR" in main|master) no "⛔ 기본 가지는 올리지 않습니다" ;; esac
@@ -327,7 +410,7 @@ EOF
     printf '%s\n\n' "자동 모드(/refactor:approve $B 자동)로 만든 PR 입니다 — 검사가 모두 초록이면 Claude 가 플러그인 합치기 스크립트로 합칩니다."
     printf '## 카드\n'
     recs=$(rl_cards "$dir/REFACTOR_PLAN.md" "$log" 2>/dev/null)
-    for x in $BIDS; do
+    for x in $UIDS; do
       t=""
       while IFS="$US" read -r k_ n_ id_ t_ rest_; do [ "$k_" = CARD ] && [ "$id_" = "$x" ] && { t=$t_; break; }; done <<EOF
 $recs
@@ -357,10 +440,23 @@ EOF
 merge)
   auto_valid
   [ -f "$PF" ] || refuse "⛔ 먼저 preflight 를 실행해야 합니다(7-execute 「8. 자동 마감」 순서)."
+  head_same
   rl_log_intact "$dir" || no "⛔ 승인 기록이 봉인과 다릅니다 — 사람이 /refactor:approve 확인 먼저"
   mf="$dir/.turn-merge.$sid"; mtp="$dir/.turn-mergetp.$sid"
+  MNOTE=""
   if [ ! -f "$mf" ]; then
     # 처음 한 번만(다시(3) 뒤에는 남아 있는 허락을 그대로 쓴다 — 거절(1) 뒤에는 자동 허락이 지워져 여기 오지 않는다 · C 메모)
+    # 판 표지 옛 값을 합치기 직전 값으로 고친다(검사 C#3 — preflight 뒤 앞선 배포가 끝나 표지가 바뀌었으면 합친 뒤 "바뀜"을 새 배포로 잘못 봄).
+    #   읽지 못하면 preflight 값 그대로 + 결과에 한 줄
+    if [ -n "$AMARK" ]; then
+      if marker_read "$AMARK" "$AURL"; then
+        p1=""; p2=""; p3=""; { IFS= read -r p1; IFS= read -r p2; IFS= read -r p3; } < "$PF"
+        { printf '%s\n%s\n%s\n' "${p1%$'\r'}" "$MV" "${p3%$'\r'}" > "$PF.tmp.$$" && mv -f "$PF.tmp.$$" "$PF"; } 2>/dev/null \
+          || { rm -f "$PF.tmp.$$"; MNOTE="   ⚠️ 판 표지 옛 값을 합치기 직전 값으로 고치지 못해 preflight 때 값을 씁니다"; }
+      else
+        MNOTE="   ⚠️ 합치기 직전에 판 표지를 다시 읽지 못해 preflight 때 값을 씁니다($MWHY)"
+      fi
+    fi
     hoid=$("${G[@]}" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || hoid=""
     [[ $hoid =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || no "⛔ 지금 커밋을 읽지 못했습니다"
     mroot=${root//"\\"//}; mroot=${mroot%/}
@@ -375,13 +471,15 @@ merge)
     rl_log_seal "$dir"
     # 입력 감시 경로 파일(0.3.7 과 같은 3줄 — 경로 = 자동 허락 ⑥, 크기·시각 = 지금)
     rl_mergetp_write "$mtp" "$ATP"
+    # 판 표지 읽기가 늦었으면 합치기 스크립트(한 호출 최악 약 110초)는 다음 실행에서(Bash 도구 한도 120초 안 — 허락은 만들어 둠)
+    [ $((SECONDS - t0)) -gt 5 ] && again "⏳ 판 표지를 다시 읽느라 늦어 합치기 확인은 다음 실행에서 합니다(합치기 허락은 만들었습니다)" "$MNOTE"
   fi
   bash "$root/hooks/run.sh" refactor-merge "$proj" "$sid" >"$TD/mo" 2>&1; mrc=$?
   mout=$(< "$TD/mo")
   case "$mrc" in
     0)
       case "$mout" in *"✅ 합쳤습니다"*|*"이미 합쳐져 있습니다"*) ;; *)
-        end_auto; say "⛔ 합치지 않았습니다(자동 $B) — 합치기 스크립트 결과:"; printf '%s\n' "$mout"; say "$END_PRE"; exit 1 ;;
+        end_auto; say "⛔ 합치지 않았습니다(자동 $B) — 합치기 스크립트 결과:"; [ -n "$MNOTE" ] && say "$MNOTE"; printf '%s\n' "$mout"; say "$END_PRE"; exit 1 ;;
       esac
       msha=""
       while IFS= read -r x; do case "$x" in "   합친 커밋: "*) msha=${x#"   합친 커밋: "} ;; esac; done <<EOF
@@ -394,6 +492,7 @@ EOF
       fi
       end_auto
       say "✅ 합쳤습니다(자동 $B) — 합친 커밋 ${msha:0:12}"
+      [ -n "$MNOTE" ] && say "$MNOTE"
       printf '%s\n' "$mout"
       if [ "$AMODE" = merge-only ]; then
         say "✅ 여기까지 — 배포는 사람이 → 끝나면 Claude 에게 검증 부탁(그때 refactor-auto verify)"
@@ -405,12 +504,14 @@ EOF
       exit 0 ;;
     3)
       say "⏳ 아직 합치지 않았습니다(자동 $B) — 합치기 스크립트 결과:"
+      [ -n "$MNOTE" ] && say "$MNOTE"
       printf '%s\n' "$mout"
       say "   (자동 허락은 그대로입니다 — 같은 명령을 그대로 다시 실행하세요.)"
       exit 3 ;;
     *)
       end_auto
       say "⛔ 합치지 못했습니다(자동 $B) — 합치기 스크립트 결과:"
+      [ -n "$MNOTE" ] && say "$MNOTE"
       printf '%s\n' "$mout"
       say "$END_PRE"
       exit 1 ;;

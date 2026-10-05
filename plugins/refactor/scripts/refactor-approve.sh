@@ -931,7 +931,8 @@ EOF
 $brecs
 EOF
         if [ "$ball" = 0 ]; then say "❓ 계획서에 $b_ 묶음이 없습니다(카드의 '- **묶음**: $b_ …' 칸을 찾지 못함 — 묶음을 만들려면 /refactor:go 묶음)."; continue; fi
-        if [ "$bn" = 0 ]; then say "ℹ️ $b_ 묶음의 단계가 모두 완료돼 승인할 것이 없습니다."; continue; fi
+        # 0.4.0 보완(검사 C#4): 'B1 자동' 은 묶음 카드가 모두 완료여도 묶음 승인 줄(카드 0개)을 남기고 자동 마감만 켠다(앞서 끝낸 카드의 커밋을 합치러)
+        if [ "$bn" = 0 ] && ! { [ "$BUNDLE_AUTO" = 1 ] && [ "$mode" = "approve" ]; }; then say "ℹ️ $b_ 묶음의 단계가 모두 완료돼 승인할 것이 없습니다."; continue; fi
         if [ "$bn" -gt 5 ]; then say "❓ $b_ 묶음의 안 끝난 카드가 ${bn}장이라 승인하지 않았습니다(한 묶음은 5장까지 — /refactor:go 묶음 으로 나누게 하세요):$bc"; continue; fi
         for x in $bc; do
           while IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st; do
@@ -946,7 +947,9 @@ EOF
         if [ -n "$bwhy" ]; then say "⛔ $b_ 묶음을 승인하지 않았습니다 — $bwhy. /refactor:go 로 계획서를 고치게 한 뒤 다시 승인하세요."; continue; fi
         if [ "$mode" = "approve" ]; then
           blines="$blines$now KST | 묶음 승인 | $b_ | - | 카드 ${bn}개:$bc"$'\n'
-          say "📦 묶음 승인: [$b_${bdesc:+ $bdesc}] 카드 ${bn}개:$bc"
+          if [ "$bn" = 0 ]; then say "📦 묶음 승인: [$b_${bdesc:+ $bdesc}] 카드 0개 — 묶음 카드가 모두 완료돼 자동 마감만 켭니다"
+          else say "📦 묶음 승인: [$b_${bdesc:+ $bdesc}] 카드 ${bn}개:$bc"
+          fi
         else
           blines="$blines$now KST | 묶음 보류 | $b_ | - | 카드 ${bn}개:$bc"$'\n'
           say "⏸ 묶음 승인 취소: [$b_${bdesc:+ $bdesc}] 카드 ${bn}개:$bc"
@@ -1116,7 +1119,17 @@ EOF
         rl_log_seal "$dir"
         aend=$(TZ=KST-9 date -d "@$((aep + 7200))" '+%H:%M' 2>/dev/null || TZ=KST-9 date -r "$((aep + 7200))" '+%H:%M' 2>/dev/null)
         say "🤖 자동 모드 켬: [$ab${bdesc:+ $bdesc}] — 합치는 방식 $amth · 작업 가지 $abr · 승인 뒤 2시간 안${aend:+(~$aend KST)}"
-        say "⚠️ 자동 모드: 이 묶음 카드가 다 끝나면 다음 /refactor:go 한 차례에서 Claude 가 푸시·PR·합치기·배포 확인·라이브 검증까지 혼자 합니다 — 기본 가지에 합쳐지면 운영 배포가 시작됩니다. 멈추려면 아무 말이나 입력하세요(Claude 가 실행 중이면 Esc 로도). 승인 뒤 2시간이 지나면 저절로 꺼집니다."
+        # 허락 파일로 복사한 PROFILE 값 넷(검사 A#11·C#8 — 사람이 승인 화면에서 확인)
+        say "   운영 주소: $aurl"
+        if [ "$ahost" = - ]; then say "   배포 끝 보는 법: 없음(배포는 사람이)"; else say "   배포 끝 보는 법: $ahost"; fi
+        if [ -z "$amark" ]; then say "   판 표지: 없음"
+        elif [ -n "$ampre" ]; then say "   판 표지: $ampath ('$ampre' 바로 뒤 글자)"
+        else say "   판 표지: $ampath (첫 줄)"
+        fi
+        apl=""; arest=$ascr
+        while [ -n "$arest" ]; do aone=${arest%%;*}; [ "$aone" = "$arest" ] && arest="" || arest=${arest#*;}; apl="$apl · ${aone%%"→"*}"; done
+        say "   확인할 화면: ${an}개(${apl# · })"
+        say "⚠️ 자동 모드: 이 묶음 카드가 다 끝나면 다음 /refactor:go 한 차례에서 Claude 가 푸시·PR·합치기·배포 확인·라이브 검증까지 혼자 합니다 — 기본 가지에 합쳐지면 운영 배포가 시작됩니다. 멈추려면 아무 말이나 입력하세요 — Esc 는 지금 도는 명령만 멈추고 자동 모드는 끄지 않습니다(그 뒤 한마디 입력하면 꺼집니다). 승인 뒤 2시간이 지나면 저절로 꺼집니다."
         [ "$amode" = merge-only ] && say "   배포 방식이 '수동'이라 합치기까지만 합니다 — 배포는 사람이 하고, 끝나면 Claude 에게 라이브 검증을 부탁하세요."
         say "   다음: /refactor:go (인자 없이 — 그 한 차례 안에서만 자동으로 마감합니다 · 그 밖의 입력을 하면 자동 모드가 꺼집니다)"
       fi

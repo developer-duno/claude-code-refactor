@@ -82,6 +82,9 @@ re_go0='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])*$'
 if ! [[ $prompt =~ $re_go0 ]]; then
   for af_ in "$rdir"/.turn-auto.*; do [ -e "$af_" ] && rm -f "$af_"; done
 fi
+# 0.4.0 보완(검사 C#1): 자동 마감이 끝날 때 남긴 끝 표시(.turn-autoend.B<n> — 그 차례의 셸 명령 뒤 점검이 자동 줄을 알리지 않게만 씀)는
+#   사람 입력이면(인자 없는 go 포함 · 알림 입력은 위에서 걸러 같은 차례) 모두 지운다 — 이 입력의 스냅숏이 그 줄까지 담으므로 더 필요 없다
+for af_ in "$rdir"/.turn-autoend.*; do [ -e "$af_" ] && rm -f "$af_"; done
 
 T="$rdir/.turn.$sid"
 # 정리(하루 지난 표시 파일·0.2.0 의 세션 공용 .turn)는 외부 프로그램(find·date·rm)을 띄우므로 표시 처리(go 턴의 닫힌 표시 쓰기,

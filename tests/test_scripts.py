@@ -1051,6 +1051,7 @@ def main():
     check_auto_turn_040(check)
     check_auto_flow_040(check)
     check_auto_stage_fail_040(check)
+    check_auto_fix_040(check)
     check_auto_docs_040(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
@@ -4462,7 +4463,8 @@ def check_docs_fix_034(check):
     r7 = next((l for l in ex.splitlines() if l.startswith("- ⑦ 되돌리는 법")), "")
     check("0.3.4 F9② 7-execute ⑦: 이번 차례 첫 단계 커밋엔 승인 기록 — revert 대신 '코드만 되돌려 줘'(0.4.0 낱말: 묶음의 → 이번 차례의)",
           "**이번 차례의 첫 단계**" in r7 and "승인이 풀리거나 봉인이 어긋난다" in r7 and "첫 단계도 \"<ID> 단계 코드만 되돌려 줘\"로" in r7, r7[:200])
-    check("0.3.4 F9② README 사용 순서: 첫 단계 커밋 revert 단서", "묶음의 첫 단계 커밋에는 승인 기록도 들어 있어" in rd, "")
+    check("0.3.4 F9② README 사용 순서: 첫 단계 커밋 revert 단서(0.4.0 낱말: 묶음의 → 이번 차례의)",
+          "이번 차례의 첫 단계 커밋에는 승인 기록도 들어 있어" in rd and "묶음의 첫 단계 커밋" not in rd, "")
     # F9④ README §6-4 한계 두 줄
     a = rd.find("### 6-4. 한계")
     b = rd.find("\n## 7.", a)
@@ -4916,6 +4918,8 @@ def check_bundle_040(check):
                            ("묶음 설명에 /", "- **묶음**: B1 src/pay 도 고침\n"), ("묶음 설명에 대괄호", "- **묶음**: B1 [P9-9] 도 함께\n"),
                            ("묶음 설명이 64 넘음(바이트·글자 둘 다 — macOS awk 는 UTF-8 이면 글자 수)", "- **묶음**: B1 " + "결제안전" * 17 + "\n"),
                            ("묶음 줄 두 번(둘째 줄)", "- **묶음**: B1 결제\n- **묶음**: B1 나머지 전부 고침\n"),
+                           # 보완(검사 A#8): 64바이트 경계 — 값(B1 + 공백 + 설명) 65바이트 · 한글 21자(전체 66바이트)
+                           ("값 65바이트(B1 + 공백 + 62)", "- **묶음**: B1 " + "a" * 62 + "\n"), ("한글 21자(값 전체 66바이트)", "- **묶음**: B1 " + "가" * 21 + "\n"),
                            ("우선 줄 두 번(둘째 줄)", "- **우선**: 12.3 · 빠른 승리\n- **우선**: 1 · 틈날 때\n")]:
             lf(plan_p(d), add_fields040(base_plan, {"P1-1": add}))
             check(f"0.4.0 P2 꼴 밖·다른 줄 → 카드 바뀜: {label}", state_of(d, "P1-1") == "changed", cards(d))
@@ -4923,7 +4927,10 @@ def check_bundle_040(check):
         for label, add in [("설명 없음", "- **묶음**: B12\n"), ("정수 점수", "- **우선**: 7 · 계획된 큰 공사\n"),
                            ("하지 말 것", "- **우선**: 0.5 · 하지 말 것\n"), ("줄 끝 공백", "- **묶음**: B1 결제 안전   \n"),
                            ("설명 64바이트 이하(한글 15자 + 띄어쓰기)", "- **묶음**: B1 " + "결제안전" * 3 + " 로그인과 알림\n"),
-                           ("설명에 가운뎃점·하이픈", "- **묶음**: B1 결제·알림 - 1차\n")]:
+                           ("설명에 가운뎃점·하이픈", "- **묶음**: B1 결제·알림 - 1차\n"),
+                           # 보완(검사 A#8): 64바이트 경계 — 값 63·64바이트 · 한글 20자(값 전체 63바이트)
+                           ("값 63바이트", "- **묶음**: B1 " + "a" * 60 + "\n"), ("값 64바이트", "- **묶음**: B1 " + "a" * 61 + "\n"),
+                           ("한글 20자(값 전체 63바이트)", "- **묶음**: B1 " + "가" * 20 + "\n")]:
             lf(plan_p(d), add_fields040(base_plan, {"P1-1": add}))
             check(f"0.4.0 P2 꼴 맞는 값 → 승인 그대로: {label}", state_of(d, "P1-1") == "approved", cards(d))
     finally:
@@ -4984,7 +4991,7 @@ def check_bundle_040(check):
         out = approve(d, "보류 B1")
         lg = _log033(d).splitlines()
         check("0.4.0 P4 보류 B1 → 묶음 보류 줄 + 카드 둘 보류 · current_bundle B2",
-              lg[-3].endswith("| 묶음 보류 | B1 | - | 카드 2개: P1-1 P3-1") and "| 보류 | P1-1 |" in lg[-2] and "| 보류 | P3-1 |" in lg[-1]
+              len(lg) >= 3 and lg[-3].endswith("| 묶음 보류 | B1 | - | 카드 2개: P1-1 P3-1") and "| 보류 | P1-1 |" in lg[-2] and "| 보류 | P3-1 |" in lg[-1]
               and state_of(d, "P1-1") == "held" and state_of(d, "P3-1") == "held"
               and "current_bundle: B2\n" in (d / "docs/refactor/STATE.md").read_text(encoding="utf-8"), "\n".join(lg[-4:]) + out)
         # 섞임 규칙·없는 묶음·다 끝난 묶음 → ❓ · 아무것도 안 바뀜
@@ -5221,8 +5228,8 @@ def check_docs_040(check):
 
 # ═══ 0.4.0 자동 모드(WA — 설계서 §2-1·§2-2·§2-3·§2-5) ═══════════════════════════════════════════════
 _AUTO_WARN = ("⚠️ 자동 모드: 이 묶음 카드가 다 끝나면 다음 /refactor:go 한 차례에서 Claude 가 푸시·PR·합치기·배포 확인·라이브 검증까지 혼자 합니다"
-              " — 기본 가지에 합쳐지면 운영 배포가 시작됩니다. 멈추려면 아무 말이나 입력하세요(Claude 가 실행 중이면 Esc 로도)."
-              " 승인 뒤 2시간이 지나면 저절로 꺼집니다.")
+              " — 기본 가지에 합쳐지면 운영 배포가 시작됩니다. 멈추려면 아무 말이나 입력하세요 — Esc 는 지금 도는 명령만 멈추고 자동 모드는 끄지 않습니다"
+              "(그 뒤 한마디 입력하면 꺼집니다). 승인 뒤 2시간이 지나면 저절로 꺼집니다.")
 
 
 class _Site040:
@@ -5414,6 +5421,8 @@ def check_auto_approve_040(check):
               and _lib033(d, 'rl_log_intact "$R" && echo yes')[0] == "yes\n", "\n".join(lg[-5:]))
         check("0.4.0 A1 승인 화면 경고 = 설계서 §2-1 글자 그대로 · 다음 = 인자 없는 /refactor:go", _AUTO_WARN in out and "🤖 자동 모드 켬: [B1 결제 안전]" in out
               and "다음: /refactor:go (인자 없이" in out, out)
+        check("0.4.0 보완 A8 승인 화면에 복사한 PROFILE 값 넷(운영 주소·배포 끝 보는 법·판 표지·확인할 화면 N개(경로))",
+              "\n   운영 주소: https://shop.example.com\n   배포 끝 보는 법: vercel\n   판 표지: /version.txt (첫 줄)\n   확인할 화면: 2개(/ · /shop)\n⚠️ 자동 모드:" in out, out)
         check("0.4.0 A1 자동 줄은 승인 상태 계산 밖(4칸 -) — 실행 대기 그대로", "▶ 실행 대기: [B1 결제 안전] P1-1 P3-1 (2)" in sh("refactor-status", d), sh("refactor-status", d))
         # 방식 세 갈래: 인자(rebase — PROFILE 보다 먼저) · 'merge' 낱말 · PROFILE 없음 → ❓
         out = _ap040(d, "B1 자동 rebase", path_front=[fg])
@@ -5579,6 +5588,24 @@ def check_auto_docs_040(check):
     check("0.4.0 A11 README §6-5 자동 모드(네 조건·푸시·합치기 앞까지·끝까지·멈추는 법·수동 배포·한계 둘)", all(n in s65 for n in need),
           str([n for n in need if n not in s65]))
     check("0.4.0 A11 README §4 approve 표에 B1 자동 → §6-5", "`B1 자동`(묶음 승인 + 자동 모드" in rd and "[§6-5](#6-5-자동-모드)" in rd, "")
+    # 0.4.0 보완(FA — 검사 A·C): Esc 문구 · ⓒ 알림 차례 · 기준선 줄 · PROFILE 복사용 예시 · playwright 실행 환경 · preflight 뒤 커밋 · 끝 표시
+    esc = "멈추려면 아무 말이나 입력하세요 — Esc 는 지금 도는 명령만 멈추고 자동 모드는 끄지 않습니다(그 뒤 한마디 입력하면 꺼집니다)."
+    need = [esc, "(Claude 가 실행 중이면 Esc 로도)", "사람이 친 인자 없는 go 한 번 — 그 뒤 작업반·백그라운드 알림으로 이어지는 차례도 같은 차례",
+            "기준선 결과 줄은 Claude 가 실행 기록에 적은 글 — 사람이 보는 기준선 실행 결과와 같은지는 보고로 확인",
+            "제목이 `test: 기준선` 으로 시작하고 `tests/baseline/`·`docs/refactor/` 아래 파일만 바꾼", "preflight 뒤에 새 커밋이 생김",
+            "  ## 자동 모드 (👤 사람이 적음)\n  - 운영 주소: https://shop.example.com\n  - 배포 끝 보는 법: vercel\n  - 판 표지: `/version.txt`\n  - 확인할 화면:",
+            "  | 경로 | 기대 글자 |\n  |---|---|\n", "안전 실행기 밖에서 실제 환경 변수로 실행합니다(읽기만)", "커밋 해시가 들어 있는 것을 권장", "`카드 0개`"]
+    check("0.4.0 보완 A7·A9·A10·A12 README §6-5(Esc 는 자동 모드를 끄지 않음 · ⓒ 알림 차례 · 기준선 줄 · 복사용 예시 · playwright · 판 표지 권장)",
+          all(n in s65 for n in need[:1] + need[2:]) and need[1] not in s65
+          and s65.count("Esc 는 지금 도는 명령만 멈추고 자동 모드는 끄지 않습니다(그 뒤 한마디 입력하면 꺼집니다)") == 2,
+          str([n for n in need[:1] + need[2:] if n not in s65]) + str(need[1] in s65))
+    check("0.4.0 보완 A7 approve SKILL 경고 = 새 Esc 문구 · 복사한 PROFILE 값 네 줄 전하기",
+          esc in ap and "(Claude 가 실행 중이면 Esc 로도). 승인 뒤" not in ap and "`운영 주소:`·`배포 끝 보는 법:`·`판 표지:`·`확인할 화면:`" in ap, "")
+    check("0.4.0 보완 A5 PROFILE 템플릿 판 표지: 커밋 해시가 든 표지 권장(표지만 보는 호스팅)",
+          "커밋 해시가 들어 있는 표지를 권장(railway·cloudflare·netlify·주소 표지는 판 표지만 봄)" in pf, "")
+    check("0.4.0 보완 A1·A4·A9 7-execute 8: preflight 뒤 커밋 금지 · 끝 표시 파일 · 기준선 커밋 꼴",
+          "**preflight 뒤에는 커밋하지 않는다**" in s8 and "`⛔ preflight 뒤에 새 커밋이 생겼습니다`" in s8 and "`.turn-autoend.*`" in s8
+          and "`test: 기준선` 으로 시작하고 `tests/baseline/`·`docs/refactor/` 아래 파일만" in s8, "")
 
 
 _SHA040 = "ab" * 20
@@ -5615,6 +5642,8 @@ def check_auto_flow_040(check):
         pf = rd / ".turn-autopre.B1"
         check("0.4.0 A4 preflight 통과 → 0 · ✅ 첫 줄 · 판 표지 옛 값 기록(.turn-autopre.B1 2줄)",
               rc == 0 and out.startswith("✅ 자동 마감 시작 전 확인 끝(B1)") and pf.exists() and pf.read_text(encoding="utf-8").split("\n")[1] == "build-old-1", out)
+        check("0.4.0 보완 A1 preflight → .turn-autopre.B1 3줄 = 그때 커밋(40자)",
+              pf.exists() and pf.read_text(encoding="utf-8").split("\n")[2] == _git034(d, "rev-parse", "HEAD"), pf.read_text(encoding="utf-8") if pf.exists() else "")
         rc0, se = _pc040(d)
         check("0.4.0 A10 preflight 뒤(기록 그대로) post-check 승인 기록 알림 없음", "승인 기록" not in se, se)
         out, rc = _auto040(d, "push", [fg, noplay])
@@ -5681,8 +5710,17 @@ def check_auto_flow_040(check):
               gets and all("?_=" in r[1] and r[2].get("Cache-Control") == "no-cache" for r in gets) and len(gets) == len(site.reqs), str(site.reqs[:3]))
         out, rc = _auto040(d, "verify", [fm, noplay, vc])
         check("0.4.0 A9 verify 끝난 뒤 다시 → 1(허락 없음)", rc == 1 and "합친 뒤 허락(.turn-merged)이 없습니다" in out, out)
+        ef = rd / ".turn-autoend.B1"
+        efl = ef.read_text(encoding="utf-8").split("\n") if ef.exists() else []
         rc0, se = _pc040(d)
-        check("0.4.0 A10 허락 파일이 모두 끝난 뒤 → post-check 는 이번 턴의 자동 줄도 알림(예외는 허락이 살아 있을 때만)", rc0 == 2 and "승인 기록" in se, se)
+        check("0.4.0 보완 A4 성공한 자동 마감 끝 → 끝 표시 .turn-autoend.B1(① B1 ③ s1 ④ 가지 ⑤ *) · post-check 조용(헛경보 없음)",
+              len(efl) >= 5 and efl[0] == "B1" and efl[2] == "s1" and efl[3] == "refactor/x" and efl[4] == "*" and rc0 == 0 and "승인 기록" not in se, str(efl) + se)
+        _go040(d, prompt="고마워 다음은?")
+        check("0.4.0 보완 A4 다음 사람 입력 → 끝 표시 지움", not ef.exists(), "")
+        with open(rd / "APPROVALS.log", "a", encoding="utf-8", newline="\n") as fh:
+            fh.write("2026-10-05 12:00 KST | 푸시 | refactor/x | - | 자동 B1 으로 실행\n")
+        rc0, se = _pc040(d)
+        check("0.4.0 보완 A4 사람 입력 뒤 같은 자동 꼴 줄이 더해짐(허락·끝 표시 없음) → post-check 알림", rc0 == 2 and "승인 기록" in se, se)
     finally:
         site.close()
         for m_ in made:
@@ -5956,6 +5994,239 @@ def check_auto_stage_fail_040(check):
             out, rc = _auto040(dn, stg, [fgx, noplay])
             check(f"0.4.0 A12 반대: 'B1'(자동 없음) 묶음 → {stg} 1 · 허락 없음", rc == 1 and "자동 허락이 없거나 끝났습니다" in out, out)
         check("0.4.0 A12 반대: 그 사이 gh·push 0", _calls035(fgx) == [] and "| 푸시 |" not in _log033(dn), str(_calls035(fgx)))
+    finally:
+        site.close()
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
+def check_auto_fix_040(check):
+    """0.4.0 보완(FA — 검사 A·C): A1 preflight 뒤 새 커밋 → push·merge ⛔ · A2 승인 기록의 자동 줄 대조(auto·merge.sh) · A3 merge.sh 가지·세션·go= ·
+    A4 거절 뒤 끝 표시·끝 표시는 허락이 아님 · A5 판 표지 옛 값을 합치기 직전 값으로 · A6 완료 카드가 섞인 묶음 · A9 기준선 커밋 꼴 ·
+    A11 제목이 ID 뿐 · .turn-merged 2시간 · push 중 기록에 줄이 낌."""
+    made = []
+    site = _Site040()
+    g = _git034
+    try:
+        _site_old040(site)
+        noplay = _bin040(made, npx="exit 1")
+
+        def rdy(done=True):
+            d, bare = _mkauto040(made, site.url)
+            fg = _fake035(made)
+            _ready040(d, fg, done=done)
+            return d, bare, fg
+
+        def put_af(d, a):
+            lf(d / "docs/refactor/.turn-auto.B1", "\n".join(a))
+
+        def mgrant(d, br, head):
+            r = d / "docs/refactor"
+            lf(r / ".turn-merge.s1", f"merge {br} - squash {head}\n{int(time.time())}\nbash \"{_MG_PLUG}/hooks/run.sh\" refactor-merge \"{d.as_posix()}\" s1\n")
+            with open(r / "APPROVALS.log", "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"2026-10-05 12:00 KST | 합치기 | 허락 {br} PR(지금 가지) (squash) @{head[:7]} | - | 자동 B1 으로 실행\n")
+            _lib033(d, 'rl_log_seal "$R"')
+
+        # ── A1 preflight 뒤 새 커밋 → push ⛔ · merge ⛔(합치기 허락·gh 0) ─────────────────────────
+        d, bare, fg = rdy()
+        out, rc = _auto040(d, "preflight", [fg, noplay])
+        check("0.4.0 보완 A1 preflight → 0 · '올릴 커밋' 안내", rc == 0 and "올릴 커밋:" in out, out)
+        lf(d / "src_P1-1.txt", "P1-1 more\n")
+        g(d, "add", "--", "src_P1-1.txt"); g(d, "commit", "-qm", "refactor: P1-1 더 고침")
+        out, rc = _auto040(d, "push", [fg, noplay])
+        rb = subprocess.run(["git", "--git-dir", str(bare), "rev-parse", "-q", "--verify", "refs/heads/refactor/x"], capture_output=True).stdout.decode().strip()
+        check("0.4.0 보완 A1 preflight 뒤 커밋(묶음 안 제목이어도) → push 1 · ⛔ 새 커밋 · 자동 끝 · 원격에 안 올림",
+              rc == 1 and "⛔ preflight 뒤에 새 커밋이 생겼습니다 — 묶음 밖 커밋 확인을 다시 하려면 사람이 /refactor:approve B1 자동 을 다시" in out
+              and _af040(d) is None and rb == "", out)
+        d2, _, fg2 = rdy()
+        a2 = _af040(d2)
+        _auto040(d2, "preflight", [fg2, noplay])
+        out, rc = _auto040(d2, "push", [fg2, noplay])
+        check("0.4.0 보완 A1 반대: preflight 때 커밋 그대로 → push 0", rc == 0, out)
+        lf(d2 / "z.txt", "z\n"); g(d2, "add", "--", "z.txt"); g(d2, "commit", "-qm", "refactor: P3-1 검사 고침")
+        fm2 = _fake035(made, head=g(d2, "rev-parse", "HEAD"), headRefName="refactor/x")
+        out, rc = _auto040(d2, "merge", [fm2, noplay])
+        check("0.4.0 보완 A1 push 뒤 커밋 → merge 1 · ⛔ 새 커밋 · 합치기 허락 안 만듦 · gh 0",
+              rc == 1 and "preflight 뒤에 새 커밋이 생겼습니다" in out and not (d2 / "docs/refactor/.turn-merge.s1").exists()
+              and _calls035(fm2) == [] and "| 합치기 |" not in _log033(d2), out)
+
+        # ── A2 승인 기록의 자동 줄 대조 ───────────────────────────────────────────────
+        d3, _, fg3 = rdy()
+        r3 = d3 / "docs/refactor"
+        a3 = _af040(d3)
+        lg3 = _log033(d3)
+        _auto040(d3, "preflight", [fg3, noplay])
+        nolog = "".join(l for l in lg3.splitlines(True) if "| 자동 | B1 |" not in l)
+        lf(r3 / "APPROVALS.log", nolog); _lib033(d3, 'rl_log_seal "$R"')
+        for stg in ("push", "merge", "preflight"):
+            put_af(d3, a3)
+            out, rc = _auto040(d3, stg, [fg3, noplay])
+            check(f"0.4.0 보완 A2 기록의 '| 자동 | B1 |' 줄 지움(봉인 다시 맞춤 — 허락 파일만 꾸며 낸 꼴) → {stg} 1 · ⛔ · 허락 지움",
+                  rc == 1 and "자동 허락이 승인 기록과 맞지 않습니다" in out and _af040(d3) is None, out)
+        lf(r3 / "APPROVALS.log", lg3); _lib033(d3, 'rl_log_seal "$R"')
+        for label, i, v in [("시각 다름", 1, str(int(a3[1]) - 5)), ("방식 다름", 4, "rebase")]:
+            b = list(a3); b[i] = v
+            put_af(d3, b)
+            out, rc = _auto040(d3, "preflight", [fg3, noplay])
+            check(f"0.4.0 보완 A2 허락 파일 {label}(기록 줄과 다름) → preflight 1 · ⛔", rc == 1 and "승인 기록과 맞지 않습니다" in out, out)
+        put_af(d3, a3)
+        out, rc = _auto040(d3, "preflight", [fg3, noplay])
+        check("0.4.0 보완 A2 반대: 기록 줄 = 허락 파일 → preflight 0", rc == 0, out)
+
+        # ── A3·A2·A4 merge.sh 자동 꼴: 가지·세션·go=·기록 줄·끝 표시 ────────────────────────────
+        d7, _, fg7 = rdy()
+        r7 = d7 / "docs/refactor"
+        a7 = _af040(d7)
+        h7 = g(d7, "rev-parse", "HEAD")
+        g(d7, "checkout", "-q", "-b", "other")
+        mgrant(d7, "other", h7)
+        fo = _fake035(made, head=h7, headRefName="other")
+        out, rc, _ = _mg035(d7, fg=fo)
+        check("0.4.0 보완 A3 merge.sh 자동 꼴: 허락의 가지(refactor/x)와 합치기 허락의 가지(other)가 다름 → ⛔ · gh 0",
+              rc == 1 and "자동 모드 합치기 허락이 맞지 않습니다" in out and _calls035(fo) == [], out)
+        g(d7, "checkout", "-q", "refactor/x")
+        cases = [("세션 다름(s9)", lambda: put_af(d7, a7[:2] + ["s9"] + a7[3:])),
+                 ("go= 비어 있음(자동 차례 전)", lambda: put_af(d7, a7[:10] + ["go="] + a7[11:])),
+                 ("기록의 자동 줄 없음(봉인 다시 맞춤)", None),
+                 ("허락 없음 + 끝 표시만", None)]
+        for label, setup in cases:
+            put_af(d7, a7)
+            if setup:
+                setup()
+            if label.startswith("기록"):
+                t = _log033(d7)
+                lf(r7 / "APPROVALS.log", "".join(l for l in t.splitlines(True) if "| 자동 | B1 |" not in l)); _lib033(d7, 'rl_log_seal "$R"')
+            if label.startswith("허락 없음"):
+                (r7 / ".turn-auto.B1").unlink()
+                lf(r7 / ".turn-autoend.B1", f"B1\n{int(time.time())}\ns1\nrefactor/x\nsquash\n")
+            mgrant(d7, "refactor/x", h7)
+            fx = _fake035(made, head=h7, headRefName="refactor/x")
+            out, rc, _ = _mg035(d7, fg=fx)
+            check(f"0.4.0 보완 A3 merge.sh 자동 꼴: {label} → ⛔ · gh 0", rc == 1 and "자동 모드 합치기 허락이 맞지 않습니다" in out and _calls035(fx) == [], out)
+        out, rc = _auto040(d7, "preflight", [fg7, noplay])
+        check("0.4.0 보완 A4 끝 표시만 있음 → 자동 단계(preflight) 1 · 허락 없음(끝 표시는 허락이 아님)",
+              rc == 1 and "자동 허락이 없거나 끝났습니다" in out, out)
+        # 반대(A3·A2 가 맞는 허락까지 막지 않음): 새로 B1 자동(기록 줄) + go → 합치기 0
+        (r7 / ".turn-autoend.B1").unlink(missing_ok=True)
+        _ap040(d7, "B1 자동", path_front=[fg7]); _go040(d7)
+        mgrant(d7, "refactor/x", h7)
+        fx = _fake035(made, head=h7, headRefName="refactor/x")
+        out, rc, _ = _mg035(d7, fg=fx)
+        check("0.4.0 보완 A3 반대: 허락·기록·가지·세션·go= 모두 맞음 → merge.sh 0 · 합침", rc == 0 and "✅ 합쳤습니다" in out, out)
+
+        # ── A4 합치기 전 거절(검사 빨강)로 허락을 지울 때 끝 표시 → post-check 조용 ───────────────────
+        d4, _, fg4 = rdy()
+        _auto040(d4, "preflight", [fg4, noplay])
+        out0, rc0 = _auto040(d4, "push", [fg4, noplay])
+        h4 = g(d4, "rev-parse", "HEAD")
+        ff = _fake035(made, head=h4, headRefName="refactor/x",
+                      statusCheckRollup=[{"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "FAILURE"}])
+        out, rc = _auto040(d4, "merge", [ff, noplay])
+        ef = d4 / "docs/refactor/.turn-autoend.B1"
+        efl = ef.read_text(encoding="utf-8").split("\n") if ef.exists() else []
+        pc, se = _pc040(d4)
+        check("0.4.0 보완 A4 push 뒤 merge 거절(검사 빨강) → 허락 지움 + 끝 표시(④ 가지 ⑤ squash) → post-check 조용(푸시·합치기 줄)",
+              rc0 == 0 and rc == 1 and _af040(d4) is None and efl[:1] == ["B1"] and efl[3:5] == ["refactor/x", "squash"] and "승인 기록" not in se,
+              out + str(efl) + se)
+
+        # ── A5 판 표지 옛 값: merge 첫 호출이 합치기 직전 값으로 → deploy-wait 는 그 뒤 바뀜을 기다림 ─────────
+        d5, _, fg5 = rdy()
+        _auto040(d5, "preflight", [fg5, noplay])
+        site.set("/version.txt", "build-mid-1\n")   # preflight 뒤 앞선 배포가 끝나 표지가 바뀜
+        fm5 = _fake035(made, head=g(d5, "rev-parse", "HEAD"), headRefName="refactor/x")
+        (fm5 / "mc.out").write_text(_SHA040 + "\n")
+        out, rc = _auto040(d5, "merge", [fm5, noplay])
+        m5 = (d5 / "docs/refactor/.turn-merged.B1").read_text(encoding="utf-8").split("\n") if (d5 / "docs/refactor/.turn-merged.B1").exists() else []
+        check("0.4.0 보완 A5 merge 첫 호출: 판 표지를 다시 읽어 .turn-merged ⑩ = 합치기 직전 값(build-mid-1)", rc == 0 and len(m5) > 9 and m5[9] == "build-mid-1", out + str(m5))
+        vc = _bin040(made, vercel=f'case "$*" in *"githubCommitSha={_SHA040}"*) echo "  https://app-x1.vercel.app  Ready  Production" ;; esac; exit 0')
+        out, rc = _auto040(d5, "deploy-wait", [fm5, noplay, vc])
+        check("0.4.0 보완 A5 표지가 합치기 직전 값 그대로(vercel READY) → deploy-wait 3 · 판 표지 그대로", rc == 3 and "판 표지 그대로" in out, out)
+        site.set("/version.txt", "build-new-2\n")
+        out, rc = _auto040(d5, "deploy-wait", [fm5, noplay, vc])
+        check("0.4.0 보완 A5 그 뒤 표지가 바뀜 → deploy-wait 0 · build-mid-1 → build-new-2", rc == 0 and "build-mid-1 → build-new-2" in out, out)
+        _site_old040(site)
+        d5b, _, fg5b = rdy()
+        _auto040(d5b, "preflight", [fg5b, noplay])
+        site.routes.pop("/version.txt")
+        fm5b = _fake035(made, head=g(d5b, "rev-parse", "HEAD"), headRefName="refactor/x")
+        out, rc = _auto040(d5b, "merge", [fm5b, noplay])
+        m5b = (d5b / "docs/refactor/.turn-merged.B1").read_text(encoding="utf-8").split("\n") if (d5b / "docs/refactor/.turn-merged.B1").exists() else []
+        check("0.4.0 보완 A5 합치기 직전에 표지를 못 읽음 → preflight 값 그대로(build-old-1) + 결과에 한 줄 · 합침은 그대로",
+              rc == 0 and "합치기 직전에 판 표지를 다시 읽지 못해 preflight 때 값을 씁니다" in out and len(m5b) > 9 and m5b[9] == "build-old-1", out + str(m5b))
+        _site_old040(site)
+
+        # ── A6 완료 카드가 섞인 묶음 · 모두 완료인 묶음 ───────────────────────────────────────
+        d6, _ = _mkauto040(made, site.url)
+        fg6 = _fake035(made)
+        _done033(d6, "P1-1")
+        lf(d6 / "src_P1-1.txt", "P1-1\n"); g(d6, "add", "--", "src_P1-1.txt", "docs"); g(d6, "commit", "-qm", "refactor: P1-1 금액")
+        _ap040(d6, "B1 자동", path_front=[fg6])
+        _done033(d6, "P3-1")
+        lf(d6 / "src_P3-1.txt", "P3-1\n"); g(d6, "add", "--", "src_P3-1.txt", "docs"); g(d6, "commit", "-qm", "refactor: P3-1 결제 뒤")
+        lf(d6 / "docs/refactor/EXECUTION_LOG.md", "# 실행 기록\n\n## P3-1\n- 기준선 결과: P3-1 통과 7/7\n")
+        _go040(d6)
+        lg6 = _log033(d6).splitlines()
+        out, rc = _auto040(d6, "preflight", [fg6, noplay])
+        check("0.4.0 보완 A6 승인 전에 끝낸 묶음 카드(P1-1)의 커밋이 가지에 있음 → preflight 0(묶음 칸이 B1 인 모든 카드 허용)",
+              any(x.endswith("| 묶음 승인 | B1 | - | 카드 1개: P3-1") for x in lg6) and rc == 0, out + "\n".join(lg6[-4:]))
+        d6b, _ = _mkauto040(made, site.url)
+        fg6b = _fake035(made)
+        out = _ap040(d6b, "B3 자동", path_front=[fg6b])
+        a6 = _af040(d6b, "B3")
+        lg6 = _log033(d6b).splitlines()
+        check("0.4.0 보완 A6 묶음 카드가 모두 완료(B3) + 'B3 자동' → 묶음 승인 줄 '카드 0개' + 자동 허락 · 안내",
+              a6 is not None and a6[0] == "B3" and any(x.endswith("| 묶음 승인 | B3 | - | 카드 0개:") for x in lg6)
+              and "| 자동 | B3 | - |" in lg6[-1] and "카드 0개 — 묶음 카드가 모두 완료돼 자동 마감만 켭니다" in out and "🤖 자동 모드 켬: [B3" in out, out + "\n".join(lg6[-3:]))
+        lf(d6b / "src_P1-3.txt", "P1-3\n"); g(d6b, "add", "--", "src_P1-3.txt"); g(d6b, "commit", "-qm", "refactor: P1-3 끝난 단계")
+        lf(d6b / "docs/refactor/EXECUTION_LOG.md", "# 실행 기록\n\n## P1-3\n- 기준선 결과: P1-3 통과 3/3\n")
+        _go040(d6b)
+        out, rc = _auto040(d6b, "preflight", [fg6b, noplay], b="B3")
+        check("0.4.0 보완 A6 카드 0개 묶음(B3) → preflight 0(완료 카드 커밋 · 기준선 결과 = 계획서의 그 묶음 마지막 카드)", rc == 0 and "모두 완료" in out, out)
+        d6c, _ = _mkauto040(made, site.url)
+        out = _ap040(d6c, "B3", path_front=[fg6b])
+        check("0.4.0 보완 A6 반대: 'B3'(자동 없음) 모두 완료 → 예전대로 ℹ️ 승인할 것 없음 · 기록 줄 없음",
+              "모두 완료돼 승인할 것이 없습니다" in out and "| 묶음 승인 | B3 |" not in _log033(d6c), out)
+
+        # ── A9·A11 기준선 커밋 꼴 · 제목이 ID 뿐 ──────────────────────────────────────────
+        d9, _, fg9 = rdy()
+        a9 = _af040(d9)
+        (d9 / "tests/baseline").mkdir(parents=True, exist_ok=True)
+        lf(d9 / "tests/baseline/x.test.ts", "t\n"); lf(d9 / "docs/refactor/BASELINE.md", "# 기준선\n")
+        g(d9, "add", "--", "tests/baseline/x.test.ts", "docs/refactor/BASELINE.md"); g(d9, "commit", "-qm", "test: 기준선 테스트 추가")
+        out, rc = _auto040(d9, "preflight", [fg9, noplay])
+        check("0.4.0 보완 A9 기준선 커밋(tests/baseline·docs/refactor 만) → 묶음 안 · preflight 0", rc == 0, out)
+        lf(d9 / "src_P1-1.txt", "id only\n"); g(d9, "add", "--", "src_P1-1.txt"); g(d9, "commit", "-qm", "refactor: P1-1")
+        put_af(d9, a9)
+        out, rc = _auto040(d9, "preflight", [fg9, noplay])
+        check("0.4.0 보완 A11 제목이 'refactor: P1-1'(ID 뒤 글 없음) → 묶음 밖 1개", rc == 1 and "묶음 밖 커밋이 1개" in out and "refactor: P1-1)" in out, out)
+        lf(d9 / "a.txt", "code\n"); g(d9, "add", "--", "a.txt"); g(d9, "commit", "-qm", "test: 기준선 테스트 추가")
+        put_af(d9, a9)
+        out, rc = _auto040(d9, "preflight", [fg9, noplay])
+        check("0.4.0 보완 A9 이름만 기준선 커밋(코드 a.txt 를 바꿈) → 묶음 밖(2개 — 기준선 제목 포함)",
+              rc == 1 and "묶음 밖 커밋이 2개" in out and "test: 기준선 테스트 추가" in out, out)
+
+        # ── A11 .turn-merged 2시간 → deploy-wait·verify ⛔ ──────────────────────────────────
+        site.set("/version.txt", "build-new-2\n")
+        _mf040(d9, site.url, host="marker", ago=7300)
+        out, rc = _auto040(d9, "deploy-wait", [fg9, noplay], extra={"REFACTOR_AUTO_DEPLOY_LIMIT": "1800"})
+        check("0.4.0 보완 A11 합친 지 2시간 지남 → deploy-wait 1 · ⛔ 2시간", rc == 1 and "합친 지 2시간이 지났습니다" in out, out)
+        _mf040(d9, site.url, deployed="build-new-2", ago=7300)
+        out, rc = _auto040(d9, "verify", [fg9, noplay])
+        check("0.4.0 보완 A11 합친 지 2시간 지남 → verify 1 · ⛔ 2시간 · 허락 지움", rc == 1 and "합친 지 2시간이 지났습니다" in out
+              and not (d9 / "docs/refactor/.turn-merged.B1").exists(), out)
+        _site_old040(site)
+
+        # ── A11 push 중 기록에 줄이 낌(원격 받기 훅이 기록에 한 줄) → ⛔ · 푸시 줄 안 씀 ───────────────────
+        d8, bare8, fg8 = rdy()
+        hk = pathlib.Path(bare8) / "hooks/pre-receive"
+        hk.write_bytes(("#!/bin/sh\nprintf '%s\\n' '2026-10-05 12:00 KST | 메모 | x | - | 다른 손' >> '" + (d8 / "docs/refactor/APPROVALS.log").as_posix() + "'\nexit 0\n").encode("utf-8"))
+        os.chmod(hk, 0o755)
+        _auto040(d8, "preflight", [fg8, noplay])
+        out, rc = _auto040(d8, "push", [fg8, noplay])
+        lg8 = _log033(d8).splitlines()
+        check("0.4.0 보완 A11 push 하는 동안 기록에 줄이 낌 → 1 · ⛔ 올리는 동안 바뀜 · 푸시 줄 안 씀 · 자동 끝(끝 표시 없음)",
+              rc == 1 and "올리는 동안 바뀜" in out and lg8[-1].endswith("| 메모 | x | - | 다른 손") and not any("| 푸시 |" in x for x in lg8)
+              and _af040(d8) is None and not (d8 / "docs/refactor/.turn-autoend.B1").exists(), out + "\n".join(lg8[-2:]))
     finally:
         site.close()
         for m_ in made:

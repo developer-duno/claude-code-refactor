@@ -50,6 +50,8 @@ NL=$'\n'; TAB=$'\t'
 
 # 0.4.0 자동 모드 예외(§2-3 — 결정 가): 이번 턴에 더해진 기록 줄이 전부 "| - | 자동 B<n> 으로 실행" 꼴이고(자동 모드 스크립트의 푸시·합치기 줄)
 #   그 B<n> 의 유효한 자동 허락(.turn-auto.B<n> 또는 .turn-merged.B<n> — 1줄 = B<n> · 2줄 = 만든 시각 0~7200초 안 · 3줄 = 이 세션 ID)이 있으면 0.
+#   0.4.0 보완(검사 C#1): 자동 마감이 끝나 허락을 지울 때 남긴 끝 표시 .turn-autoend.B<n>(① B ② 끝난 시각 ③ 세션 ④ 가지 ⑤ 방식 — 다음 사람 입력에
+#   입력 훅이 지움)도 같은 근거로 센다(성공한 자동 마감 끝의 헛경보를 없앰). 끝 표시는 이 점검에만 쓰고 자동 단계의 허락이 아니다.
 #   턴 시작 때 기록의 줄 수(.turn-dirty 의 APPROVALS_N)만큼의 앞부분 지문이 그때 지문과 같아야 한다(앞 줄을 고치거나 지운 것은 예외 아님)
 auto_only_lines() {
   local n="" gi="" f b l1 l2 l3 x i br mt nw="" pre ln any=0 re_p re_m lb lbr lmt
@@ -57,8 +59,8 @@ auto_only_lines() {
   case "$NL$snap" in *"${NL}APPROVALS_N$TAB"*) n=${snap#*APPROVALS_N"$TAB"}; n=${n%%"$NL"*} ;; *) return 1 ;; esac
   [[ $n =~ ^[0-9]{1,9}$ ]] && [ -n "$sid" ] && [ -f "$rdir/APPROVALS.log" ] || return 1
   # 보안 검사(10-05): 허락마다 "B|가지|방식" 을 모은다 — .turn-auto 는 ⑪ go= 가 채워졌을 때만(자동 차례 시작) · ④ 가지 ⑤ 방식,
-  #   .turn-merged 는 ⑫ 가지 · 방식은 셋 중 아무거나(합친 뒤에는 방식이 파일에 없음)
-  for f in "$rdir"/.turn-auto.B* "$rdir"/.turn-merged.B*; do
+  #   .turn-merged 는 ⑫ 가지 · 방식은 셋 중 아무거나(합친 뒤에는 방식이 파일에 없음) · .turn-autoend 는 ④ 가지 ⑤ 방식(합친 뒤 끝이면 '*')
+  for f in "$rdir"/.turn-auto.B* "$rdir"/.turn-merged.B* "$rdir"/.turn-autoend.B*; do
     [ -f "$f" ] || continue
     b=${f##*.}
     [[ $b =~ ^B[0-9]{1,6}$ ]] || continue
@@ -70,6 +72,7 @@ auto_only_lines() {
     [ $((nw - 10#$l2)) -ge 0 ] && [ $((nw - 10#$l2)) -le 7200 ] || continue
     case "$f" in
       */.turn-auto.*) [[ ${L[10]:-} =~ ^go=[0-9]{1,12}$ ]] || continue; br=${L[3]:-}; mt=${L[4]:-} ;;
+      */.turn-autoend.*) br=${L[3]:-}; mt=${L[4]:-} ;;
       *) br=${L[11]:-}; mt="*" ;;
     esac
     [[ $br =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || continue
