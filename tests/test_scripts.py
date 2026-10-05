@@ -6522,6 +6522,34 @@ def check_auto_041(check):
         check("0.4.1 R4 사람 꼴: 허락 직후 시작 · 첫 조회(도는 중) 때 시계가 1801초 뒤로 → 다음 바퀴 앞에서 30분 넘음 → 1 · ⛔ 합치기 허락이 없거나 끝났습니다 · 조회 1번 · 합치기 0번 · 허락 지움",
               rc == 1 and "⛔ 합치기 허락이 없거나 끝났습니다" in out and k[0] == 1 and k[2] == 0 and not _gf035(dh).exists()
               and any(c == "+%s" for c in _calls040(fd, "date")), out)
+        # ── R4 합치기 직전 재확인(검사 A 🟡): 초록 두 번으로 되풀이를 빠져나온 뒤 비교 조회(compare) 첫 호출 때 시계를 넘긴다 →
+        #    바퀴 앞 재확인은 이미 지났고 합치기 직전 재확인만 잡는 꼴(사람 꼴 +1801 · 자동 꼴 +7201) ───────────────────
+        dq = _mk035()
+        made.append(str(dq))
+        _grant035(dq, "합치기 68 rebase", made=made)
+        fdq = _bin040(made, date='r=/bin/date; [ -x "$r" ] || r=/usr/bin/date\n'
+                                 'if [ "$*" = "+%s" ] && [ -f "$d/shift" ]; then echo $(( $("$r" +%s) + $(cat "$d/shift") )); else exec "$r" "$@"; fi')
+        fq = _fake035(made, head=g(dq, "rev-parse", "HEAD"))
+        (fq / "compare.hook").write_text(f'printf 1801 > "{(fdq / "shift").as_posix()}"\n', newline="")
+        (fq / "compare.hookn").write_text("1", newline="")
+        out, rc, _ = _mg035(dq, path=os.pathsep.join([str(fq), str(fdq), env()["PATH"]]))
+        k = _kinds035(_calls035(fq))
+        check("0.4.1 R4 사람 꼴 합치기 직전: 초록 두 번 뒤 비교 조회 때 시계가 1801초 뒤로 → 1 · ⛔ 합치기 허락이 없거나 끝났습니다 · 조회 2번 · 비교 1번 · 합치기 0번 · 허락 지움",
+              rc == 1 and "⛔ 합치기 허락이 없거나 끝났습니다" in out and k == (2, 1, 0) and not _gf035(dq).exists(), out)
+        da, _ = _mkauto040(made, site.url)
+        ra = da / "docs/refactor"
+        fga = _fake035(made)
+        _ready040(da, fga)
+        out0, rc0 = _auto040(da, "preflight", [fga, noplay])
+        fda = _bin040(made, date='r=/bin/date; [ -x "$r" ] || r=/usr/bin/date\n'
+                                 'if [ "$*" = "+%s" ] && [ -f "$d/shift" ]; then echo $(( $("$r" +%s) + $(cat "$d/shift") )); else exec "$r" "$@"; fi')
+        fpa = _fake035(made, head=g(da, "rev-parse", "HEAD"), headRefName="refactor/x")
+        (fpa / "compare.hook").write_text(f'printf 7201 > "{(fda / "shift").as_posix()}"\n', newline="")
+        (fpa / "compare.hookn").write_text("1", newline="")
+        out, rc = _auto040(da, "merge", [fpa, fda, noplay])
+        k = _kinds035(_calls035(fpa))
+        check("0.4.1 R4 자동 꼴 합치기 직전: 초록 두 번 뒤 비교 조회 때 시계가 7201초 뒤로 → 1 · ⛔ 자동 허락이 끝났습니다(2시간) · 조회 2번 · 비교 1번 · 합치기 0번",
+              rc0 == 0 and rc == 1 and W_END in out and k == (2, 1, 0) and not (ra / ".turn-merge.s1").exists(), out0 + out)
 
         # ── R5 기준선 커밋 꼴: tests/baseline ≥1 + docs/refactor 는 허용 목록(*.md·*.log·approved/.log-sum·.log-copy·바로 아래 .gitattributes·.gitignore) ──
         def r5(extra, seal=False):
