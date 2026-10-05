@@ -5715,6 +5715,12 @@ def check_auto_flow_040(check):
         rc0, se = _pc040(d)
         check("0.4.0 보완 A4 성공한 자동 마감 끝 → 끝 표시 .turn-autoend.B1(① B1 ③ s1 ④ 가지 ⑤ *) · post-check 조용(헛경보 없음)",
               len(efl) >= 5 and efl[0] == "B1" and efl[2] == "s1" and efl[3] == "refactor/x" and efl[4] == "*" and rc0 == 0 and "승인 기록" not in se, str(efl) + se)
+        # 재검사 A2#5 X2: 끝 표시가 2시간 넘게 지났으면(7300초 전) 근거가 아니다 → 이 차례의 자동 줄도 알림
+        if len(efl) >= 5:
+            lf(ef, "\n".join([efl[0], str(int(time.time()) - 7300)] + efl[2:]))
+            rc7, se7 = _pc040(d)
+            check("0.4.0 보완 A2#5 끝 표시가 7300초 전 → post-check 알림(2시간 창)", rc7 == 2 and "승인 기록" in se7, se7)
+            lf(ef, "\n".join(efl))
         _go040(d, prompt="고마워 다음은?")
         check("0.4.0 보완 A4 다음 사람 입력 → 끝 표시 지움", not ef.exists(), "")
         with open(rd / "APPROVALS.log", "a", encoding="utf-8", newline="\n") as fh:
@@ -5924,11 +5930,15 @@ def check_auto_stage_fail_040(check):
         out, rc = _auto040(dw, "verify", [fgw, noplay])
         check("0.4.0 A9 merge-only 는 deploy-wait 없이 verify(판 표지 옛 값과 다름) → 0", rc == 0, out)
         # playwright 있음(가짜 npx 0 + 가짜 node 가 화면마다 결과 줄) → 화면 열기 2/2 · 스크린샷 폴더 .gitignore · 콘솔 오류 → ⛔
-        pwb = _bin040(made, npx="exit 0", node='cat "$d/node.out"')
+        pwb = _bin040(made, npx="exit 0", node='env > "$d/node.env"; cat "$d/node.out"')
         (pwb / "node.out").write_text("PAGE\t/\t200\tyes\t0\t\nPAGE\t/shop\t200\tyes\t0\t\n")
         _mf040(dw, site.url, deployed="build-new-2")
-        out, rc = _auto040(dw, "verify", [fgw, pwb])
+        out, rc = _auto040(dw, "verify", [fgw, pwb], extra={"REFACTOR_FAKE_SECRET": "s3cr3t-040", "NODE_PATH": "/tmp/evil-node-path"})
         nd = _calls040(pwb, "node")
+        nenv = (pwb / "node.env").read_text(encoding="utf-8") if (pwb / "node.env").exists() else ""
+        check("0.4.0 보안 검사: 화면 열기 node 에 진짜 환경 변수(비밀값)를 넘기지 않음 · NODE_PATH 는 프로젝트 node_modules 만 · .npmrc 안 읽음",
+              nenv != "" and "s3cr3t-040" not in nenv and "evil-node-path" not in nenv and "npm_config_userconfig=/dev/null" in nenv
+              and f"NODE_PATH={dw}/node_modules" in nenv, nenv[:800])
         check("0.4.0 A9 playwright 있음 → 화면 열기 2/2 · node 에 주소·스크린샷 폴더 · verify/.gitignore '*'",
               rc == 0 and "화면 열기: 2/2 통과 · 스크린샷 docs/refactor/verify/B1/" in out and len(nd) == 1 and site.url in nd[0]
               and "docs/refactor/verify/B1" in nd[0] and (rw / "verify/.gitignore").read_text(encoding="utf-8") == "*\n", out + str(nd))
@@ -5943,7 +5953,7 @@ def check_auto_stage_fail_040(check):
         pwjs = (ROOT / "plugins/refactor/scripts/refactor-auto.sh").read_text(encoding="utf-8")
         check("0.4.0 A9 화면 열기 스크립트: 같은 출처 비GET 요청 route abort · 콘솔 오류 · 스크린샷",
               "o === origin && q.method() !== 'GET' && q.method() !== 'HEAD'" in pwjs and "r.abort()" in pwjs and "page.screenshot" in pwjs
-              and "npx --no-install playwright --version" in pwjs, "")
+              and "npx --no-install playwright --version" in pwjs and 'env -i "${PWENV[@]}"' in pwjs, "")
         # A10 post-check: 자동 꼴 + 사람 꼴 섞임 → 알림 · 앞 줄 고침 → 알림
         dp, fgp = ready()
         rp = dp / "docs/refactor"
@@ -6087,6 +6097,8 @@ def check_auto_fix_040(check):
         g(d7, "checkout", "-q", "refactor/x")
         cases = [("세션 다름(s9)", lambda: put_af(d7, a7[:2] + ["s9"] + a7[3:])),
                  ("go= 비어 있음(자동 차례 전)", lambda: put_af(d7, a7[:10] + ["go="] + a7[11:])),
+                 # 재검사 A2#5 X3: 허락 파일의 방식(⑤)만 기록의 자동 줄과 다름
+                 ("방식만 다름", lambda: put_af(d7, a7[:4] + ["merge" if a7[4] != "merge" else "squash"] + a7[5:])),
                  ("기록의 자동 줄 없음(봉인 다시 맞춤)", None),
                  ("허락 없음 + 끝 표시만", None)]
         for label, setup in cases:
@@ -6158,6 +6170,7 @@ def check_auto_fix_040(check):
         # ── A6 완료 카드가 섞인 묶음 · 모두 완료인 묶음 ───────────────────────────────────────
         d6, _ = _mkauto040(made, site.url)
         fg6 = _fake035(made)
+        _ap040(d6, "P1-1", path_front=[fg6])   # 재검사 A2#4: 앞서 끝낸 카드는 예전에 승인된 카드(잔치 꼴)
         _done033(d6, "P1-1")
         lf(d6 / "src_P1-1.txt", "P1-1\n"); g(d6, "add", "--", "src_P1-1.txt", "docs"); g(d6, "commit", "-qm", "refactor: P1-1 금액")
         _ap040(d6, "B1 자동", path_front=[fg6])
@@ -6167,10 +6180,14 @@ def check_auto_fix_040(check):
         _go040(d6)
         lg6 = _log033(d6).splitlines()
         out, rc = _auto040(d6, "preflight", [fg6, noplay])
-        check("0.4.0 보완 A6 승인 전에 끝낸 묶음 카드(P1-1)의 커밋이 가지에 있음 → preflight 0(묶음 칸이 B1 인 모든 카드 허용)",
+        check("0.4.0 보완 A6 묶음 승인 전에 (따로 승인받아) 끝낸 묶음 카드(P1-1)의 커밋이 가지에 있음 → preflight 0(묶음 칸이 B1 이고 승인됐던 카드 허용)",
               any(x.endswith("| 묶음 승인 | B1 | - | 카드 1개: P3-1") for x in lg6) and rc == 0, out + "\n".join(lg6[-4:]))
         d6b, _ = _mkauto040(made, site.url)
         fg6b = _fake035(made)
+        # 재검사 A2#4: P1-3 은 예전에 승인돼 끝난 카드(잔치 꼴 — 승인 줄을 기록에 두고 봉인)
+        with open(d6b / "docs/refactor/APPROVALS.log", "a", encoding="utf-8", newline="\n") as fh:
+            fh.write("2026-10-01 09:00 KST | 승인 | P1-3 | card=x | 사용자가 /refactor:approve 로 실행\n")
+        _lib033(d6b, 'rl_log_seal "$R"')
         out = _ap040(d6b, "B3 자동", path_front=[fg6b])
         a6 = _af040(d6b, "B3")
         lg6 = _log033(d6b).splitlines()
@@ -6204,6 +6221,42 @@ def check_auto_fix_040(check):
         out, rc = _auto040(d9, "preflight", [fg9, noplay])
         check("0.4.0 보완 A9 이름만 기준선 커밋(코드 a.txt 를 바꿈) → 묶음 밖(2개 — 기준선 제목 포함)",
               rc == 1 and "묶음 밖 커밋이 2개" in out and "test: 기준선 테스트 추가" in out, out)
+
+        # ── 재검사 A2#4 묶음 밖 판정 허용 ID = 승인됐던 카드 ∪ 지금 묶음 카드 · A2#6 기준선 커밋에 tests/baseline 파일 1개 이상 ──
+        dA, _, fgA = rdy()
+        ppA = dA / "docs/refactor/REFACTOR_PLAN.md"
+        lf(ppA, ppA.read_text(encoding="utf-8").replace("- **묶음**: B2 화면", "- **묶음**: B1 화면"))
+        lf(dA / "evil.js", "deploy()\n"); g(dA, "add", "--", "evil.js", "docs"); g(dA, "commit", "-qm", "refactor: P2-1 화면 손질")
+        out, rc = _auto040(dA, "preflight", [fgA, noplay])
+        check("0.4.0 보완 A2#4 승인 안 된 P2-1 의 묶음 칸을 B1 으로 바꾸고 그 커밋 → preflight ⛔ 묶음 밖 1개",
+              rc == 1 and "묶음 밖 커밋이 1개" in out and "refactor: P2-1 화면 손질" in out, out)
+        dB, _, fgB = rdy()
+        ppB = dB / "docs/refactor/REFACTOR_PLAN.md"
+        lf(ppB, ppB.read_text(encoding="utf-8") + "\n### [P9-9] 새 카드\n- **종류**: 🔧 리팩토링\n- **묶음**: B1 결제 안전\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n")
+        lf(dB / "evil2.js", "x\n"); g(dB, "add", "--", "evil2.js", "docs"); g(dB, "commit", "-qm", "refactor: P9-9 새 일")
+        out, rc = _auto040(dB, "preflight", [fgB, noplay])
+        check("0.4.0 보완 A2#4 계획서에 새 카드 P9-9(B1)를 더해 그 커밋 → preflight ⛔ 묶음 밖 1개",
+              rc == 1 and "묶음 밖 커밋이 1개" in out and "refactor: P9-9 새 일" in out, out)
+        dC, _, fgC = rdy()
+        lf(dC / "docs/refactor/notes.md", "n\n"); g(dC, "add", "--", "docs/refactor/notes.md"); g(dC, "commit", "-qm", "test: 기준선 아무거나")
+        out, rc = _auto040(dC, "preflight", [fgC, noplay])
+        check("0.4.0 보완 A2#6 docs/refactor 만 바꾼 'test: 기준선 …'(기준선 파일 0개) → preflight ⛔ 묶음 밖 1개",
+              rc == 1 and "묶음 밖 커밋이 1개" in out and "test: 기준선 아무거나" in out, out)
+        # 재검사 A3 🟡: 재설정·카드 보류 뒤에는 옛 승인 줄이 허용 ID 에 남지 않는다(H4 — aids 정리)
+        for nm, pre in [("재설정 전 승인(P2-1) + 재설정", ["2026-09-01 09:00 KST | 승인 | P2-1 | card=x | 사용자가 /refactor:approve 로 실행",
+                                                       "2026-09-01 10:00 KST | 재설정 | x | 사용자가 /refactor:go 다시 로 입력"]),
+                        ("P2-1 승인 뒤 카드 보류", ["2026-09-01 09:00 KST | 승인 | P2-1 | card=x | 사용자가 /refactor:approve 로 실행",
+                                                 "2026-09-01 09:30 KST | 보류 | P2-1 | card=x | 사용자가 /refactor:approve 로 실행"])]:
+            dR, _, fgR = rdy()
+            lpR = dR / "docs/refactor/APPROVALS.log"
+            lpR.write_text("\n".join(pre) + "\n" + lpR.read_text(encoding="utf-8"), encoding="utf-8")
+            _lib033(dR, 'rl_log_seal "$R"')
+            ppR = dR / "docs/refactor/REFACTOR_PLAN.md"
+            lf(ppR, ppR.read_text(encoding="utf-8").replace("- **묶음**: B2 화면", "- **묶음**: B1 화면"))
+            lf(dR / "evil.js", "deploy()\n"); g(dR, "add", "--", "evil.js", "docs"); g(dR, "commit", "-qm", "refactor: P2-1 화면 손질")
+            out, rc = _auto040(dR, "preflight", [fgR, noplay])
+            check(f"0.4.0 보완 A3 {nm} → 옛 승인은 허용 ID 아님 · preflight ⛔ 묶음 밖 1개",
+                  rc == 1 and "묶음 밖 커밋이 1개" in out and "refactor: P2-1 화면 손질" in out, out)
 
         # ── A11 .turn-merged 2시간 → deploy-wait·verify ⛔ ──────────────────────────────────
         site.set("/version.txt", "build-new-2\n")

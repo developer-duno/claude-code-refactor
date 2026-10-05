@@ -227,16 +227,20 @@ screen_get() {
 }
 
 # ── 묶음 승인 기록 → BIDS(그 묶음의 카드 ID — 승인 기록 정본, 마지막 '재설정' 뒤) ─────────────
-#   BFOUND = 그 줄이 있음(카드 0개 — 묶음 카드가 모두 이미 완료라 자동 마감만 켠 승인 — 도 있음) · UIDS = 계획서에서 묶음 칸이 그 B 인 모든 카드(완료 포함 — 검사 C#4:
-#   진행 중 계획서에서 앞서 끝낸 그 묶음 카드의 커밋이 아직 안 합쳐져 가지에 있을 수 있다) + BIDS. 묶음 밖 커밋 판정과 PR 본문은 UIDS 로
+#   BFOUND = 그 줄이 있음(카드 0개 — 묶음 카드가 모두 이미 완료라 자동 마감만 켠 승인 — 도 있음) · PIDS = 계획서에서 묶음 칸이 그 B 인 모든 카드(완료 포함 — 검사 C#4:
+#   진행 중 계획서에서 앞서 끝낸 그 묶음 카드의 커밋이 아직 안 합쳐져 가지에 있을 수 있다) · UIDS = PIDS 중 봉인된 기록에서 승인됐던 카드(그 B 의 "묶음 승인" 줄에
+#   들었거나 "| 승인 | <ID> |" 줄이 있음 — 재검사 A2#4: 계획서의 묶음 칸만 바꾼 카드·새로 더한 카드는 묶음 밖) + BIDS. 묶음 밖 커밋 판정과 PR 본문은 UIDS 로
 bundle_ids() {
-  local x a b v k_ n_ id_ b_ rest_
-  BIDS=""; BFOUND=0; UIDS=""
+  local x a b v k_ n_ id_ b_ rest_ aids=""
+  BIDS=""; BFOUND=0; UIDS=""; PIDS=""
   [ -f "$log" ] || return 0
   while IFS= read -r x || [ -n "$x" ]; do
     x=${x%$'\r'}
-    case "$x" in *" KST | 재설정 |"*) BIDS=""; BFOUND=0; continue ;; esac
-    case "$x" in *" KST | 묶음 승인 | $B | - | 카드 "*) ;; *" KST | 묶음 보류 | $B | "*) BIDS=""; BFOUND=0; continue ;; *) continue ;; esac
+    case "$x" in *" KST | 재설정 |"*) BIDS=""; BFOUND=0; aids=""; continue ;; esac
+    case "$x" in *" KST | 보류 | "*) v=${x#*" KST | 보류 | "}; v=${v%% |*}; aids=${aids// $v / }; continue ;; esac
+    case "$x" in *" KST | 승인 | "*) v=${x#*" KST | 승인 | "}; aids="$aids ${v%% |*} "; continue ;; esac
+    case "$x" in *" KST | 묶음 승인 | $B | - | 카드 "*) v=${x#*" | 묶음 승인 | $B | - | 카드 "}; aids="$aids ${v#*개:} " ;; esac
+    case "$x" in *" KST | 묶음 승인 | $B | - | 카드 "*) ;; *" KST | 묶음 보류 | $B | "*) BIDS=""; BFOUND=0; aids=""; continue ;; *) continue ;; esac
     v=${x#*" | 묶음 승인 | $B | - | 카드 "}; v=${v#*개:}
     BIDS=$v; BFOUND=1
   done < "$log"
@@ -248,6 +252,8 @@ bundle_ids() {
   done <<EOF
 $(rl_card_bundles "$dir/REFACTOR_PLAN.md")
 EOF
+  PIDS=${a# }; a=""
+  for b in $PIDS; do case "$aids" in *" $b "*) a="$a $b" ;; esac; done
   for b in $BIDS; do case " $a " in *" $b "*) ;; *) a="$a $b" ;; esac; done
   UIDS=${a# }
 }
@@ -272,7 +278,7 @@ EOF
   done
   [ -z "$left" ] || no "⛔ $B 묶음에 아직 안 끝난 카드가 있습니다:$left — 묶음 카드가 모두 끝나야 자동 마감을 합니다"
   # 승인 때 카드 0개(모두 이미 완료 — 자동 마감만 켬)면 기준선 결과는 계획서의 그 묶음 마지막 카드로
-  if [ -z "$last" ]; then for x in $UIDS; do last=$x; done; fi
+  if [ -z "$last" ]; then for x in $PIDS; do last=$x; done; fi
   [ -n "$last" ] || no "⛔ 계획서에 $B 묶음 카드가 없습니다"
   # 기준선 통과(#6): 묶음 마지막 카드의 EXECUTION_LOG "- 기준선 결과: <ID> 통과 N/N"(N > 0, 같은 수) — 사장님 결정 10-05: STATE red_open(프로젝트 전체의
   #   안 막은 🔴 수)은 보지 않는다(다른 묶음의 🔴 가 이 묶음 자동 마감을 막지 않게 · 이 묶음 카드가 다 끝났는지는 위에서 봄)
@@ -294,12 +300,13 @@ EOF
   [ -n "$subs" ] || no "⛔ origin/$RL_BNAME 위에 올릴 커밋이 없습니다"
   # 기준선 커밋 꼴(검사 C#9): 제목이 "test: 기준선" 으로 시작하고, 바꾼 파일(하나 이상)이 tests/baseline/ 아래와 기록 폴더 docs/refactor/ 아래뿐
   #   (5-baseline 이 기록 파일을 같은 커밋에 싣는다 · 합치기 커밋은 파일 목록이 비어 거절 · 이름만 같은 커밋은 거절)
+  #   재검사 A2#6: tests/baseline/ 아래 파일이 하나 이상 있어야 한다(docs/refactor 만 바꾼 'test: 기준선 …' 은 묶음 밖)
   base_only() {
     local fl f n=0
     fl=$("${G[@]}" diff-tree --no-commit-id --name-only --no-renames -r --root "$1" 2>/dev/null) || return 1
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      case "$f" in tests/baseline/*|docs/refactor/*) n=$((n + 1)) ;; *) return 1 ;; esac
+      case "$f" in tests/baseline/*) n=$((n + 1)) ;; docs/refactor/*) ;; *) return 1 ;; esac
     done <<EOF
 $fl
 EOF
@@ -315,7 +322,7 @@ EOF
   done <<EOF
 $subs
 EOF
-  [ "$on" = 0 ] || no "⛔ 묶음 밖 커밋이 ${on}개 있습니다(${outside# · }) — $B 카드(${UIDS})의 'refactor: <ID> …' 커밋과 기준선 커밋(tests/baseline·docs/refactor 만 바꾼 'test: 기준선 …')만 자동으로 올립니다"
+  [ "$on" = 0 ] || no "⛔ 묶음 밖 커밋이 ${on}개 있습니다(${outside# · }) — $B 카드(${UIDS})의 'refactor: <ID> …' 커밋과 기준선 커밋(tests/baseline 파일이 들고 tests/baseline·docs/refactor 만 바꾼 'test: 기준선 …')만 자동으로 올립니다"
   # 운영 주소 200 · 판 표지 옛 값 · 확인할 화면(옛 판)
   http_get "$(bust "$AURL/")" "$TD/u" || no "⛔ 운영 주소($AURL)가 지금 $HC 입니다 — 자동 시작 전 멈춤(코드는 그대로)"
   old=""
@@ -627,7 +634,11 @@ verify)
   done
   # 화면 열기(playwright 가 프로젝트에 있을 때만 — 설치하지 않는다): 같은 출처의 GET·HEAD 아닌 요청은 막고(route abort) 콘솔 오류 0 · 기대 글자 · 스크린샷
   pw="화면 열기: 없음(playwright 없음 — GET 만 확인)"
-  if [ -s "$TD/list" ] && (cd "$proj" && rl_bounded 20 npx --no-install playwright --version) >/dev/null 2>&1; then
+  # 보안 검사(10-05): 프로젝트의 playwright 는 안전 실행기 밖에서 돈다 — 진짜 환경 변수(비밀값)를 넘기지 않게 환경을 비우고 꼭 필요한 것만 넘긴다
+  #   (PATH·HOME·언어·임시 폴더 · 브라우저 위치 · Windows 실행에 필요한 것) · 프로젝트·사용자 .npmrc 는 읽지 않는다
+  PWENV=(PATH="$PATH" HOME="${HOME:-$TD}" LANG=C.UTF-8 TMPDIR="$TD" npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm_config_update_notifier=false)
+  for v_ in PLAYWRIGHT_BROWSERS_PATH SYSTEMROOT SystemRoot LOCALAPPDATA USERPROFILE APPDATA COMSPEC ComSpec; do [ -n "${!v_:-}" ] && PWENV+=("$v_=${!v_}"); done
+  if [ -s "$TD/list" ] && (cd "$proj" && rl_bounded 20 env -i "${PWENV[@]}" npx --no-install playwright --version) >/dev/null 2>&1; then
     left=$(( 100 - (SECONDS - t0) ))
     if [ "$left" -lt 15 ]; then
       again "⏳ 시간이 모자라 화면 열기를 다음 실행에서 합니다(GET 확인은 끝남)"
@@ -676,7 +687,7 @@ try { pw = require('playwright'); } catch (e) { console.log('NOPW\t' + String(e.
   await browser.close();
 })().catch(e => console.log('NOPW\t' + String(e.message).split('\n')[0]));
 PWJS
-    (cd "$proj" && NODE_PATH="$proj/node_modules${NODE_PATH:+:$NODE_PATH}" rl_bounded $((per * n_ + 10)) node "$TD/pw.js" "$MURL" "$shot" "$(date +%s)" "$TD/list" "$per") >"$TD/pwo" 2>/dev/null; pwrc=$?
+    (cd "$TD" && rl_bounded $((per * n_ + 10)) env -i "${PWENV[@]}" NODE_PATH="$proj/node_modules" node "$TD/pw.js" "$MURL" "$shot" "$(date +%s)" "$TD/list" "$per") >"$TD/pwo" 2>/dev/null; pwrc=$?
     pwn=0; pwok=0; pwnot=""
     while IFS="$RL_TAB" read -r k_ p_ s_ y_ e_ m_; do
       case "$k_" in

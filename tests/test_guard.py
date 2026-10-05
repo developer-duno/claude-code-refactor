@@ -5178,6 +5178,9 @@ def check_auto_call_040(res):
                                 ("이름 .turn-autoB1", {"name": ".turn-autoB1"}, B), ("다른 이름 .turn-push", {"name": ".turn-push.t"}, B)):
             _agrant_040(proj, "auto", **kw)
             _cases_034(res, proj, "G2 허락 파일 " + label, [(want, bash(_acmd_040(proj, "push")))], need=W_AUTO if want == B else None)
+        # 재검사 A2#5 X1: 끝 표시(.turn-autoend.B1)만 있음 → 자동 단계 차단(끝 표시는 허락이 아님)
+        _agrant_040(proj, "auto", name=".turn-autoend.B1")
+        _cases_034(res, proj, "G2 끝 표시(.turn-autoend)만 있음", [(B, bash(_acmd_040(proj, s))) for s in AUTO_PRE + AUTO_POST], need=W_AUTO_NO)
         # 허락 있음 — 통과하는 꼴(인자·경로 표기)
         _agrant_040(proj, "auto")
         X = _acmd_040(proj, "push")
@@ -5365,6 +5368,35 @@ def check_fg_040(res):
             "gh -R o/r api -X PUT repos/o/r/pulls/5/merge", "gh -R o/r pr checkout 5",
             # 반대 방향: 저장소 값의 명령 치환은 걷어내지 않는다(그 안의 명령을 판정에서 지우지 않게)
             'gh -R "$(vercel --prod)" pr view 5', "gh --repo $(vercel --prod) pr view 5", "gh -R `vercel --prod` pr list"]])
+        # 재검사 A2#1: 걷어내기는 덧붙인 사본에만 — 따옴표 짝을 짜 맞춘 꼴(echo "gh -R 'x"; <위험>; echo ' y' · 뒤바꾼 따옴표 · 주석)이 위험 명령을 지우지 않는다
+        run_sh = f"{_mroot_035()}/hooks/run.sh"
+        pay = ["git push --force origin main", "git push origin main", "git reset --hard HEAD~3", "vercel --prod", "rm -rf docs/refactor",
+               "printf x > docs/refactor/.turn-auto.B1", "cat .env", "gh pr merge 5 --squash", "git checkout other"]
+        wraps = [lambda q: f"echo \"gh -R 'x\"; {q}; echo ' y'", lambda q: f"echo 'gh -R \"x'; {q}; echo \" y\"", lambda q: f"# gh -R 'x\n{q}\n#' y"]
+        _cases_034(res, proj, "FG2 H1 gh -R 따옴표 짝 짜 맞춤 · 위험 명령", [(B, bash(w(q))) for w in wraps for q in pay]
+                   + [(B, bash(f"# gh -R 'x\nbash \"{run_sh}\" refactor-approve\n#' y")),
+                      (B, bash("echo \"gh --repo='x\"; git push --force origin main; echo ' y'")),
+                      (B, bash("echo \"gh -R 'x\" && git push -f origin main && echo ' y'")),
+                      # 값 끝에 $ 를 붙여 '알 수 없는 값'(자리표시 X)으로 읽히게 짜 맞춘 꼴 — 사본만 바뀌고 원문은 그대로 판정
+                      (B, bash("echo \"gh -R 'x\"; git push --force origin main; echo '$y z'")), (B, bash("echo \"gh -R 'x\"; cat .env; echo '$y z'")),
+                      (B, bash("# gh -R 'x\ngit reset --hard HEAD~3\n#'$y z"))])
+        # 재검사 A2#2: 값을 알 수 없는 저장소(변수·명령 치환)·붙여 쓴 -Ro/r 도 그 뒤 하위 명령으로 판정
+        _cases_034(res, proj, "FG2 H2 gh -R 알 수 없는 값 · 합치기", [(B, bash(c)) for c in [
+            'gh -R "$R" pr merge 1', "gh -R $R pr merge 1", "gh --repo=$R pr merge 1", 'gh -R "$(echo o/r)" pr merge 1',
+            "gh -R `echo o/r` pr merge 1", "gh -R o/r$x pr merge 1", "gh -Ro/r pr merge 1", "gh -R $(echo o/r) pr merge 1", "gh -R <(echo o/r) pr merge 1"]], need=W_PRM)
+        _cases_034(res, proj, "FG2 H2 gh -R 알 수 없는 값 · 배포", [(B, bash(c)) for c in [
+            "gh -R ${R} workflow run x", 'gh --repo "$R" release create v1', "gh -R=$R release upload v1 a"]], need=W_DEP)
+        # 재검사 A3 #1·#2: 값을 이상하게 적은 꼴·-R 두 번·따옴표 이어 붙인 값도(사본은 넓게 걷어냄)
+        _cases_034(res, proj, "A3 gh -R 넓은 값 · 합치기", [(B, bash(c)) for c in [
+            r"gh -R o\/r pr merge 1", r"gh -R \o/r pr merge 1", "gh -R {o/r,} pr merge 1", 'gh -R o/r -R "$R" pr merge 1',
+            'gh -R "$R" -R "$R" pr merge 1', "gh -R o/'r' pr merge 1", "gh -R 'o/'r pr merge 1", 'gh -R "o"/r pr merge 1',
+            'gh --repo=o/"r" pr merge 1', "gh -R 'o r' pr merge 1", "gh -R 'o/r;' pr merge 1"]], need=W_PRM)
+        _cases_034(res, proj, "A3 gh -R 넓은 값 · 배포", [(B, bash(c)) for c in ["gh --repo o/r --repo=$R release create v1"]], need=W_DEP)
+        _cases_034(res, proj, "A3 gh -R 넓은 값 · 읽기는 통과", [(OK, bash(c)) for c in [
+            r"gh -R o\/r pr view 1", "gh -R {o/r,} pr list", "gh -R o/'r' pr view 1", 'gh -R o/r -R "$R" run list']])
+        _cases_034(res, proj, "A3 claude --from-pr 이어서", [(B, bash(c)) for c in ["claude -p --from-pr 5", "claude --from-pr=5 -p < f"]])
+        _cases_034(res, proj, "FG2 H2 gh -R 알 수 없는 값 · 읽기는 통과", [(OK, bash(c)) for c in [
+            'gh -R "$R" pr view 1', 'gh -R "$R" pr list', "gh -R ${R} run list", "gh -Ro/r pr view 1"]])
         _cases_034(res, proj, "FG F1 gh -R 앞 · 읽기는 통과", [(OK, bash(c)) for c in [
             "gh -R o/r pr view 5", "gh -R o/r pr list", "gh --repo o/r run list", "gh -R o/r release list", "gh --repo=o/r issue list", "gh pr view 5 -R o/r",
             "gh -R o/r pr view 5 --json state", "gh -R o/r repo view", 'git commit -m "docs: gh -R o/r pr merge 안내"']])
@@ -5406,6 +5438,16 @@ def check_fg_040(res):
             "claude --continue --print hi", "claude -r abc -p hi", "claude --resume=abc -p hi", "npx claude -p --resume x", "echo hi | claude -pc",
             "claude -p --resume x # 메모", "x=1; claude -p -c hi", '"$(which claude)" -p --resume x < /tmp/f', "CLAUDE -P --RESUME x",
             'claude -p --res"ume" x', "claude.exe -p -r x", "bash -c 'claude -p --resume x < /tmp/f'"]], need=W_RES)
+        # 재검사 A2#3: 실행기(npx·bunx·pnpm dlx·node …/claude-code/cli.js)·경로로 부른 claude · 풀 수 없는 옵션 낱말($ 남음)
+        _cases_034(res, proj, "FG2 H3 실행기·경로 claude 이어서 출력 모드 차단", [(B, bash(c)) for c in [
+            "npx @anthropic-ai/claude-code -p --resume x < /tmp/f", "bunx @anthropic-ai/claude-code -p --resume x", "pnpm dlx @anthropic-ai/claude-code -p -c",
+            "yarn dlx @anthropic-ai/claude-code --print --continue", "npx -y @anthropic-ai/claude-code@latest -p -r x",
+            "node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js -p --resume x", "./claude -p -r x", '~/.local/bin/claude -c -p "다음"',
+            "/home/u/.local/bin/claude -p --resume x < /tmp/f", 'claude -p "$OPT" x', "claude $FLAGS", "claude -p $(echo --resume) x",
+            "claude -p `echo -c`"]], need=W_RES)
+        _cases_034(res, proj, "FG2 H3 새 세션·버전은 통과", [(OK, bash(c)) for c in [
+            "claude --version", "npx @anthropic-ai/claude-code --version", 'claude -p "질문"', "node /x/@anthropic-ai/claude-code/cli.js --version",
+            'claude -p hi > "$OUT"', "./claude -c", "node gen.js -c claude.json -p", "npx eslint -c claude-rules.json -p src"]])
         _cases_034(res, proj, "FG F5 새 세션·대화형은 통과", [(OK, bash(c)) for c in [
             "claude --version", 'claude -p "질문"', "claude --print hi", "grep -r claude src && claude -p hi", 'bash -c "claude -p hi"', "claude -c", "claude --resume x",
             'claude -p "cp -r 와 -c 차이를 설명"', 'git commit -m "docs: claude -p --resume 막음"', "grep -rn 'claude -p --resume' src"]])
@@ -5443,6 +5485,12 @@ def check_fg_040(res):
         res["total"] += 1
         if w not in s61:
             res["fails"].append(("0.4.0 FG README §6-1", "있음", "없음", "", w, ""))
+    # 재검사 A2#3 후속: §6-4 한계에 절대경로 gh·vercel 한 줄
+    s64 = rd[rd.find("### 6-4. 한계"):rd.find("## 7. 안전 실행기")]
+    for w in ["절대경로로 부른 gh·vercel", "`/usr/bin/gh pr merge`"]:
+        res["total"] += 1
+        if w not in s64:
+            res["fails"].append(("0.4.0 FG2 README §6-4", "있음", "없음", "", w, ""))
 
 
 if __name__ == "__main__":

@@ -2148,30 +2148,53 @@ nested_claude_approve() {
 #   새 세션(claude -p "질문")·대화형(claude -c)은 통과. 따옴표를 모두 뺀 사본(lz)에는 쓰지 않는다(질문 글이 낱말로 풀려 헛막힘) — lq·hv 로 본다
 MSG_RESUME="리팩토링 진행 중에는 Claude 세션을 이어서(--resume·--continue) 출력 모드(-p)로 부르지 않습니다 — 넘긴 글이 그 세션에서 사람 입력처럼 처리됩니다."
 MSG_RESUME2="새 질문은 새 세션(claude -p \"<질문>\")으로 하세요. 다른 세션에 이어서 할 일은 사람에게 부탁하세요."
+#   재검사 A2#3: claude 찾기는 nested_claude_approve 와 같은 방식도 — 조각 첫 낱말(경로 뗀 이름)이 claude(.exe·.cmd)이거나(./claude · ~/.local/bin/claude),
+#   실행기(npx·pnpx·bunx·node·bun·deno·pnpm·yarn·npm — exec·dlx·x·run 과 옵션은 건너뜀) 뒤 첫 낱말이 *claude-code* · */claude 꼴이면 그 뒤 낱말을 본다.
+#   $( · ` 자리는 알 수 없는 낱말($X)로 남기고, 풀 수 없는 낱말($ 가 남음)은 출력 모드·이어서 둘 다일 수 있다고 보고 막는다
 claude_resume_print() {
   has "$1" 'claude' || return 1
-  local s seg w pr rs re_cl="(^|[^[:alnum:]._/-])claude([.](exe|cmd))?([^[:alnum:]_.-]|$)" re_q="\"[^\"]*[[:space:]][^\"]*\"|'[^']*[[:space:]][^']*'"
-  cut_segs "$1"; s=$CUTS
+  local s seg cw i a re_cl="(^|[^[:alnum:]._/-])claude([.](exe|cmd))?([^[:alnum:]_.-]|$)"
+  s=$1; s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/ \$X$NL}; s=${s//\$(/ \$X$NL}
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
-    [[ $seg =~ $re_cl ]] || continue
-    seg=${seg#*"${BASH_REMATCH[0]}"}
-    while [[ $seg =~ $re_q ]]; do seg=${seg/"${BASH_REMATCH[0]}"/ Q }; done
-    pr=0; rs=0
-    set -f
-    for w in $seg; do
-      w=${w//\"/}; w=${w//\'/}
-      case "$w" in
-        --print|--print=*) pr=1 ;;
-        --resume|--resume=*|--continue) rs=1 ;;
-        --*) ;;
-        -[A-Za-z]*) case "$w" in *[!A-Za-z-]*) ;; *) case "$w" in *p*) pr=1 ;; esac; case "$w" in *[rc]*) rs=1 ;; esac ;; esac ;;
-      esac
-    done
-    set +f
-    [ "$pr" = 1 ] && [ "$rs" = 1 ] && return 0
+    case "$seg" in *claude*) ;; *) continue ;; esac
+    if [[ $seg =~ $re_cl ]]; then crp_words "${seg#*"${BASH_REMATCH[0]}"}" && return 0; fi
+    seg_words "$seg"; cw=""
+    case "$SCMD" in
+      claude|claude.cmd) cw=${SW[$SI]} ;;
+      npx|pnpx|bunx|node|bun|deno|pnpm|yarn|npm)
+        for ((i = SI + 1; i < ${#SW[@]}; i++)); do
+          a=${SW[$i]}
+          case "$a" in exec|dlx|x|run) continue ;; -*) continue ;; esac
+          case "$a" in *claude-code*|*/claude|*/claude.exe|*/claude.cmd|claude|claude.exe|claude.cmd) cw=$a ;; esac
+          break
+        done ;;
+    esac
+    [ -z "$cw" ] && continue
+    seg=${seg#*"$cw"}; case "$seg" in [\"\']*) seg=${seg:1} ;; esac
+    crp_words "$seg" && return 0
   done
   return 1
+}
+# claude 낱말 뒤 글($1)에 출력 모드(-p·--print)와 이어서(--resume·-r·--continue·-c)가 둘 다 있는가 — 풀 수 없는 낱말($ 가 남음)은 둘 다로 본다
+crp_words() {
+  local seg=$1 w pr=0 rs=0 sk=0 re_q="\"[^\"]*[[:space:]][^\"]*\"|'[^']*[[:space:]][^']*'"
+  while [[ $seg =~ $re_q ]]; do seg=${seg/"${BASH_REMATCH[0]}"/ Q }; done
+  set -f
+  for w in $seg; do
+    w=${w//\"/}; w=${w//\'/}
+    if [ "$sk" = 1 ]; then sk=0; continue; fi
+    case "$w" in '<'|'<<'|'<<<'|*'>'|*'>|') sk=1; continue ;; '<'*|*'>'*) continue ;; esac   # 리다이렉트 대상(> "$OUT")은 옵션이 아니다
+    case "$w" in
+      *'$'*) pr=1; rs=1 ;;
+      --print|--print=*) pr=1 ;;
+      --resume|--resume=*|--continue|--from-pr|--from-pr=*) rs=1 ;;
+      --*) ;;
+      -[A-Za-z]*) case "$w" in *[!A-Za-z-]*) ;; *) case "$w" in *p*) pr=1 ;; esac; case "$w" in *[rc]*) rs=1 ;; esac ;; esac ;;
+    esac
+  done
+  set +f
+  [ "$pr" = 1 ] && [ "$rs" = 1 ]
 }
 # 승인 스크립트를 "실행"하는 모양인가(읽기·검색은 아니다): bash·sh·source·. 로 부르기, 직접 실행, run.sh refactor-approve,
 # 셸로 흘려 넣기(cat … | bash · bash < … · <( ) · eval · xargs bash · -exec bash). $1 = 판정용 명령(따옴표 정리됨)
@@ -3197,10 +3220,18 @@ mk_views() {
   while [[ $r =~ $re_null ]]; do r=${r/"${BASH_REMATCH[0]}"/ }; done
   local re_gopt="git[[:space:]]+(-[Cc][[:space:]]+(\"[^\"]*\"|'[^']*'|[^[:space:]]+)|--no-pager|-P|--paginate|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--namespace=[^[:space:]]+|--bare|--no-replace-objects|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-optional-locks)[[:space:]]+"
   while [[ $r =~ $re_gopt ]]; do r=${r/"${BASH_REMATCH[0]}"/git }; done
-  # 0.4.0 보완(검사 A#1): gh 바로 뒤 저장소 옵션(gh -R o/r pr merge · gh --repo=o/r release upload)도 옵션 순서만 다른 철자 — 걷어낸 사본으로 gh 규칙을 본다.
-  #   값에 $ ` ( ) < > 가 든 것(명령 치환)은 걷어내지 않는다(그 안의 명령을 판정에서 지우지 않게)
-  local re_ghopt="(^|[;&|({\`\"'[:space:]])gh([.]exe)?[[:space:]]+(-r|--repo)(=|[[:space:]]+)(\"[^\"\$\`]*\"|'[^']*'|[^[:space:];&|\"'\$\`()<>]+)[[:space:]]+"
-  while [[ $r =~ $re_ghopt ]]; do r=${r/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}gh${BASH_REMATCH[2]} "}; done
+  # 0.4.0 보완(검사 A#1 · 재검사 A2#1·#2): gh 바로 뒤 저장소 옵션(gh -R o/r pr merge · gh --repo=o/r release upload · gh -Ro/r …)도 옵션 순서만 다른 철자.
+  #   판정 글(r)은 고치지 않는다 — 옵션을 걷어낸 사본(g2)을 만들어 뒤에 덧붙이고 원문과 사본을 둘 다 모든 규칙이 본다
+  #   (r 을 직접 고치면 echo "gh -R 'x"; <위험 명령>; echo ' y' 처럼 따옴표 짝을 짜 맞춘 꼴이 위험 명령까지 지웠다).
+  #   걷어내는 값은 좁게: 따옴표 값은 공백·; & | 없이, 맨 값은 저장소 이름 글자만. 값을 알 수 없는 꼴($R · "$R" · ${R} · "$(…)" · `…` · <(…) · o/r$x)은
+  #   사본에서 자리표시 X 로 바꾼 뒤 걷어낸다(gh 규칙이 뒤 하위 명령을 보게 — 원문은 그대로라 그 안의 명령도 판정된다)
+  local g2=$r gk=0
+  local re_ghb="(^|[;&|({\`\"'[:space:]])gh([.]exe)?[[:space:]]+(-r(=|[[:space:]]+)?|--repo(=|[[:space:]]+))"
+  # 재검사 A3 #1·#2: 사본에서만 걷어내므로 값은 넓게 — 맨 글자·'…'·"…"·`…`·$(…)·<(…) 를 이어 붙인 한 덩어리(o\/r · {o/r,} · o/'r' · "$R" …)를
+  #   통째로 걷어낸다(최대 40번 — -R 을 여러 번 적은 꼴도). 원문(r)은 그대로 모든 규칙이 보므로 넓혀도 막는 판정이 줄지 않는다
+  local re_ghall="${re_ghb}(([^[:space:];&|()<>\"'\`]|'[^']*'|\"[^\"]*\"|\`[^\`]*\`|[\$<][(][^()]*[)])+)[[:space:]]+"
+  while [[ $g2 =~ $re_ghall ]] && [ "$gk" -lt 40 ]; do gk=$((gk + 1)); g2=${g2/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}gh${BASH_REMATCH[2]} "}; done
+  [ "$g2" != "$r" ] && r="$r ; popd ; $g2"
   LR=$r
 
   # lx: 비밀값 판정용 — 따옴표 속 파일 경로는 남기고(grep KEY ".env" 도 잡게), 검색어·커밋 메시지·echo 문구만 뺀다
