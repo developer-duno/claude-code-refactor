@@ -5924,6 +5924,25 @@ def check_auto_stage_fail_040(check):
         lf(rp / "APPROVALS.log", lg0 + "2026-10-05 12:00 KST | 푸시 | refactor/x | - | 자동 B7 으로 실행\n")
         rc0, se = _pc040(dp)
         check("0.4.0 A10 다른 묶음(B7 — 허락 없음)의 자동 꼴 → 알림", rc0 == 2, se)
+        # 보안 검사(10-05): 예외는 자동 스크립트가 쓰는 두 꼴(푸시·합치기 허락)만 · 가지·방식이 허락과 같을 때만 · go= 가 채워졌을 때만
+        ap = _af040(dp)
+        abr, amt = ap[3], ap[4]
+        omt = [m for m in ("squash", "rebase", "merge") if m != amt][0]
+        for label, line, want in [
+                ("합치기 허락 줄(가지·방식 같음) → 조용", f"2026-10-05 12:00 KST | 합치기 | 허락 {abr} PR(지금 가지) ({amt}) @abcdef0 | - | 자동 B1 으로 실행\n", 0),
+                ("마무리 줄에 자동 꼬리 → 알림", "2026-10-05 12:00 KST | 마무리 | PROJECT | - | 자동 B1 으로 실행\n", 2),
+                ("승인 줄에 자동 꼬리 → 알림", "2026-10-05 12:00 KST | 승인 | P2-1 | - | 자동 B1 으로 실행\n", 2),
+                ("푸시 줄 가지가 허락과 다름 → 알림", "2026-10-05 12:00 KST | 푸시 | refactor/other | - | 자동 B1 으로 실행\n", 2),
+                ("합치기 줄 방식이 허락과 다름 → 알림", f"2026-10-05 12:00 KST | 합치기 | 허락 {abr} PR(지금 가지) ({omt}) @abcdef0 | - | 자동 B1 으로 실행\n", 2),
+                ("합치기 줄 PR 번호 꼴(자동은 안 씀) → 알림", f"2026-10-05 12:00 KST | 합치기 | 허락 {abr} PR #5 ({amt}) @abcdef0 | - | 자동 B1 으로 실행\n", 2)]:
+            lf(rp / "APPROVALS.log", lg0 + line)
+            rc0, se = _pc040(dp)
+            check(f"0.4.0 A10 {label}", rc0 == want, se)
+        lf(rp / ".turn-auto.B1", "\n".join(ap[:10] + ["go="] + ap[11:]))
+        lf(rp / "APPROVALS.log", lg0 + f"2026-10-05 12:00 KST | 푸시 | {abr} | - | 자동 B1 으로 실행\n")
+        rc0, se = _pc040(dp)
+        check("0.4.0 A10 go= 비어 있음(자동 차례 전) + 자동 꼴 → 알림", rc0 == 2, se)
+        lf(rp / ".turn-auto.B1", "\n".join(ap))
         lf(rp / "APPROVALS.log", lg0 + "2026-10-05 12:00 KST | 푸시 | refactor/x | - | 자동 B1 으로 실행\n")
         (rp / ".turn-auto.B1").unlink()
         rc0, se = _pc040(dp)

@@ -52,29 +52,47 @@ NL=$'\n'; TAB=$'\t'
 #   그 B<n> 의 유효한 자동 허락(.turn-auto.B<n> 또는 .turn-merged.B<n> — 1줄 = B<n> · 2줄 = 만든 시각 0~7200초 안 · 3줄 = 이 세션 ID)이 있으면 0.
 #   턴 시작 때 기록의 줄 수(.turn-dirty 의 APPROVALS_N)만큼의 앞부분 지문이 그때 지문과 같아야 한다(앞 줄을 고치거나 지운 것은 예외 아님)
 auto_only_lines() {
-  local n="" bs="" f b l1 l2 l3 nw="" pre ln any=0 re_l
+  local n="" gi="" f b l1 l2 l3 x i br mt nw="" pre ln any=0 re_p re_m lb lbr lmt
+  local -a L
   case "$NL$snap" in *"${NL}APPROVALS_N$TAB"*) n=${snap#*APPROVALS_N"$TAB"}; n=${n%%"$NL"*} ;; *) return 1 ;; esac
   [[ $n =~ ^[0-9]{1,9}$ ]] && [ -n "$sid" ] && [ -f "$rdir/APPROVALS.log" ] || return 1
+  # 보안 검사(10-05): 허락마다 "B|가지|방식" 을 모은다 — .turn-auto 는 ⑪ go= 가 채워졌을 때만(자동 차례 시작) · ④ 가지 ⑤ 방식,
+  #   .turn-merged 는 ⑫ 가지 · 방식은 셋 중 아무거나(합친 뒤에는 방식이 파일에 없음)
   for f in "$rdir"/.turn-auto.B* "$rdir"/.turn-merged.B*; do
     [ -f "$f" ] || continue
     b=${f##*.}
     [[ $b =~ ^B[0-9]{1,6}$ ]] || continue
-    l1=""; l2=""; l3=""
-    { IFS= read -r l1; IFS= read -r l2; IFS= read -r l3; } < "$f"
-    l1=${l1%$'\r'}; l2=${l2%$'\r'}; l3=${l3%$'\r'}
+    L=(); i=0
+    while IFS= read -r x || [ -n "$x" ]; do L[i]=${x%$'\r'}; i=$((i + 1)); [ "$i" -ge 13 ] && break; done < "$f"
+    l1=${L[0]:-}; l2=${L[1]:-}; l3=${L[2]:-}
     [ "$l1" = "$b" ] && [ "$l3" = "$sid" ] && [[ $l2 =~ ^[0-9]{1,12}$ ]] || continue
     [ -n "$nw" ] || nw=$(date +%s)
-    [ $((nw - 10#$l2)) -ge 0 ] && [ $((nw - 10#$l2)) -le 7200 ] && bs="$bs $b "
+    [ $((nw - 10#$l2)) -ge 0 ] && [ $((nw - 10#$l2)) -le 7200 ] || continue
+    case "$f" in
+      */.turn-auto.*) [[ ${L[10]:-} =~ ^go=[0-9]{1,12}$ ]] || continue; br=${L[3]:-}; mt=${L[4]:-} ;;
+      *) br=${L[11]:-}; mt="*" ;;
+    esac
+    [[ $br =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || continue
+    case "$mt" in squash|rebase|merge|"*") ;; *) continue ;; esac
+    gi="$gi|$b|$br|$mt|"
   done
-  [ -n "$bs" ] || return 1
+  [ -n "$gi" ] || return 1
   pre=$(head -n "$n" "$rdir/APPROVALS.log" | tr -d '\r' | cksum)
   [ "$(rl_cksum_fmt "$pre")" = "$before" ] || return 1
-  re_l='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} KST [|] [^|]+ [|] [^|]* [|] - [|] 자동 (B[0-9]{1,6}) 으로 실행$'
+  # 자동 스크립트가 쓰는 두 꼴만(동작 이름을 정해 둠 — 승인·마무리 같은 다른 동작 줄은 예외 아님)
+  re_p='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} KST [|] 푸시 [|] ([A-Za-z0-9_][A-Za-z0-9._/-]*) [|] - [|] 자동 (B[0-9]{1,6}) 으로 실행$'
+  re_m='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} KST [|] 합치기 [|] 허락 ([A-Za-z0-9_][A-Za-z0-9._/-]*) PR[(]지금 가지[)] [(](squash|rebase|merge)[)] @[0-9a-f]{7} [|] - [|] 자동 (B[0-9]{1,6}) 으로 실행$'
   while IFS= read -r ln || [ -n "$ln" ]; do
     ln=${ln%$'\r'}
     [ -z "${ln//[[:space:]]/}" ] && continue
-    [[ $ln =~ $re_l ]] || return 1
-    case "$bs" in *" ${BASH_REMATCH[1]} "*) ;; *) return 1 ;; esac
+    if [[ $ln =~ $re_p ]]; then lbr=${BASH_REMATCH[1]}; lmt=""; lb=${BASH_REMATCH[2]}
+    elif [[ $ln =~ $re_m ]]; then lbr=${BASH_REMATCH[1]}; lmt=${BASH_REMATCH[2]}; lb=${BASH_REMATCH[3]}
+    else return 1; fi
+    if [ -z "$lmt" ]; then   # 푸시 줄: 그 묶음 허락의 가지와 같아야
+      case "$gi" in *"|$lb|$lbr|"*) ;; *) return 1 ;; esac
+    else                     # 합치기 줄: 가지와 방식이 허락과 같아야(합친 뒤 허락은 방식 아무거나)
+      case "$gi" in *"|$lb|$lbr|$lmt|"*|*"|$lb|$lbr|*|"*) ;; *) return 1 ;; esac
+    fi
     any=1
   done < <(tail -n +"$((n + 1))" "$rdir/APPROVALS.log")
   [ "$any" = 1 ]

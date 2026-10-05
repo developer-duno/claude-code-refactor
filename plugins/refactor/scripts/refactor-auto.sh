@@ -288,6 +288,8 @@ EOF
     esac
     no "⛔ 올리지 못했습니다: ${e1:-(오류 문구 없음)}" "   (거절·권한·인증 오류는 다시 해도 같습니다 — 사람이 확인해 주세요)"
   fi
+  # 보안 검사(10-05): 올리는 동안(네트워크) 기록에 다른 줄이 끼었으면 봉인에 싣지 않는다 — 덧붙이기 직전에 다시 대조
+  rl_log_intact "$dir" || no "⛔ 승인 기록이 봉인과 다릅니다(올리는 동안 바뀜) — 사람이 /refactor:approve 확인 먼저"
   { printf '%s KST | 푸시 | %s | - | 자동 %s 으로 실행\n' "$(rl_now)" "$ABR" "$B" >> "$log"; } 2>/dev/null && rl_log_seal "$dir"
   say "✅ 올렸습니다: $ABR → origin (자동 $B)"
   say "다음: refactor-auto pr"
@@ -366,6 +368,7 @@ merge)
     if [ -d "$mf" ] || ! { printf 'merge %s - %s %s\n%s\n%s\n' "$ABR" "$AMTH" "$hoid" "$(date +%s)" "bash \"$mroot/hooks/run.sh\" refactor-merge \"$proj\" $sid" > "$mf.tmp.$$" && mv -f "$mf.tmp.$$" "$mf"; }; then
       rm -f "$mf.tmp.$$"; again "⚠️ 합치기 허락 파일을 쓰지 못했습니다"
     fi
+    rl_log_intact "$dir" || { rm -f "$mf"; no "⛔ 승인 기록이 봉인과 다릅니다 — 사람이 /refactor:approve 확인 먼저"; }
     if ! { printf '%s KST | 합치기 | 허락 %s PR(지금 가지) (%s) @%s | - | 자동 %s 으로 실행\n' "$(rl_now)" "$ABR" "$AMTH" "${hoid:0:7}" "$B" >> "$log"; } 2>/dev/null; then
       rm -f "$mf"; again "⚠️ 승인 기록을 쓰지 못했습니다"
     fi
