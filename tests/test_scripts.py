@@ -4401,9 +4401,9 @@ def check_docs_035(check):
           and "`⛔ 합치기 허락이 승인 기록과 맞지 않습니다`·`⛔ 허락이 사라졌거나 바뀌었습니다`(끝 줄이 \"허락은 끝났습니다\")면 사용자에게 `/refactor:approve 합치기` 를 다시 입력해 달라고 한다" in s7
           and "끝 줄이 \"새 허락은 그대로입니다\"면 사용자가 방금 새로 허락한 것이니, 이번 차례의 새 결과 블록에 적힌 명령을 그대로 한 번 실행한다" in s7, "")
 
-    # D5 배포가 깨졌을 때 세 갈래(approve SKILL 7 · README §6-3) · "전부 막는다"고 쓰지 않음(heroku·netlify rollback 은 규칙에 없음)
+    # D5 배포가 깨졌을 때 세 갈래(approve SKILL 7 · README §6-3) · "전부 막는다"고 쓰지 않음(heroku·netlify rollback 은 0.3.7 부터 막음 — 목록에 적힘)
     d5 = ["이전 배포로", "Revert 버튼으로 되돌리는 PR", "사람이 GitHub 화면에서 합", "지금 작업 가지의 PR 만 받",
-          "`vercel rollback`·`wrangler rollback`·`railway redeploy` 등)", "안전장치가 막"]
+          "`vercel rollback`·`wrangler rollback`·`railway redeploy`·`heroku rollback`·`netlify rollback` 등)", "안전장치가 막"]
     a = rd.find("**PR 합치기 — `/refactor:approve 합치기`**")
     b = rd.find("**새 작업 가지 — `/refactor:approve 새 가지`**", a)
     mg = rd[a:b] if a >= 0 and b > a else ""
@@ -4453,8 +4453,7 @@ def check_docs_035(check):
     need13 = ["**합치기는 허락만, 합치는 것은 그 차례의 Claude**", "**PR 쪽과 내 커밋이 다를 때 안내 넷**",
               "**이미 커밋된 앞 단계 기준선을 다시 바꾸면 알림**", "`gh api`로 PR 합치기(`pulls/<번호>/merge`·GraphQL 합치기", "파이썬·노드·perl 로 플러그인 폴더의 파일을 쓰는 꼴",
               "초록은 **10초 간격 두 번 연속**", "가지 참조 쓰기(`/git/refs`), 파일 직접 커밋(`/contents/`), `gh alias set|import`",
-              "**CI 두 시험을 동시에**", "**합친 뒤 배포가 깨졌을 때 갈 길**", "**알려진 한계**", "`/refactor:go 다시`",
-              "`heroku rollback`·`netlify rollback`은 안전장치 규칙에 없습니다"]
+              "**CI 두 시험을 동시에**", "**합친 뒤 배포가 깨졌을 때 갈 길**", "**알려진 한계**", "`/refactor:go 다시`"]
     check("0.3.5 D3 README §13: 0.3.5 절이 0.3.4 절 앞 · 합치기 새 흐름·#21·#1·X1·X2·CI·#20·알려진 한계",
           ch != "" and all(n in ch for n in need13), str([n for n in need13 if n not in ch]))
 
