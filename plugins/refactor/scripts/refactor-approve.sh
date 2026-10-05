@@ -11,6 +11,9 @@
 # "B1"(0.4.0 묶음)은 계획서 카드의 "- **묶음**: B1 …" 칸으로 그 묶음의 안 끝난 카드를 펼쳐 카드마다 승인(기존 승인 루틴)하고, 그 앞에
 #   "| 묶음 승인 | B1 | - | 카드 N개: … |" 한 줄을 남긴다(지문 칸 "-" — 승인 상태 계산은 이 줄을 건너뜀 · 이 카드 목록이 그 묶음의 정본).
 #   STATE.md 앞머리 current_bundle 도 여기서만 쓴다(칸이 없으면 넣는다).
+# "B1 자동 [rebase|squash|merge]"(0.4.0 자동 모드)는 묶음 승인 전에 PROFILE 의 자동 모드 칸·가지·방식을 확인하고(안 되면 ❓ — 아무것도 안 바꿈),
+#   승인되면 허락 파일 docs/refactor/.turn-auto.B1(11줄 — 아래 자동 모드 절)과 기록 "| 자동 | B1 | - | <시각> <가지> <방식> |" 을 남긴다.
+#   푸시·합치기·배포 확인·라이브 검증은 그다음 인자 없는 /refactor:go 차례에 Claude 가 scripts/refactor-auto.sh 로 한다
 #   환경변수 REFACTOR_TURN_SID = 입력 훅이 넘기는 세션 ID("푸시"·"합치기"의 허락 파일 이름에 쓴다)
 #   환경변수 REFACTOR_TRANSCRIPT_PATH = 입력 훅이 넘기는 대화 기록 파일 경로(0.3.7 — "합치기"가 .turn-mergetp.<세션ID> 에 적는다. 없으면 빈 값)
 # "허용"(0.3.3)은 승인된 🛠 단계의 기준선 허용 파일(.allow-baseline-edit)에 단계 ID 를 적는다.
@@ -94,6 +97,8 @@ mode="approve"; want_base=0; ids=""; phases=""; bad=""; pos=0; conflict=""; spec
 nbw=0; nbname=""; nbn=0; mprn=""; mth=""; mnn=0; mmn=0
 # 0.4.0: 묶음 'B1'(bundles = 묶음 ID 들 · bkw = '묶음' 낱말 수 · bzero = 앞에 0 이 붙은 이름) · '자동'(BUNDLE_AUTO=1 — 자동 모드가 쓴다)
 bundles=""; bkw=0; bzero=""; BUNDLE_AUTO=0
+# 0.4.0 자동 모드 합치기 방식('B1 자동 squash' — 묶음 이름과 '자동' 뒤에서만 받는다): amth = 방식, amn = 방식 낱말 수
+amth=""; amn=0
 # 영문 소문자만 대문자로(tr '[:lower:]' '[:upper:]' 를 LC_ALL=C 에서 쓴 것과 같게, 외부 명령 없이)
 upper_ascii() {
   local s=$1 o="" c lo=abcdefghijklmnopqrstuvwxyz UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ p i
@@ -130,6 +135,7 @@ for tok in $raw; do
     합치기|MERGE)
       if [ "$pos" = 1 ]; then mode="merge"
       elif [ "$mode" = "merge" ] && [ "$up" = MERGE ]; then mth=merge; mmn=$((mmn + 1))
+      elif [ "$BUNDLE_AUTO" = 1 ] && [ -n "$bundles" ] && [ "$up" = MERGE ]; then amth=merge; amn=$((amn + 1))
       else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다(예: /refactor:approve 합치기)"; fi ;;
     확인|CONFIRM|SEAL) special=confirm ;;
     마무리|DONE|FINISH|끝|완료) special=done ;;
@@ -147,6 +153,8 @@ for tok in $raw; do
           병합) mth=merge; mmn=$((mmn + 1)) ;;
           *) if [[ $up =~ ^#?[0-9]{1,7}$ ]]; then mprn=$((10#${up#\#})); mnn=$((mnn + 1)); else bad="$bad $tok"; fi ;;
         esac
+      elif [ "$BUNDLE_AUTO" = 1 ] && [ -n "$bundles" ] && case "$up" in REBASE|리베이스|SQUASH|스쿼시|병합) true ;; *) false ;; esac; then
+        case "$up" in REBASE|리베이스) amth=rebase ;; SQUASH|스쿼시) amth=squash ;; *) amth=merge ;; esac; amn=$((amn + 1))
       elif [[ $up =~ ^B0[0-9]+$ ]]; then bzero="$bzero $tok"
       elif [[ $up =~ ^B[0-9]+$ ]]; then case " $bundles " in *" $up "*) ;; *) bundles="$bundles $up" ;; esac
       else bad="$bad $tok"
@@ -172,7 +180,7 @@ if [ -z "$conflict" ]; then
   elif [ -n "$bundles" ] && { [ "$want_base" = 1 ] || [ -n "$special" ] || [ "$mode" = "push" ] || [ "$mode" = "branch" ] || [ "$mode" = "merge" ]; }; then conflict="묶음 이름은 baseline·확인·마무리·푸시·새 가지·합치기와 섞지 않습니다"
   elif [ "$BUNDLE_AUTO" = 1 ] && [ "${bundles# }" != "${bundles##* }" ]; then conflict="'자동'은 묶음 하나에만 씁니다(예: /refactor:approve B1 자동)"
   elif [ "$BUNDLE_AUTO" = 1 ] && [ "$mode" = "hold" ]; then conflict="'보류'와 '자동'은 함께 쓰지 않습니다(예: /refactor:approve 보류 B1)"
-  elif [ "$BUNDLE_AUTO" = 1 ]; then conflict="자동 모드는 아직 없습니다 — 지금은 /refactor:approve${bundles} 로 승인한 뒤 /refactor:go 로 실행하세요"
+  elif [ "$amn" -gt 1 ]; then conflict="'자동' 뒤의 합치는 방식(rebase·squash·merge)은 하나만 붙입니다(예: /refactor:approve B1 자동 squash)"
   fi
 fi
 
@@ -180,7 +188,7 @@ say "== /refactor:approve 결과 ($now KST) =="
 if [ -n "$conflict" ]; then
   say "❓ $conflict — 아무것도 바꾸지 않았습니다."
   say "   승인: /refactor:approve P1-1 P1-2    ·    승인 취소: /refactor:approve 보류 P1-2"
-  say "   묶음 승인: /refactor:approve B1    ·    묶음 승인 취소: /refactor:approve 보류 B1"
+  say "   묶음 승인: /refactor:approve B1    ·    묶음 승인 취소: /refactor:approve 보류 B1    ·    자동 모드: /refactor:approve B1 자동"
   say "   기준선 허용: /refactor:approve 허용 P1-1    ·    허용 닫기: /refactor:approve 허용 닫기    ·    올리기 허락: /refactor:approve 푸시"
   say "   PR 합치기: /refactor:approve 합치기 68 rebase    ·    합친 뒤 새 작업 가지: /refactor:approve 새 가지"
   exit 0
@@ -315,6 +323,110 @@ if [ "$intact" = 0 ]; then
     say "   👤 직접 한 승인이 아니면 그 줄을 지운 뒤 /refactor:approve 확인 을 입력하세요."
   fi
   if [ -n "$ids$phases$special$bundles" ] || [ "$want_base" = 1 ] || [ "$mode" = "allow" ] || [ "$mode" = "push" ] || [ "$mode" = "branch" ] || [ "$mode" = "merge" ]; then say "   (그래서 이번 요청은 처리하지 않았습니다.)"; exit 0; fi
+fi
+
+# ── 자동 모드(0.4.0 — /refactor:approve B1 자동 [방식]): 묶음 승인 전에 켤 수 있는지 먼저 본다(하나라도 안 되면 ❓ — 아무것도 안 바꿈) ──
+#   PROFILE 의 자동 모드 칸(👤 사람이 적음): 운영 주소 · 배포 방식(기존 칸 — '수동'이면 합치기까지만 = merge-only) · 배포 끝 보는 법 · 판 표지 · 확인할 화면 표.
+#   통과하면 묶음 승인 뒤(아래 계획서 단계) 기록 "| 자동 | B1 | - | <epoch> <가지> <방식> |" + 허락 파일 docs/refactor/.turn-auto.B1 을 만든다
+auto_no() { say "❓ $1 — 자동 모드를 켜지 않았습니다(아무것도 바꾸지 않았습니다)."; [ -n "${2:-}" ] && say "   $2"; exit 0; }
+# PROFILE 의 "- <칸 이름>:" 줄 값(앞뒤 공백 뗌 · 괄호로 시작하면 안내 글이라 빈 값) → PV
+prof_val() {
+  local x v
+  PV=""
+  [ -f "$dir/PROFILE.md" ] || return 0
+  while IFS= read -r x || [ -n "$x" ]; do
+    x=${x%$'\r'}
+    case "$x" in "- $1:"*) ;; *) continue ;; esac
+    v=${x#"- $1:"}
+    v=${v#"${v%%[![:space:]]*}"}; v=${v%"${v##*[![:space:]]}"}
+    case "$v" in "("*|"（"*) v="" ;; esac
+    PV=$v
+    return 0
+  done < "$dir/PROFILE.md"
+}
+if [ "$BUNDLE_AUTO" = 1 ]; then
+  if rl_done_confirmed "$dir"; then say "ℹ️ 이미 마무리되어 안전장치가 꺼져 있습니다 — 자동 모드는 리팩토링 중에만 씁니다(아무것도 바꾸지 않았습니다)."; exit 0; fi
+  [ -z "$bad" ] || auto_no "알아듣지 못한 입력이 있습니다:$bad" "예: /refactor:approve${bundles} 자동 squash (방식은 묶음 이름과 '자동' 뒤에)"
+  asid=${REFACTOR_TURN_SID:-}
+  [[ $asid =~ ^[A-Za-z0-9_-]{1,128}$ ]] || auto_no "대화(세션) 정보를 받지 못했습니다" "입력창에 /refactor:approve${bundles} 자동 을 다시 쳐 주세요."
+  command -v git >/dev/null 2>&1 || auto_no "git 을 찾지 못했습니다"
+  command -v gh >/dev/null 2>&1 || auto_no "gh(GitHub CLI)를 찾지 못했습니다" "자동 모드는 gh 로 PR 을 만들고 합칩니다 — 묶음만 승인하려면 /refactor:approve${bundles}"
+  abr=$(git -C "$proj" symbolic-ref -q --short HEAD 2>/dev/null); agrc=$?
+  [ "$agrc" -gt 1 ] && auto_no "이 폴더는 git 저장소가 아니거나 git 이 저장소 설정을 읽지 못했습니다"
+  { [ "$agrc" = 1 ] || [ -z "$abr" ]; } && auto_no "지금 가지가 없습니다(특정 커밋에 떨어진 상태)"
+  { [[ $abr =~ ^[A-Za-z0-9._/-]+$ ]] && [[ $abr =~ ^[A-Za-z0-9_] ]]; } || auto_no "가지 이름($abr)에 영문·숫자·._/- 밖의 글자가 있거나 첫 글자가 - . / 입니다"
+  rl_origin_base "$proj" || auto_no "origin 의 기본 가지를 찾지 못했습니다(origin/HEAD·origin/main·origin/master 참조 없음)"
+  case "$abr" in main|master|"$RL_BNAME") auto_no "지금 가지($abr)가 기본 가지입니다 — 자동 모드는 작업 가지에서만 씁니다" ;; esac
+  # 자동 모드 스크립트 명령의 두 경로(안전장치가 따옴표 안 $ ` " 를 받지 않는다 — 합치기 허락과 같은 확인)
+  aroot=${REFACTOR_ROOT:-}; aroot=${aroot//"\\"//}; aroot=${aroot%/}
+  case "$aroot$RL_TAB$proj" in *'"'*|*'$'*|*'`'*|*'\'*|*"$RL_NL"*|*$'\r'*) aroot="" ;; esac
+  [ -n "$aroot" ] || auto_no "플러그인·프로젝트 폴더 경로에 특수 글자가 있어(또는 비어 있어) 자동 모드 명령을 만들 수 없습니다"
+  [ -f "$dir/PROFILE.md" ] || auto_no "docs/refactor/PROFILE.md 가 없습니다"
+  APF="docs/refactor/PROFILE.md 의 '자동 모드' 칸(👤 사람이 적음)을 채운 뒤 다시: /refactor:approve${bundles} 자동"
+  # ⑦ 운영 주소: http(s) 주소 하나(백틱은 뗌 · 공백·따옴표·<>·; 없음) — 끝의 / 는 뗀다
+  prof_val "운영 주소"; aurl=${PV//\`/}
+  [ -n "$aurl" ] || auto_no "운영 주소가 비어 있습니다" "$APF"
+  re_aurl='^https?://[A-Za-z0-9._~:/@%+=,!*-]+$'; re_apath='^/[A-Za-z0-9._~/@%+=,!*-]*$'
+  [[ $aurl =~ $re_aurl ]] || auto_no "운영 주소($aurl)가 http(s) 주소 꼴이 아닙니다(공백·따옴표·?·# 없이)" "$APF"
+  aurl=${aurl%/}
+  # ⑫ 배포 방식(기존 칸 재사용): '수동'이 들어 있으면 합치기까지만(merge-only — 결정 라)
+  prof_val "배포 방식"; amode=auto
+  case "$PV" in *수동*) amode=merge-only ;; esac
+  # ⑧ 배포 끝 보는 법: vercel / railway / cloudflare / netlify / github / 주소 표지(= 판 표지만 봄)
+  prof_val "배포 끝 보는 법"; v=${PV//\`/}; upper_ascii "$v"; ahost=""
+  case "$UPV" in
+    VERCEL*) ahost=vercel ;; RAILWAY*) ahost=railway ;; CLOUDFLARE*|WRANGLER*) ahost=cloudflare ;; NETLIFY*) ahost=netlify ;;
+    GITHUB*) ahost=github ;; "주소 표지"*|주소표지*|"판 표지"*) ahost=marker ;;
+  esac
+  if [ -z "$ahost" ]; then
+    if [ -n "$v" ]; then auto_no "배포 끝 보는 법($v)을 알아듣지 못했습니다(vercel / railway / cloudflare / netlify / github / 주소 표지 중 하나)" "$APF"; fi
+    [ "$amode" = merge-only ] || auto_no "배포 끝 보는 법이 비어 있습니다(배포가 끝났는지 볼 방법 — 배포를 사람이 하는 저장소면 '배포 방식' 칸에 수동)" "$APF"
+    ahost=-
+  fi
+  # ⑨ 판 표지: 백틱 하나 = 경로(/ 로 시작 — 본문 첫 줄이 판 표지) · 백틱 둘 = 경로 + 그 앞 글자(본문에서 그 글자 바로 뒤부터 " ' < 공백 앞까지)
+  #   → 한 줄 "<경로>→<앞 글자>". railway·cloudflare·netlify·주소 표지는 판 표지가 꼭 있어야 한다(#7 — sha 로 배포를 못 가림)
+  prof_val "판 표지"; v=$PV; amark=""; ampath=""; ampre=""
+  if [ -n "$v" ]; then
+    case "$v" in *\`*\`*) ;; *) auto_no "판 표지($v)는 경로를 백틱으로 적습니다(예: \`/version.txt\`)" "$APF" ;; esac
+    v=${v#*\`}; ampath=${v%%\`*}; v=${v#*\`}
+    case "$v" in *\`*\`*) v=${v#*\`}; ampre=${v%%\`*} ;; esac
+    [[ $ampath =~ $re_apath ]] || auto_no "판 표지의 경로($ampath)가 / 로 시작하는 주소 꼴이 아닙니다(공백·?·# 없이)" "$APF"
+    case "$ampre" in *"→"*|*";"*) auto_no "판 표지의 앞 글자에 → 나 ; 를 쓸 수 없습니다" "$APF" ;; esac
+    amark="$ampath→$ampre"
+  fi
+  case "$ahost" in railway|cloudflare|netlify|marker)
+    [ "$amode" = merge-only ] || [ -n "$amark" ] || auto_no "배포 끝 보는 법이 $ahost 이면 판 표지가 꼭 있어야 합니다(새 배포인지 판 표지로만 알 수 있음)" "$APF" ;;
+  esac
+  # ⑩ 확인할 화면: "- 확인할 화면:" 줄 뒤의 표 | 경로 | 기대 글자 | (머리·구분 줄 빼고 1~5줄) → "경로→기대 글자;경로→기대 글자"
+  ascr=""; an=0; ain=0
+  while IFS= read -r x || [ -n "$x" ]; do
+    x=${x%$'\r'}
+    if [ "$ain" = 0 ]; then case "$x" in "- 확인할 화면:"*) ain=1 ;; esac; continue; fi
+    # 표 앞의 빈 줄은 건너뛰고, 표가 아닌 글(다음 칸·다음 절)이 나오거나 표가 끝나면 그친다(다른 절의 표로 새지 않게)
+    case "$x" in "|"*) ;; *[![:space:]]*) break ;; *) [ "$ain" = 2 ] && break; continue ;; esac
+    ain=2
+    c1=${x#|}; c2=${c1#*|}; c1=${c1%%|*}; c2=${c2%%|*}
+    c1=${c1//\`/}; c1=${c1#"${c1%%[![:space:]]*}"}; c1=${c1%"${c1##*[![:space:]]}"}
+    c2=${c2#"${c2%%[![:space:]]*}"}; c2=${c2%"${c2##*[![:space:]]}"}
+    case "$c1" in 경로|"") continue ;; esac
+    case "$c1" in -*|:-*) continue ;; esac
+    [[ $c1 =~ $re_apath ]] || auto_no "확인할 화면의 경로($c1)가 / 로 시작하는 주소 꼴이 아닙니다(공백·?·# 없이)" "$APF"
+    case "$c1" in */api/*|/api) auto_no "확인할 화면에 /api/ 주소($c1)는 넣지 않습니다(사람이 보는 화면만)" "$APF" ;; esac
+    [ -n "$c2" ] || auto_no "확인할 화면 $c1 의 기대 글자가 비어 있습니다" "$APF"
+    case "$c2" in *"→"*|*";"*) auto_no "확인할 화면 $c1 의 기대 글자에 → 나 ; 를 쓸 수 없습니다" "$APF" ;; esac
+    an=$((an + 1)); ascr="$ascr;$c1→$c2"
+  done < "$dir/PROFILE.md"
+  [ "$an" -gt 0 ] || auto_no "확인할 화면이 비어 있습니다" "$APF"
+  [ "$an" -le 5 ] || auto_no "확인할 화면이 ${an}줄입니다(5줄까지)" "$APF"
+  ascr=${ascr#;}
+  # ⑤ 합치는 방식: 입력 → PROFILE "- PR 합치는 방식:" 칸 → 없으면 ❓(#19)
+  if [ -z "$amth" ]; then
+    prof_val "PR 합치는 방식"; v=${PV//\`/}; upper_ascii "$v"
+    case "$UPV" in REBASE) amth=rebase ;; SQUASH) amth=squash ;; MERGE) amth=merge ;; esac
+  fi
+  [ -n "$amth" ] || auto_no "합치는 방식을 모릅니다(PROFILE.md 의 '- PR 합치는 방식:' 칸이 없거나 비어 있음)" "방식을 붙여 다시: /refactor:approve${bundles} 자동 squash"
+  atp=${REFACTOR_TRANSCRIPT_PATH:-}
+  case "$atp" in *"$RL_NL"*|*$'\r'*) atp="" ;; esac
 fi
 
 # ── 푸시 허락(0.3.3): 이번 차례에만 작업 가지를 올려도 된다는 표시 docs/refactor/.turn-push.<세션ID> ─────────
@@ -591,16 +703,9 @@ if [ "$mode" = "merge" ]; then
   #   (허락 뒤 첫 실행 전·되풀이 사이에 친 말도 잡힘). 이 허락을 친 입력 자신의 enqueue 줄은 보통 이 크기 안에 들지만(실측: 줄 시각이 몇 초 앞섬)
   #   3번째 줄 = 허락 시각 UTC 초 YYYY-MM-DDTHH:MM:SS(보완 G1 — 재검사 A2 #1): 대화 기록은 비동기로 늦게 쓰일 수 있어(공식 훅 문서) 그 줄이 크기 뒤에
   #   오면 합치기 스크립트가 사람 입력으로 보고 늘 멈춘다 → 줄의 "timestamp"(UTC) 가 이 초보다 뒤인 줄만 사람 입력으로 본다
+  #   (0.4.0: 경로 확인·세 줄 쓰기는 lib rl_mergetp_write — 자동 모드 merge 단계와 같이 쓴다)
   mtp="$dir/.turn-mergetp.$msid"
-  [ -f "$mtp" ] && rm -f "$mtp"
-  tpth=${REFACTOR_TRANSCRIPT_PATH:-}
-  case "$tpth" in *"$RL_NL"*|*$'\r'*) tpth="" ;; esac
-  if [ -n "$tpth" ] && [ -f "$tpth" ] && [ -r "$tpth" ]; then
-    tpsz=$(wc -c < "$tpth" 2>/dev/null) || tpsz=""
-    tpsz=${tpsz//[!0-9]/}
-    tpts=$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null) || tpts=""
-    { printf '%s\n%s\n%s\n' "$tpth" "$tpsz" "$tpts" > "$mtp.tmp.$$" && mv -f "$mtp.tmp.$$" "$mtp"; } 2>/dev/null || rm -f "$mtp.tmp.$$"
-  fi
+  rl_mergetp_write "$mtp" "${REFACTOR_TRANSCRIPT_PATH:-}"
   # 30분 경고: 입력 감시를 켰으면(경로 파일을 만듦) 몇 초 안에 · 못 켰으면 0.3.6 문구(Esc 먼저 — 입력만 하면 최대 약 2분 뒤)
   if [ -f "$mtp" ]; then
     mwarn="멈추려면 아무 말이나 입력하세요 — 입력하면 몇 초 안에 허락이 끝납니다(대화 기록을 못 볼 때는 지금 도는 확인 한 번이 끝난 뒤, 최대 약 2분 뒤). Claude 가 실행 중이면 Esc 로도 멈춥니다."
@@ -995,6 +1100,30 @@ EOF
       fi
     fi
 
+    # 0.4.0 자동 모드: 묶음이 승인됐으면(위 묶음 확인을 통과 — 5장 초과·없는 묶음이면 여기 안 옴) 허락 파일 .turn-auto.<B> 11줄
+    #   ① B-ID ② 만든 시각(초) ③ 세션 ID ④ 승인 때 가지 ⑤ 합치는 방식 ⑥ 대화 기록 경로(입력 훅의 transcript_path — 없으면 빈 줄)
+    #   ⑦ 운영 주소 ⑧ 배포 끝 보는 법 ⑨ 판 표지("경로→앞 글자" · 없으면 빈 줄) ⑩ 확인할 화면("경로→기대 글자;…") ⑪ "go=" (첫 인자 없는 /refactor:go 때
+    #   입력 훅이 시각을 채움) ⑫ merge-only(배포 방식이 수동일 때만). 파일을 쓴 뒤 기록 "| 자동 | B1 | - | <시각> <가지> <방식> |" — 기록을 못 쓰면 파일을 지운다
+    if [ "$BUNDLE_AUTO" = 1 ] && [ "$mode" = approve ] && case " $bok " in *" ${bundles# } "*) true ;; *) false ;; esac; then
+      ab=${bundles# }; aep=$(date +%s); aaf="$dir/.turn-auto.$ab"
+      [ -f "$dir/.turn-autopre.$ab" ] && rm -f "$dir/.turn-autopre.$ab"
+      if [ "$amode" = merge-only ]; then a12=$'\n'merge-only; else a12=""; fi
+      if [ -d "$aaf" ] || ! { printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\ngo=%s\n' "$ab" "$aep" "$asid" "$abr" "$amth" "$atp" "$aurl" "$ahost" "$amark" "$ascr" "$a12" > "$aaf.tmp.$$" && mv -f "$aaf.tmp.$$" "$aaf"; }; then
+        rm -f "$aaf.tmp.$$"; say "⚠️ 자동 모드 허락 파일을 쓰지 못했습니다 — 묶음 승인은 됐습니다. 자동 모드 없이 /refactor:go 로 실행하세요."
+      elif ! { printf '%s KST | 자동 | %s | - | %s %s %s%s\n' "$now" "$ab" "$aep" "$abr" "$amth" "${a12:+ merge-only}" >> "$log"; } 2>/dev/null; then
+        rm -f "$aaf"; say "⚠️ 승인 기록을 쓰지 못해 자동 모드를 켜지 않았습니다 — 묶음 승인은 됐습니다."
+      else
+        rl_log_seal "$dir"
+        aend=$(TZ=KST-9 date -d "@$((aep + 7200))" '+%H:%M' 2>/dev/null || TZ=KST-9 date -r "$((aep + 7200))" '+%H:%M' 2>/dev/null)
+        say "🤖 자동 모드 켬: [$ab${bdesc:+ $bdesc}] — 합치는 방식 $amth · 작업 가지 $abr · 승인 뒤 2시간 안${aend:+(~$aend KST)}"
+        say "⚠️ 자동 모드: 이 묶음 카드가 다 끝나면 다음 /refactor:go 한 차례에서 Claude 가 푸시·PR·합치기·배포 확인·라이브 검증까지 혼자 합니다 — 기본 가지에 합쳐지면 운영 배포가 시작됩니다. 멈추려면 아무 말이나 입력하세요(Claude 가 실행 중이면 Esc 로도). 승인 뒤 2시간이 지나면 저절로 꺼집니다."
+        [ "$amode" = merge-only ] && say "   배포 방식이 '수동'이라 합치기까지만 합니다 — 배포는 사람이 하고, 끝나면 Claude 에게 라이브 검증을 부탁하세요."
+        say "   다음: /refactor:go (인자 없이 — 그 한 차례 안에서만 자동으로 마감합니다 · 그 밖의 입력을 하면 자동 모드가 꺼집니다)"
+      fi
+    elif [ "$BUNDLE_AUTO" = 1 ]; then
+      say "   (묶음이 승인되지 않아 자동 모드도 켜지 않았습니다.)"
+    fi
+
     # 현황(기록 기준): 계획서를 다시 읽지 않고, 이번에 처리한 단계만 기록에 남긴 대로 바꿔 본다
     #   승인 → 체크 x, 기록의 지문(승인 줄 덧붙임 포함)이 다시 쓴 뒤 본문의 지문(a<순번>)과 같으면 승인됨, 다르면 바뀜
     #   보류 → 체크 칸 비움, 보류됨. 기록에는 이번 단계 줄만 더했으므로 다른 단계의 상태는 그대로다
@@ -1064,6 +1193,7 @@ EOF
       say "        /refactor:approve P1          (P1 Phase 전체 — 완료된 단계는 건너뜀)"
       say "        /refactor:approve B1          (B1 묶음 — 카드의 '묶음' 칸이 B1 인 안 끝난 카드 전부, 5장까지 · '묶음 B1' 도 같음)"
       say "        /refactor:approve 보류 B1      (묶음 승인 취소)"
+      say "        /refactor:approve B1 자동 [squash] (묶음 승인 + 자동 모드 — 다음 /refactor:go 한 차례에서 Claude 가 푸시·PR·합치기·배포 확인·라이브 검증까지 · 2시간 안)"
       say "        /refactor:approve baseline     (기준선 계획 승인)"
       say "        /refactor:approve 보류 P1-2    (승인 취소 — 맨 앞에 '보류', 완료 전만)"
       say "        /refactor:approve 마무리        (실행 대기 단계가 없을 때 리팩토링 끝내기)"

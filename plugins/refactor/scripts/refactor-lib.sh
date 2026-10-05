@@ -514,6 +514,22 @@ rl_bounded() {
   return "$rc"
 }
 
+# 합치기 입력 감시 경로 파일(0.3.7 .turn-mergetp.<세션ID>) 쓰기 — 승인 스크립트("합치기")와 자동 모드 스크립트(merge 단계)가 같이 쓴다(0.4.0).
+#   $1 = 쓸 파일, $2 = 대화 기록 파일 경로(훅 입력의 transcript_path). 먼저 $1 을 지우고, 경로에 줄바꿈·CR 이 없고 읽을 수 있는 파일일 때만
+#   세 줄을 쓴다: ① 경로 ② 지금 그 파일의 바이트 수 ③ 지금 시각 UTC 초(YYYY-MM-DDTHH:MM:SS) — 합치기 스크립트(S2b)가 그 크기·시각 뒤의 사람 입력을 본다.
+#   썼으면 0, 못 썼으면(경로 없음·파일 아님·쓰기 실패) 1 — 그때 입력 감시는 꺼짐(0.3.6 과 같은 동작)
+rl_mergetp_write() {
+  local f=$1 p=${2:-} sz ts
+  [ -f "$f" ] && rm -f "$f"
+  case "$p" in *"$RL_NL"*|*$'\r'*) p="" ;; esac
+  [ -n "$p" ] && [ -f "$p" ] && [ -r "$p" ] || return 1
+  sz=$(wc -c < "$p" 2>/dev/null) || sz=""
+  sz=${sz//[!0-9]/}
+  ts=$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null) || ts=""
+  { printf '%s\n%s\n%s\n' "$p" "$sz" "$ts" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"; } 2>/dev/null || { rm -f "$f.tmp.$$"; return 1; }
+  [ -f "$f" ]
+}
+
 # 기준선 허용 파일(docs/refactor/.allow-baseline-edit) 읽기(0.3.2 #10) — $1 docs/refactor 폴더. 표준출력 1줄째:
 #   NONE            파일 없음(기준선은 잠김)
 #   ALL             공백만(개행·BOM·CR·NUL 포함) — 예전처럼 기준선 전부 허용(사람이 지운다)

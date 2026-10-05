@@ -75,6 +75,13 @@ re_sys='^([[:space:]]|\\[nrt])*<(task-notification|system-reminder|agent-message
 [ -f "$rdir/.turn-merge.$sid" ] && rm -f "$rdir/.turn-merge.$sid"
 # 0.3.7: 합치기 허락과 함께 만든 대화 기록 경로 파일(.turn-mergetp.<세션ID>)도 같이 지운다(하루 정리 .turn* 글로브도 덮는다)
 [ -f "$rdir/.turn-mergetp.$sid" ] && rm -f "$rdir/.turn-mergetp.$sid"
+# 0.4.0 자동 모드 허락(/refactor:approve B<n> 자동 이 만든 .turn-auto.B<n>)은 인자 없는 /refactor:go 한 차례에만(§2-1 #2) — 그 밖의 사람 입력
+#   (두 번째 go 는 아래 go 처리에서 · go 하나씩·go 묶음·go 다시·approve 보류·일반 문장 …)은 세션과 상관없이 모두 지운다. 이번 입력이
+#   /refactor:approve B<n> 자동 이면 아래 승인 처리가 새로 만든다. 합친 뒤의 .turn-merged.* 는 지우지 않는다(하루 정리만 — 합친 뒤 읽기 단계는 끝까지)
+re_go0='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])*$'
+if ! [[ $prompt =~ $re_go0 ]]; then
+  for af_ in "$rdir"/.turn-auto.*; do [ -e "$af_" ] && rm -f "$af_"; done
+fi
 
 T="$rdir/.turn.$sid"
 # 정리(하루 지난 표시 파일·0.2.0 의 세션 공용 .turn)는 외부 프로그램(find·date·rm)을 띄우므로 표시 처리(go 턴의 닫힌 표시 쓰기,
@@ -185,7 +192,10 @@ snapshot() { # 보호된 파일의 지금 변경 목록 + 승인 기록 지문�
   local D="$rdir/.turn-dirty.$sid"
   load_lib || return 0
   log_sum "$rdir/APPROVALS.log"
-  { rl_protected_dirty "$proj" "$rdir"; printf 'APPROVALS\t%s\n' "$SUMV"; } > "$D.tmp.$$" 2>/dev/null \
+  # 0.4.0: 승인 기록의 줄 수(줄바꿈 수)도 적는다 — 턴 중에 더해진 줄이 자동 모드 꼴뿐이면 셸 명령 뒤 점검(post-check)이 알리지 않는다(§2-3)
+  local c_="" x_ ln_=0
+  if [ -f "$rdir/APPROVALS.log" ]; then IFS= read -r -d '' c_ < "$rdir/APPROVALS.log"; x_=${c_//[!$'\n']/}; ln_=${#x_}; fi
+  { rl_protected_dirty "$proj" "$rdir"; printf 'APPROVALS\t%s\nAPPROVALS_N\t%s\n' "$SUMV" "$ln_"; } > "$D.tmp.$$" 2>/dev/null \
     && mv "$D.tmp.$$" "$D" || rm -f "$D.tmp.$$"
 }
 ready_ids() { # 지금 실행해도 되는 단계(승인 기록·지문 일치·미완료·번호 하나, 승인 기록이 봉인 그대로) → READY
@@ -231,6 +241,44 @@ mark() { # go 표시(1줄 "go <세션ID>", 2줄 "ready$1")를 임시 파일 "$T.
   printf 'go %s\nready%s\n' "$sid" "$1" > "$T.$$" 2>/dev/null && mv -f "$T.$$" "$T" 2>/dev/null || rm -f "$T.$$"
 }
 
+# 0.4.0 자동 모드: 인자 없는 /refactor:go 이면 이 세션의 자동 허락(.turn-auto.B<n> — 3줄 = 세션 ID)의 11줄 "go=" 에 지금 시각(초)을 채운다(차례 시작).
+#   이미 채워져 있으면 두 번째 go 라 지운다(자동은 한 차례만). 다른 세션의 것·꼴이 다른 것은 그대로 둔다(자동 모드 스크립트가 거절한다).
+#   채웠으면 이번 턴 컨텍스트(stdout)에 자동 마감 명령 꼴을 한 번 알린다(7-execute 「8. 자동 마감」)
+auto_go() {
+  local af_ n_ l_ ep_ b_="" body_ l3_ l11_ r_
+  for af_ in "$rdir"/.turn-auto.B*; do
+    [ -f "$af_" ] || continue
+    n_=0; body_=""; l3_=""; l11_=""
+    while IFS= read -r l_ || [ -n "$l_" ]; do
+      l_=${l_%$'\r'}; n_=$((n_ + 1))
+      [ "$n_" = 3 ] && l3_=$l_
+      [ "$n_" = 11 ] && l11_=$l_
+      body_="$body_$l_"$'\n'
+    done < "$af_"
+    [ "$l3_" = "$sid" ] || continue
+    case "$l11_" in
+      go=) ;;
+      go=[0-9]*) rm -f "$af_"; continue ;;
+      *) continue ;;
+    esac
+    ep_=""; (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 402 )) && printf -v ep_ '%(%s)T' -1
+    [ -n "$ep_" ] || ep_=$(date +%s)
+    # 11줄째만 바꿔 쓴다(임시 파일 → mv — 안전장치가 반쯤 쓴 파일을 읽지 않게)
+    n_=0; r_=""
+    while IFS= read -r l_; do n_=$((n_ + 1)); [ "$n_" = 11 ] && l_="go=$ep_"; r_="$r_$l_"$'\n'; done <<AGO
+$body_
+AGO
+    r_=${r_%$'\n'}
+    printf '%s' "$r_" > "$af_.tmp.$$" 2>/dev/null && mv -f "$af_.tmp.$$" "$af_" 2>/dev/null || { rm -f "$af_.tmp.$$"; continue; }
+    b_=${af_##*/.turn-auto.}
+  done
+  [ -n "$b_" ] || return 0
+  local rt=${REFACTOR_ROOT:-}
+  rt=${rt//"\\"//}; rt=${rt%/}
+  printf '%s\n' "[Vibe Refactor 자동 모드] $b_ 자동 모드가 이번 /refactor:go 한 차례에서 켜졌습니다 — 묶음 카드가 모두 끝나면 phases/7-execute.md 「8. 자동 마감」 대로" \
+    "  단계 이름만 바꿔 한 줄 그대로 실행합니다(다른 명령·래퍼와 섞지 않음): bash \"$rt/hooks/run.sh\" refactor-auto <단계> \"$proj\" $b_ $sid"
+}
+
 re_go='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt]|$)'
 re_again='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+다시(([[:space:]]|\\[nrt])+([A-Za-z_]+))?'
 re_bundle='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+묶음(([[:space:]]|\\[nrt])|$)'
@@ -249,6 +297,7 @@ if [[ $prompt =~ $re_go ]]; then
     printf '.allow-*\n.turn*\n*.tmp.*\n' > "$rdir/.gitignore"
   fi
   sweep
+  [[ $prompt =~ $re_go0 ]] && auto_go
   # 0.4.0 "/refactor:go 묶음"(진행 중 계획서에 묶음·우선 칸만 덧붙이는 차례 — 6-plan 「묶기만」): 실행 대기를 비워 코드 수정을 막고(ready 빈 칸 →
   #   안전장치가 단계 실행의 코드 수정을 막음) 자동 모드 허락 파일(.turn-auto.*)을 지운다(#16 — 이 차례에 자동 마감이 돌지 않게)
   if [[ $prompt =~ $re_bundle ]]; then
