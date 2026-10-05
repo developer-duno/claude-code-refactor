@@ -2076,9 +2076,17 @@ def check_baseline_committed_035(check):
         (d / "docs/refactor/.allow-baseline-edit").write_bytes((ids + "\n").encode("utf-8"))
         return d
 
-    def pc(d):
-        _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"})
+    def pc(d, extra_env=None):
+        _, se, rc, _ = hook("post-check", d, {"session_id": "s1", "tool_name": "Bash"}, extra_env=extra_env)
         return rc, se
+
+    def old_commit(d, subject):
+        """0.3.7: 지난 묶음의 커밋 — 커밋 시각을 승인 시각보다 앞(2020년)으로 둔다(git log --since 는 커밋한 시각을 본다)"""
+        dt = "2020-01-02T03:04:05+09:00"
+        r = subprocess.run(["git", "-C", str(d), "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", subject], capture_output=True,
+                           env=dict(os.environ, GIT_CEILING_DIRECTORIES=str(d.parent), GIT_AUTHOR_DATE=dt, GIT_COMMITTER_DATE=dt))
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.decode("utf-8", "replace"))
 
     def flow(ids, subject, again=True):
         """턴 시작 → A(P1-1) 기준선 고침 → A 완료 표시 → (subject 가 있으면) 그 제목으로 커밋 → 다시 고침 → post-check 결과들"""
@@ -2127,7 +2135,7 @@ def check_baseline_committed_035(check):
             tr.unlink(missing_ok=True)
             out, err = _lib033(d, 'rl_protected_dirty "$P" "$R" | cut -f1', {"GIT_TRACE": str(tr), "GIT_CEILING_DIRECTORIES": str(d.parent)})
             t = tr.read_text(encoding="utf-8", errors="replace") if tr.exists() else ""
-            return out, err, len(re.findall(r"\bgit log -1\b", t))
+            return out, err, len(re.findall(r"\bgit log\b", t))
         hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
         lf(d / M, "P1-1 이 고침\n")
         _done033(d, "P1-1")
@@ -2151,14 +2159,14 @@ def check_baseline_committed_035(check):
         check("0.3.5 B7 P1-3 도 커밋 → 조용 · 그 뒤 그 경로를 다시 바꿈 → post-check 알림",
               r_commit[0] == 0 and r_last[0] == 2 and "보호된 파일(커밋된 기준선 테스트·마이그레이션)이 바뀌었습니다" in r_last[1] and M in r_last[1],
               f"{r_commit} {r_last}")
-        check("0.3.5 B7 git log 3회(완료 카드 ID 마다 + 경로 1회) · 목록에 남음", n7 == 3 and out7 == " M " + M + "\n", f"n={n7} {out7!r} {err7}")
+        check("0.3.5 B7 git log 2회(완료 카드 ID 마다 — 0.3.7 에서 경로 1회는 뺌) · 목록에 남음", n7 == 2 and out7 == " M " + M + "\n", f"n={n7} {out7!r} {err7}")
     finally:
         tr.unlink(missing_ok=True)
         shutil.rmtree(d, ignore_errors=True)
 
-    # B8 알려진 한계(1차와 같음 · 보완 3바퀴 R2): P1-1 완료·커밋됐지만 그 커밋이 기준선 파일을 안 건드림 → 뒤에 셸로 그 파일을 바꿔도 조용.
-    #   까닭: "그 경로를 마지막으로 바꾼 커밋의 제목이 완료 카드의 것"(②)이 함께 맞아야 알린다 — ① 만으로 알리면 되돌린 옛 커밋·지난 묶음의
-    #   같은 ID 커밋 때문에 커밋 전에도 헛알림이 났다(재검사 A2·C2 🟠 — 아래 R2 시험). 헛알림을 없애는 쪽을 골랐다
+    # B8(0.3.7 #7 에서 뒤집음): P1-1 완료·커밋됐지만 그 커밋이 기준선 파일을 안 건드림 → 뒤에 셸로 그 파일을 바꾸면 알림.
+    #   0.3.5 는 "그 경로를 마지막으로 바꾼 커밋의 제목이 완료 카드의 것"(②)도 맞아야 알려 여기서 조용했다(알려진 한계). 0.3.7 은 카드 커밋을
+    #   이번 묶음(마지막 새 가지 기준 커밋 뒤 · 그 카드 승인 시각 뒤)에서만 찾아 지난 묶음의 같은 ID 커밋 헛알림을 막고 ② 를 뺐다
     d = mk("P1-1 P1-2")
     try:
         hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
@@ -2169,21 +2177,25 @@ def check_baseline_committed_035(check):
         r_commit = pc(d)
         lf(d / M, "셸로 바꿈\n")
         r_last = pc(d)
-        check("0.3.5 B8 알려진 한계: 앞 단계 커밋이 기준선 파일을 안 건드림 → 뒤에 그 파일을 바꿔도 조용(그 경로의 마지막 커밋이 카드 커밋이 아님)",
-              r_commit[0] == 0 and r_last[0] == 0, f"{r_commit} {r_last}")
+        check("0.3.7 B8 앞 단계 커밋이 기준선 파일을 안 건드림 → 커밋 뒤 조용 · 뒤에 그 파일을 바꾸면 post-check 알림",
+              r_commit[0] == 0 and r_last[0] == 2 and "보호된 파일(커밋된 기준선 테스트·마이그레이션)이 바뀌었습니다" in r_last[1] and M in r_last[1],
+              f"{r_commit} {r_last}")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
     # R2(보완 3바퀴 · 재검사 A2·C2 🟠): 같은 카드 ID 의 옛 커밋이 기록에 있어도 커밋 전에는 조용
     #   ⓐ README 의 되돌리는 법: 옛 "refactor: P1-1" 커밋 → git revert → P1-1 다시 실행: 기준선 고침 → 완료 표시 → (커밋 전) git add
-    #   ⓑ 같은 ID 옛 커밋(그 파일 안 건드림 — 지난 묶음) + B2 꼴(완료 표시 · 커밋 전 · 경로 바뀐 채)
+    #   ⓑ 같은 ID 옛 커밋(그 파일 안 건드림 — 지난 묶음: 0.3.7 부터 커밋 시각이 승인보다 앞) + B2 꼴(완료 표시 · 커밋 전 · 경로 바뀐 채)
     for name, revert in (("ⓐ 옛 커밋 revert 뒤 다시 실행", True), ("ⓑ 같은 ID 옛 커밋(그 파일 안 건드림)", False)):
         d = mk("P1-1 P1-2")
         try:
             hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
             lf(d / "z.txt", "old\n")
             _git034(d, "add", "--", "z.txt")
-            _git034(d, "commit", "-qm", "refactor: P1-1 지난 번 실행")
+            if revert:
+                _git034(d, "commit", "-qm", "refactor: P1-1 지난 번 실행")
+            else:
+                old_commit(d, "refactor: P1-1 지난 번 실행")
             if revert:
                 _git034(d, "revert", "--no-edit", "HEAD")
             lf(d / M, "P1-1 이 다시 고침\n")
@@ -2203,8 +2215,67 @@ def check_baseline_committed_035(check):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    # 0.3.7 D4 revert: 이번 묶음 안에서 같은 기준선 파일을 바꾼 카드 커밋 → git revert → 다시 실행 → 완료 표시 · git add 뒤 조용 ·
+    #   다시 실행한 커밋 뒤에도 조용 · 그 뒤 그 파일이 또 바뀌면 알림(revert 본문의 "This reverts commit <해시>" 로 옛 커밋을 커밋 안 됨으로 봄)
+    d = mk("P1-1 P1-2")
+    try:
+        hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+        lf(d / M, "첫 실행\n")
+        _git034(d, "add", "--", M)
+        _git034(d, "commit", "-qm", "refactor: P1-1 첫 실행")
+        _git034(d, "revert", "--no-edit", "HEAD")
+        lf(d / M, "다시 실행\n")
+        r_open = pc(d)
+        _done033(d, "P1-1")
+        r_done = pc(d)
+        _git034(d, "add", "--", M)
+        r_add = pc(d)
+        _git034(d, "commit", "-qm", "refactor: P1-1 다시 실행")
+        r_commit = pc(d)
+        check("0.3.7 D4 revert 뒤 다시 실행(같은 파일) → 열림·완료 표시 직후·git add 뒤·다시 실행 커밋 뒤 모두 조용",
+              r_open[0] == 0 and r_done[0] == 0 and r_add[0] == 0 and r_commit[0] == 0, f"{r_open} {r_done} {r_add} {r_commit}")
+        lf(d / M, "다음 단계가 셸로 바꿈\n")
+        r_last = pc(d)
+        check("0.3.7 D4 revert 뒤 다시 실행 → 그 커밋 뒤 또 바뀌면 알림", r_last[0] == 2 and M in r_last[1], f"{r_last}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 0.3.7 D4(#6): 같은 기준선 파일을 건드린 같은 ID 옛 커밋(되돌리지 않음)이 있어도, 이번 묶음 밖이면 완료 표시 ~ 커밋 사이 조용
+    #   ⓐ 새 가지 뒤: 옛 커밋 → 승인 기록에 "새 가지 | … @<옛 커밋>" → 이번 P1-1 (범위 <sha>..HEAD 로 가름 — 옛 커밋 시각은 승인 뒤라 --since 로는 못 가름)
+    #   ⓑ 새 가지 없음: 옛 커밋 시각이 승인보다 앞(--since 로 가름). 기록 시각은 KST 라 TZ=UTC0 으로 훅을 돌려도 같아야 함(+0900)
+    for name, newbr in (("ⓐ 새 가지 뒤", True), ("ⓑ 새 가지 없이 승인 시각 앞", False)):
+        d = mk("P1-1 P1-2")
+        tz = None if newbr else {"TZ": "UTC0"}
+        try:
+            lf(d / M, "지난 묶음\n")
+            _git034(d, "add", "--", M)
+            if newbr:
+                _git034(d, "commit", "-qm", "refactor: P1-1 지난 묶음")
+                logp = d / "docs/refactor/APPROVALS.log"
+                sha = _git034(d, "rev-parse", "--short=7", "HEAD")
+                logp.write_bytes(logp.read_bytes() + f"2026-10-05 09:00 KST | 새 가지 | feat/next <- origin/main@{sha} | - | 사용자가 /refactor:approve 로 실행\n".encode("utf-8"))
+                _lib033(d, 'rl_log_seal "$R"')
+            else:
+                old_commit(d, "refactor: P1-1 지난 묶음")
+            hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"}, extra_env=tz)
+            lf(d / M, "이번 P1-1 이 고침\n")
+            r_open = pc(d, tz)
+            _done033(d, "P1-1")
+            r_done = pc(d, tz)
+            _git034(d, "add", "--", M)
+            r_add = pc(d, tz)
+            check(f"0.3.7 D4 {name}: 같은 파일을 건드린 같은 ID 옛 커밋(안 되돌림) → 열림·완료 표시 직후·git add 뒤 모두 조용",
+                  r_open[0] == 0 and r_done[0] == 0 and r_add[0] == 0, f"{r_open} {r_done} {r_add}")
+            _git034(d, "commit", "-qm", "refactor: P1-1 이번 묶음")
+            r_commit = pc(d, tz)
+            lf(d / M, "다음 단계가 셸로 바꿈\n")
+            r_last = pc(d, tz)
+            check(f"0.3.7 D4 {name}: 이번 커밋 뒤 다시 바뀌면 알림",
+                  r_commit[0] == 0 and r_last[0] == 2 and M in r_last[1], f"{r_commit} {r_last}")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     # git 호출 수: 완료 카드에만 속한 경로가 변경 목록에 없으면 git log 를 부르지 않는다 · 있으면 완료 카드 ID 마다 1회(커밋 전이면 거기서 멈춤)
-    #   + 전부 커밋됐을 때만 경로 1회
     d = mk("P1-1 P1-2")
     try:
         tr = d.parent / (d.name + "-trace.txt")
@@ -2213,7 +2284,7 @@ def check_baseline_committed_035(check):
             tr.unlink(missing_ok=True)
             out, err = _lib033(d, expr, {"GIT_TRACE": str(tr), "GIT_CEILING_DIRECTORIES": str(d.parent)})
             t = tr.read_text(encoding="utf-8", errors="replace") if tr.exists() else ""
-            return out, err, len(re.findall(r"\bgit log -1\b", t))
+            return out, err, len(re.findall(r"\bgit log\b", t))
         lf(d / M, "v1\n"); lf(d / "tests/baseline/golden/d.json", "v1\n")
         out, err, n = logs()
         check("0.3.5 git 호출: 열린 카드 경로만 바뀜 → git log 0회 · 목록 비어 있음", n == 0 and out == "", f"n={n} {out!r} {err}")
@@ -2224,7 +2295,7 @@ def check_baseline_committed_035(check):
         _git034(d, "commit", "-qm", "refactor: P1-1 금액 계산")
         lf(d / M, "v2\n")
         out, err, n = logs()
-        check("0.3.5 git 호출: 커밋된 완료 카드 경로 → git log 2회(카드 커밋 + 경로) · 목록에 남음", n == 2 and out == " M " + M + "\n", f"n={n} {out!r} {err}")
+        check("0.3.5 git 호출: 커밋된 완료 카드 경로 → git log 1회(카드 커밋 — 0.3.7 에서 경로 1회는 뺌) · 목록에 남음", n == 1 and out == " M " + M + "\n", f"n={n} {out!r} {err}")
         out, err = _lib033(d, 'rl_allow_baseline "$R" split')
         check("0.3.5 rl_allow_baseline split 꼴: O<TAB>경로 / D<TAB>ID<TAB>경로",
               out == "OPEN P1-2\nD\tP1-1\t" + M + "\nO\ttests/baseline/golden/d.json\n", repr(out) + err)
@@ -2268,6 +2339,16 @@ def check_baseline_committed_035(check):
         out4, err4 = dirty()
         check("0.3.5 B9 하위 폴더: P1-3 완료·커밋 전(git add) 조용 · P1-3 커밋 뒤 다시 바뀌면 저장소 기준 경로로 보고",
               out3 == "" and out4 == " M apps/web/" + M + "\n", f"{out3!r} {out4!r} {err3}{err4}")
+        # 0.3.7 D5(#8): 하위 폴더 프로젝트에서도 지문 칸은 그 파일의 내용 해시(전에는 저장소 기준 경로를 프로젝트 폴더에 붙여 늘 gone)
+        #   → 턴 시작 때 이미 바뀌어 있던 기준선을 턴 중에 또 바꾸면 post-check 가 알린다(전에는 지문이 같아 조용 — 놓침)
+        full, errf = _lib033(d, 'rl_protected_dirty "$P" "$R"', {"GIT_CEILING_DIRECTORIES": str(root.parent)})
+        want = _git034(d, "hash-object", "--", M)
+        check("0.3.7 D5 하위 폴더: 지문 칸이 내용 해시(gone 아님)", full == f" M apps/web/{M}\t{want}\n", f"{full!r} {want} {errf}")
+        hook("turn", d, {"session_id": "s1", "prompt": "계속"})
+        lf(d / M, "v4\n")
+        r_last = pc(d)
+        check("0.3.7 D5 하위 폴더: 턴 시작 때 이미 바뀐 기준선을 턴 중에 또 바꿈 → post-check 알림(저장소 기준 경로)",
+              r_last[0] == 2 and "보호된 파일(커밋된 기준선 테스트·마이그레이션)이 바뀌었습니다" in r_last[1] and "apps/web/" + M in r_last[1], f"{r_last}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -3715,6 +3796,7 @@ def check_merge_script_035(check):
                           ("2차 요청 한도", "HTTP 403: You have exceeded a secondary rate limit. Please wait a few minutes before you try again."),
                           ("요청 한도 대문자", "HTTP 403: API RATE LIMIT exceeded"),
                           ("주소 찾기 실패(DNS)", "error connecting to api.github.com: Could not resolve host: api.github.com")):
+            fresh()   # 0.3.7 D1: 회마다 새 허락(한 건이 허락을 잘못 지워도 뒤 건이 줄줄이 실패하지 않게)
             out, _, _ = case(f"F10 S6 조회 일시 오류({name}) → 3 · 허락 유지", d, F(view_rc=1, view_err=err), f"⚠️ PR 을 조회하지 못했습니다: {err}", 3, True,
                              n=(1, 0, 0), tail="again")
             check(f"0.3.5 F10 S6 {name} → 계정 안내 없음", _MG_AUTH not in out, out)
@@ -3827,6 +3909,11 @@ def check_merge_script_035(check):
         fresh()
         case("F6 조회 한도 1 · gh 2초 늦음 → 시간 초과 · 3", d, F(view_delay=2), "⚠️ PR 을 조회하지 못했습니다: 1초 안에 끝나지 않음", 3, True, n=(1, 0, 0), tail="again",
              extra_env={"REFACTOR_MERGE_VIEW_LIMIT": "1"})
+        # 0.3.7 D3: 길이 규칙(4글자 넘으면 무시) — '00001'(값은 1)을 받아들이면 위처럼 1초 시간 초과(3)가 되고, 무시하면 기본 15초라 합침
+        fresh()
+        out, _, _ = case("D3 조회 한도 '00001'(5글자 → 무시 → 15초) · gh 2초 늦음 → 시간 초과 아님 · 합침", d, F(view_delay=2), "✅ 합쳤습니다", 0, False,
+                         n=(2, 1, 1), extra_env={"REFACTOR_MERGE_VIEW_LIMIT": "00001"})
+        check("0.3.7 D3 조회 한도 '00001' → '끝나지 않음' 없음", "끝나지 않음" not in out, out)
 
         # F2 초록 두 번 연속: 처음 본 초록은 확인 조회 한 번 더 — ⓐ 검사 이름 집합 ⓑ 전부 초록 ⓒ PR 머리가 같을 때만 합침
         L, T = CR("lint"), CR("test")
@@ -3861,6 +3948,13 @@ def check_merge_script_035(check):
         fresh()
         case("R1 느린 조회 · 확인 조회가 도는 중 → 창 규칙(창 밖) → 3 · 조회 2", d, F(view_delay=3, view_seq=[dict(), dict(statusCheckRollup=PEND)]),
              "⏳ PR #68 의 자동 검사가 아직 도는 중입니다(build)", 3, True, n=(2, 0, 0), tail="again", extra_env=SLOW)
+        # 0.3.7 D2: 창 확인 면제는 한 호출에 한 번뿐 — 초록 → 도는 중 → 초록(창 10초 · 간격 1초 · 조회 3초): 둘째 조회(≈7초)는 창 안이라 기다리고,
+        #   셋째 조회(≈11초)에서 다시 처음 본 초록이지만 면제를 이미 썼고 창 밖이라 합치지 않고 3. 면제를 매번 주면 넷째 조회 뒤 합쳐 버린다
+        fresh()
+        case("D2 면제 한 번: 초록 → 도는 중 → 초록(창 10초 · 간격 1초 · 조회 3초) → 3 '한 번 더 확인하려고' · 조회 3", d,
+             F(view_delay=3, view_seq=[dict(), dict(statusCheckRollup=PEND), dict(), dict()]),
+             "⏳ 자동 검사가 모두 초록입니다 — 한 번 더 확인하려고", 3, True, n=(3, 0, 0), tail="again",
+             extra_env={"REFACTOR_MERGE_WINDOW": "10", "REFACTOR_MERGE_INTERVAL": "1", "REFACTOR_MERGE_VIEW_LIMIT": "5"})
         fresh()
         case("F2 2회차에 검사 실패 → 거절", d, F(view_seq=[dict(statusCheckRollup=[L, T]), dict(statusCheckRollup=[L, CR("test", co="FAILURE")])]),
              "⛔ PR #68 의 자동 검사 실패(test)", 1, False, n=(2, 0, 0), tail="ref")
