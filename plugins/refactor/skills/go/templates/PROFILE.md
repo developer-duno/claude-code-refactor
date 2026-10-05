@@ -32,7 +32,7 @@
 ## 자동 모드 (👤 사람이 적음 — Claude 는 읽기만 · `/refactor:approve B1 자동` 이 승인할 때 이 값을 복사해 씀)
 - 운영 주소: (예: https://shop.example.com — 로그인 없이 열리는 첫 화면 주소)
 - 배포 끝 보는 법: (vercel / railway / cloudflare / netlify / github / 주소 표지 중 하나 — vercel·github 말고는 판 표지가 꼭 있어야 함)
-- 판 표지: (배포마다 바뀌는 글자가 나오는 주소를 백틱으로 — 예: `/version.txt`(본문 첫 줄) · 본문 일부만이면 그 앞 글자를 백틱으로 하나 더: `/` `data-build="`)
+- 판 표지: (배포마다 바뀌는 글자가 나오는 주소를 백틱으로 — 예: `/version.txt`(본문 첫 줄) · 본문 일부만이면 그 앞 글자를 백틱으로 하나 더: `/` `data-build="` · 커밋 해시가 들어 있는 표지를 권장(railway·cloudflare·netlify·주소 표지는 판 표지만 봄))
 - 확인할 화면: (로그인 없이 열리는 화면 3~5개 · `/api/`·`?` 가 든 주소는 안 됨 · 기대 글자 = 옛 판·새 판 모두에 나오는 글자)
 
 | 경로 | 기대 글자 |

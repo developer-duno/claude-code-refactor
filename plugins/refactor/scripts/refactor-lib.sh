@@ -414,6 +414,22 @@ rl_done_confirmed() { # $1 docs/refactor 폴더
   while IFS= read -r line || [ -n "$line" ]; do [ -n "${line//[[:space:]]/}" ] && last=$line; done < "$1/APPROVALS.log"
   case "$last" in *"| 마무리 |"*) rl_log_intact "$1" ;; *) return 1 ;; esac
 }
+# 0.4.0 자동 모드(보완 — 검사 A#4): 승인 기록의 그 묶음 마지막 "| 자동 | B<n> | - | <epoch> <가지> <방식>[ merge-only]" 줄(사람이 B<n> 자동 을 친 기록)
+#   → RL_AEP·RL_ABR·RL_AMTH. 없으면 1. 자동 허락 파일 ②④⑤ 와 대조해 허락 파일만 꾸며 낸 꼴을 거른다(봉인 확인은 부르는 쪽이 먼저 — rl_log_intact)
+rl_auto_rec() { # $1 docs/refactor 폴더 $2 B<n>
+  local x v=""
+  RL_AEP=""; RL_ABR=""; RL_AMTH=""
+  [ -f "$1/APPROVALS.log" ] || return 1
+  while IFS= read -r x || [ -n "$x" ]; do
+    x=${x%$'\r'}
+    case "$x" in *" KST | 자동 | $2 | - | "*) v=${x#*" KST | 자동 | $2 | - | "} ;; esac
+  done < "$1/APPROVALS.log"
+  [ -n "$v" ] || return 1
+  read -r RL_AEP RL_ABR RL_AMTH x <<RLAREC
+$v
+RLAREC
+  [ -n "$RL_AMTH" ]
+}
 
 # origin 의 기본 가지(0.3.4 — 새 가지·합치기): refs/remotes/origin/HEAD 가 가리키는 가지(그것이 refs/remotes/origin/ 아래일 때만)
 #   → 없으면 origin/main → origin/master(그 자체가 심볼릭이면 기준이 아님 — guard.sh br_judge_in 과 같은 규칙). 로컬 참조만 본다(네트워크 없음)

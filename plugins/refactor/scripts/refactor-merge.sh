@@ -187,16 +187,22 @@ if [ -f "$dir/APPROVALS.log" ]; then
   while IFS= read -r x || [ -n "$x" ]; do x=${x%$'\r'}; [ -n "${x//[[:space:]]/}" ] && glast=$x; done < "$dir/APPROVALS.log"
 fi
 # 0.4.0 자동 모드(§2-3): 마지막 줄 꼴은 둘 — 사람(사용자가 /refactor:approve 로 실행) / 자동(자동 B<n> 으로 실행 — 자동 모드 스크립트의 merge 단계가 씀).
-#   자동 꼴은 그 묶음의 자동 허락(.turn-auto.B<n>: 1줄 = B<n> · 2줄 = 만든 시각 0~7200초 안 · 3줄 = 이 세션 ID · 4줄 = 허락한 가지)이 있을 때만 믿는다
+#   자동 꼴은 그 묶음의 자동 허락(.turn-auto.B<n>: 1줄 = B<n> · 2줄 = 만든 시각 0~7200초 안 · 3줄 = 이 세션 ID · 4줄 = 허락한 가지 ·
+#   11줄 = go=<시각>(사람이 인자 없는 /refactor:go 를 쳐 자동 차례가 시작됨))이 있고, 봉인된 기록의 마지막 "| 자동 | B<n> | - | <시각> <가지> <방식>" 줄
+#   (사람이 B<n> 자동 을 친 기록 — 0.4.0 보완, 검사 A#4)이 그 파일 ②④⑤ 와 같을 때만 믿는다(끝 표시 .turn-autoend 는 보지 않는다)
 MAUTO=""
 auto_grant_ok() {
-  local f="$dir/.turn-auto.$1" a1="" a2="" a3="" a4="" ag
+  local f="$dir/.turn-auto.$1" a1="" a2="" a3="" a4="" a5="" a11="" x i=0 ag
   [ -f "$f" ] || return 1
-  { IFS= read -r a1; IFS= read -r a2; IFS= read -r a3; IFS= read -r a4; } < "$f"
-  a1=${a1%$'\r'}; a2=${a2%$'\r'}; a3=${a3%$'\r'}; a4=${a4%$'\r'}
+  while IFS= read -r x || [ -n "$x" ]; do
+    x=${x%$'\r'}; i=$((i + 1))
+    case "$i" in 1) a1=$x ;; 2) a2=$x ;; 3) a3=$x ;; 4) a4=$x ;; 5) a5=$x ;; 11) a11=$x ;; esac
+  done < "$f"
   [ "$a1" = "$1" ] && [ "$a3" = "$sid" ] && [ "$a4" = "$gbr" ] && [[ $a2 =~ ^[0-9]{1,12}$ ]] || return 1
+  [[ $a11 =~ ^go=[0-9]{1,12}$ ]] || return 1
   ag=$(( $(date +%s) - 10#$a2 ))
-  [ "$ag" -ge 0 ] && [ "$ag" -le 7200 ]
+  [ "$ag" -ge 0 ] && [ "$ag" -le 7200 ] || return 1
+  rl_auto_rec "$dir" "$1" && [ "$RL_AEP" = "$a2" ] && [ "$RL_ABR" = "$a4" ] && [ "$RL_AMTH" = "$a5" ]
 }
 case "$glast" in
   *" KST | 합치기 | 허락 $gbr $gprw ($mth) @${goid:0:7} | - | 사용자가 /refactor:approve 로 실행") ;;
