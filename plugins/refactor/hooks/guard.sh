@@ -2468,6 +2468,7 @@ seg_targets() {
       esac ;;
   esac
   [ "$cls" = fmt ] && { for a in "${args[@]}"; do case "$a" in --write|-w|--fix|--apply|--apply-unsafe|format|fmt|-a|-A|--autocorrect|--autocorrect-all|-i|--in-place) wf=1 ;; esac; done; [ "$wf" = 1 ] && cls=w || cls=r; }
+  SARGS=("${args[@]}")   # 0.4.0 WC: 리다이렉트를 뺀 인자(copy_dir_seg 가 옵션째 다시 본다)
   # 쓰기 옵션 값
   for ((i = 0; i < ${#args[@]}; i++)); do
     a=${args[$i]}; nx=${args[$((i + 1))]:-}
@@ -2815,6 +2816,352 @@ shell_targets1() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨) — cd·push
         block "$fence_why docs/refactor 밖의 파일을 셸 명령으로 바꾸지 않습니다." "발견한 문제는 보고서와 계획서 후보로만 적으세요. 임시 파일은 /tmp 나 \$TMPDIR 에 쓰세요. (리팩토링과 상관없는 평소 작업이면 사용자에게 새 대화에서 하자고 안내하세요.)"
       fi
     done
+  done
+  cwd=$CWD_BASE
+}
+# 0.4.0 WC: 기록 폴더(docs/refactor) 자체나 그 상위 폴더(docs · 프로젝트 · 절대경로)로 폴더째·와일드카드 복사·옮기기, 거기에 압축 풀기,
+#   그 폴더를 잇거나 그 자리에 링크 만들기 → 막는다. 이름을 적은 파일 복사·기록 폴더 밖·기록 폴더에서 밖으로는 그대로 통과.
+#   (지금까지는 목적지가 기록 폴더 자체일 때 원본 이름만 봐서 cp -r /tmp/d/. docs/refactor · cp /tmp/d/.t* docs/refactor/ · cp -r /tmp/refactor docs/ 가 지나갔다)
+MSG_CPDIR="폴더째·와일드카드 복사는 기록 폴더 안의 허락 파일·승인 기록을 덮어쓸 수 있어 막습니다 — 파일 이름을 하나씩 적어 복사하세요."
+MSG_UNPACK="리팩토링 기록 폴더(docs/refactor)에 압축을 풀거나 파일을 한꺼번에 넣지 않습니다(사람 전용 파일을 덮어쓸 수 있음)."
+MSG_LINK="기록 폴더(docs/refactor)나 그 상위 폴더를 잇거나 그 자리에 링크를 만들면 허락 파일·승인 기록을 다른 이름으로 바꿀 수 있어 막습니다 — 링크 없이 파일을 하나씩 다루세요."
+# 단어가 기록 폴더 자체나 그 상위 폴더인가($2 = in 이면 기록 폴더 안도, rec 이면 그 안의 STATE.md·APPROVALS.log·approved·.turn*·.allow-* 도).
+#   판정할 수 없는 단어(모르는 변수)는 끝이 docs·docs/refactor 인 꼴만
+#   경로 비교는 다른 판정처럼 대소문자를 가리지 않는다(copy_dir_seg1 이 옵션 글자 때문에 꺼 둔 nocasematch 를 여기서만 켠다)
+cpd_hit() { shopt -s nocasematch; cpd_hit1 "$@"; local r=$?; shopt -u nocasematch; return $r; }
+cpd_hit1() {
+  local t=${1//\"/}
+  t=${t//\'/}
+  if resolve_tok "$t"; then
+    case "$RP" in ''|/|[A-Za-z]:|[A-Za-z]:/) return 0 ;; esac   # 루트·드라이브
+    case "$rdir/" in "$RP"/*) return 0 ;; esac
+    if [ "${2:-}" = in ]; then case "$RP" in "$rdir"/*) return 0 ;; esac; fi
+    if [ "${2:-}" = rec ]; then { is_record_path "$RP" || is_human_path "$RP"; } && return 0; fi
+    return 1
+  fi
+  t=${t//"$BS"/$SL}; t=${t%"${t##*[!/]}"}
+  case "$t" in docs|*/docs|docs/refactor|*/docs/refactor) return 0 ;; esac
+  return 1
+}
+# 목적지가 어디인가 → CW = self(기록 폴더 자체나 그 안) | up(그 상위·루트·드라이브) | no. 판정할 수 없는 단어는 끝이 docs/refactor 면 self, docs 면 up
+#   up 이면 FIRST = 목적지에서 기록 폴더까지 남은 경로의 첫 칸(FC2 G2 — 프로젝트 상위면 프로젝트 이름, docs 면 refactor)
+cpd_where() { shopt -s nocasematch; cpd_where1 "$1"; shopt -u nocasematch; }
+cpd_where1() {
+  local t=${1//\"/} rel
+  CW=no; FIRST=""; t=${t//\'/}
+  if resolve_tok "$t"; then
+    case "$RP" in "$rdir"|"$rdir"/*) CW=self; return 0 ;; esac
+    case "$RP" in ''|/) CW=up; rel=${rdir#/} ;;
+      [A-Za-z]:|[A-Za-z]:/) CW=up; rel=${rdir#?:}; rel=${rel#/} ;;
+      *) case "$rdir/" in "$RP"/*) CW=up; rel=${rdir#"$RP"/} ;; esac ;;
+    esac
+    [ "$CW" = up ] && FIRST=${rel%%/*}
+    return 0
+  fi
+  t=${t//"$BS"/$SL}; t=${t%"${t##*[!/]}"}
+  case "$t" in docs/refactor|*/docs/refactor) CW=self ;; docs|*/docs) CW=up; FIRST=refactor ;; esac
+  return 0
+}
+# 원본 이름을 미리 알 수 없는가: 와일드카드·중괄호 · 변수·명령 치환 · 끝이 / 또는 /. · . 이나 ..
+#   (FC F7: 변수가 든 경로라도 마지막 이름 조각이 보통 이름이고 허락 파일 꼴이 아니면 안다 — cp $HOME/notes.md docs/refactor/)
+cpd_unknown() { shopt -s nocasematch; cpd_unknown1 "$1"; local r=$?; shopt -u nocasematch; return $r; }
+cpd_unknown1() {
+  local t=${1//\"/} b
+  t=${t//\'/}; t=${t//"$BS"/$SL}
+  case "$t" in *[\*\?\[\{]*|*/|*/.|*/..|.|..) return 0 ;; esac
+  case "$t" in
+    *'$'*|*'`'*)
+      case "$t" in */*) ;; *) return 0 ;; esac
+      b=${t##*/}
+      case "$b" in ''|*'$'*|*'`'*|.allow-*|approvals.log|.turn|.turn.*|.turn-*|approved|state.md) return 0 ;; esac ;;
+  esac
+  return 1
+}
+# FC F7: 상위 폴더로 폴더째 복사할 때 막는 원본 — 모름(변수·명령 치환) · 끝이 / · /. · 와일드카드 · 이름이 refactor·docs
+#   또는 목적지에서 기록 폴더까지의 첫 칸(FIRST — FC2 G2: cp -r /tmp/x/<프로젝트 이름> ..) · 대소문자 무시
+cpd_upsrc() { shopt -s nocasematch; cpd_upsrc1 "$1"; local r=$?; shopt -u nocasematch; return $r; }
+cpd_upsrc1() {
+  local t=${1//\"/} b
+  t=${t//\'/}; t=${t//"$BS"/$SL}
+  case "$t" in *[\*\?\[\{]*|*'$'*|*'`'*|*/|*/.|*/..|.|..) return 0 ;; esac
+  cpd_upname "$t"
+}
+# 원본 마지막 이름이 refactor·docs·FIRST 인가(nocasematch 켠 채로 부른다)
+cpd_upname() {
+  local b=${1%"${1##*[!/]}"}
+  b=${b##*/}
+  case "$b" in refactor|docs) return 0 ;; esac
+  [ -n "${FIRST:-}" ] && [ "$b" = "$FIRST" ] && return 0
+  [ -n "${FIRST:-}" ] && case "$b" in "$FIRST") return 0 ;; esac
+  return 1
+}
+# 링크 원본: 지금 폴더 기준과 링크가 놓일 폴더($2) 기준 둘 다 풀어 하나라도 기록 폴더·그 상위·그 안의 사람 전용 파일이면 0
+cpd_lnsrc() {
+  cpd_hit "$1" rec && return 0
+  [ -n "${2:-}" ] || return 1
+  local c0=$cwd r=1
+  cwd=$2; cpd_hit "$1" rec && r=0; cwd=$c0
+  return $r
+}
+# 링크가 놓일 폴더: 목적지가 있는 폴더거나 끝이 / 면 그 폴더, 아니면 그 상위 → LDIR(판정할 수 없으면 빈 값)
+cpd_linkdir() {
+  LDIR=""
+  local t=${1//\"/}
+  t=${t//\'/}
+  resolve_tok "$t" || return 0
+  case "$t" in */) LDIR=$RP; return 0 ;; esac
+  if [ -d "$RP" ]; then LDIR=$RP; else LDIR=${RP%/*}; [ -n "$LDIR" ] || LDIR=/; fi
+}
+# 조각 하나(seg_targets 를 부른 뒤 — SCMD·SARGS·XARGS·cwd)를 본다. 옵션 글자는 대소문자를 가린다(cp -t 와 -T) — 명령 이름은 먼저 가린다
+copy_dir_seg() {
+  local k=""
+  case "$SCMD" in
+    cp|install|scp) k=cp ;;
+    mv) k=mv ;;
+    rsync) k=rsync ;;
+    copy-item|cpi|copy) k=psc ;;
+    move-item|mi|move) k=psm ;;
+    xcopy|robocopy) k=win ;;
+    ln) k=ln ;;
+    mklink) k=mklink ;;
+    tar|bsdtar) k=tar ;;
+    unzip) k=unzip ;;
+    7z|7za|7zr) k=7z ;;
+    expand-archive) k=xa ;;
+    new-item|ni) k=ni ;;
+    *) return 0 ;;
+  esac
+  local wk=0 rec=0 lnk=0 tt=0 bk=0 sc=$SCMD
+  case "$SCMD" in copy|move|xcopy|robocopy) wk=1 ;; esac
+  case "$SCMD" in robocopy|rsync) rec=1 ;; esac
+  shopt -u nocasematch
+  copy_dir_seg1 "$k"
+  shopt -s nocasematch
+  return 0
+}
+# 짧은 옵션 묶음(-rt X · -tX · -S .bak)에서 값을 받는 글자($2 목록) 뒤를 값으로 → OV(값) · OVN=1(값이 다음 낱말) · OL(값 앞 글자들)
+cpd_short() {
+  local o=${1#-} c
+  OL=""; OV=""; OVN=0; OC=""
+  while [ -n "$o" ]; do
+    c=${o:0:1}; o=${o:1}
+    case "$2" in *"$c"*) OC=$c; if [ -n "$o" ]; then OV=$o; else OVN=1; fi; return 0 ;; esac
+    OL="$OL$c"
+  done
+}
+# 긴 옵션 이름($1, -- 뗀 = 앞)이 $2 의 줄임인가(--targ → target-directory)
+cpd_long() { [ -n "$1" ] && case "$2" in "$1"*) return 0 ;; esac; return 1; }
+copy_dir_seg1() {
+  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=()
+  case "$sc" in cp|mv|ln) vl=tS ;; install) vl=tSmog ;; scp) vl=PiFoclJS ;; rsync) vl=efTBM ;; esac
+  for ((i = 0; i < ${#SARGS[@]}; i++)); do
+    a=${SARGS[$i]}; nx=${SARGS[$((i + 1))]:-}
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    case "$a" in '\'|'+') continue ;; esac   # find -exec 끝(\; · +) (FC F4 · 배경 실행 & 는 copy_dir_targets1 이 조각 경계로 — FC F1)
+    case "$k" in
+      cp|mv|ln|rsync)
+        case "$a" in
+          --*)
+            nm=${a#--}; nm=${nm%%=*}
+            if [ "$k" != rsync ] && cpd_long "$nm" target-directory; then
+              case "$a" in *=*) tdir=${a#*=} ;; *) tdir=$nx; skip=1 ;; esac
+            else
+              case "$a" in --rec*|--ar*) [ "$k" = cp ] && rec=1 ;; --l|--li*|--sy*) [ "$sc" = cp ] && lnk=1 ;; --no-t*) tt=1 ;; --b|--ba*) bk=1 ;; esac
+              case "$a" in *=*) ;; *)
+                case "$k:$nm" in
+                  rsync:exclude|rsync:include|rsync:filter|rsync:rsh|rsync:backup-dir|rsync:log-file|rsync:exclude-from|rsync:include-from|rsync:files-from|rsync:partial-dir|rsync:temp-dir|rsync:compare-dest|rsync:copy-dest|rsync:link-dest|rsync:chmod|rsync:chown|rsync:block-size|rsync:max-size|rsync:min-size|rsync:timeout|rsync:port|rsync:password-file|rsync:out-format|rsync:suffix|rsync:remote-option|rsync:rsync-path|rsync:log-file-format|rsync:usermap|rsync:groupmap|rsync:checksum-choice|rsync:compress-choice)
+                    skip=1 ;;
+                  *) { cpd_long "$nm" suffix && [ "${#nm}" -ge 2 ]; } && skip=1
+                     [ "$sc" = install ] && { cpd_long "$nm" mode || cpd_long "$nm" owner || cpd_long "$nm" group; } && skip=1 ;;
+                esac ;;
+              esac
+            fi ;;
+          -[A-Za-z]*)
+            cpd_short "$a" "$vl"
+            [ "$k" = cp ] && case "$OL" in *r*|*R*|*a*) rec=1 ;; esac
+            [ "$sc" = cp ] && case "$OL" in *l*|*s*) lnk=1 ;; esac
+            [ "$k" != rsync ] && case "$OL" in *T*) tt=1 ;; esac   # FC2 G1: -T = 원본 안쪽을 목적지에 붓는다
+            [ "$sc" = mv ] && case "$OL" in *b*) bk=1 ;; esac      # FC2 G6: mv -b = 있던 것을 백업하고 갈아 끼운다
+            if [ -n "$OC" ]; then
+              if [ "$OC" = t ] && [ "$k" != rsync ]; then
+                if [ "$OVN" = 1 ]; then tdir=$nx; skip=1; else tdir=$OV; fi
+              elif [ "$OVN" = 1 ]; then skip=1
+              fi
+            fi ;;
+          -*) ;;
+          *) pos+=("$a") ;;
+        esac ;;
+      psc|psm)
+        case "$a" in
+          -[Rr]|-[Rr][Ee]*) rec=1 ;;
+          -[Dd][Ee][Ss]*) tdir=$nx; skip=1 ;;
+          -[Pp][Aa][Tt]*|-[Ll][Ii]*) srcs+=("$nx"); skip=1 ;;
+          /[A-Za-z]*/*) pos+=("$a") ;;
+          /[A-Za-z]*) [ "$wk" = 1 ] || pos+=("$a") ;;
+          -*) ;;
+          *) pos+=("$a") ;;
+        esac ;;
+      win|mklink)
+        case "$a" in
+          /[A-Za-z]*/*) pos+=("$a") ;;
+          /[SsEe]) rec=1 ;;
+          /[A-Za-z]*) ;;
+          -*) ;;
+          *) pos+=("$a") ;;
+        esac ;;
+      tar)
+        case "$a" in
+          --extract|--get|--extr*) ext=1 ;;
+          --to-stdout|--to-command*) out=1 ;;
+          --directory=*) dirs+=("${a#*=}") ;;
+          --directory) dirs+=("$nx"); skip=1 ;;
+          -C) dirs+=("$nx"); skip=1 ;;
+          -C?*) dirs+=("${a#-C}") ;;
+          --*) ;;
+          -[A-Za-z]*) case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac ;;
+          *) if [ "$i" -eq 0 ]; then case "$a" in *[!A-Za-z]*) ;; *x*) ext=1; case "$a" in *O*) out=1 ;; esac ;; esac; fi ;;
+        esac ;;
+      unzip)
+        ext=1
+        case "$a" in
+          -d) dirs+=("$nx"); skip=1 ;;
+          -d?*) dirs+=("${a#-d}") ;;
+          --*) ;;
+          -[A-Za-z]*) case "$a" in *[lvtzZpc]*) out=1 ;; esac ;;
+        esac ;;
+      7z)
+        case "$a" in
+          -o?*) dirs+=("${a#-o}") ;;
+          -so) out=1 ;;
+          -*) ;;
+          *) [ "${#pos[@]}" -eq 0 ] && case "$a" in x|e) ext=1 ;; esac; pos+=("$a") ;;
+        esac ;;
+      xa)   # FC F6: Expand-Archive [-Path] <zip> [-DestinationPath] <폴더> — 풀 곳이 없으면 지금 폴더
+        ext=1
+        case "$a" in
+          -[Dd]*) dirs+=("$nx"); skip=1 ;;
+          -[Pp][Aa]*|-[Ll][Ii]*) skip=1; pos+=("$nx") ;;
+          -*) ;;
+          *) pos+=("$a") ;;
+        esac ;;
+      ni)   # FC F6: New-Item -ItemType SymbolicLink|Junction|HardLink -Path/-Name <링크> -Target/-Value <원본>
+        case "$a" in
+          -[Ii]*|-[Tt][Yy]*) itype=$nx; skip=1 ;;
+          -[Pp][Aa][Tt]*|-[Ll][Ii]*) npath=$nx; skip=1 ;;
+          -[Nn]*) nname=$nx; skip=1 ;;
+          -[Tt]*|-[Vv][Aa]*) ltgt+=("$nx"); skip=1 ;;
+          -*) ;;   # -PassThru·-Force·-WhatIf 처럼 값 없는 옵션은 다음 낱말을 삼키지 않는다(FC2 G5)
+          *) if [ -z "$npath" ]; then npath=$a; else ltgt+=("$a"); fi ;;
+        esac ;;
+    esac
+  done
+  # 풀기: 풀 곳(없으면 지금 폴더)이 기록 폴더·그 안·그 상위면(루트에서 tar xzf 도 — 안에 무엇이 있는지 모름)
+  case "$k" in
+    tar|unzip|7z|xa)
+      [ "$k" = xa ] && [ "${#dirs[@]}" -eq 0 ] && [ "${#pos[@]}" -ge 2 ] && dirs=("${pos[1]}")
+      [ "$ext" = 1 ] && [ "$out" = 0 ] || return 0
+      [ "${#dirs[@]}" -eq 0 ] && dirs=(.)
+      for d in "${dirs[@]}"; do cpd_where "$d"; [ "$CW" != no ] && block "$MSG_UNPACK" "$MSG_HUMAN"; done
+      return 0 ;;
+  esac
+  n=${#pos[@]}
+  # 링크(심볼릭·하드·mklink /d /j /h · New-Item 링크): 가리킬 원본이나 만들 자리(목적지 폴더)가 기록 폴더·그 상위, 또는 그 안의 사람 전용 파일이면.
+  #   상대 원본은 지금 폴더 기준과 링크가 놓일 폴더 기준 둘 다 본다(FC F5) · xargs·{}·명령 치환으로 넘긴 원본(모름)도 막는다(FC F4)
+  if [ "$k" = ni ]; then
+    case "$itype" in symboliclink|junction|hardlink|[Ss][Yy][Mm]*|[Jj][Uu][Nn]*|[Hh][Aa][Rr][Dd]*) ;; *) return 0 ;; esac
+    local lk=$npath   # 링크 자리 = -Path, -Name 이 있으면 -Path/-Name(FC2 G5)
+    [ -n "$nname" ] && { if [ -n "$lk" ]; then lk="$lk/$nname"; else lk=$nname; fi; }
+    LDIR=""
+    [ -n "$lk" ] && { cpd_hit "$lk" rec && block "$MSG_LINK"; cpd_linkdir "$lk"; }
+    for s in "${ltgt[@]}"; do cpd_lnsrc "$s" "$LDIR" && block "$MSG_LINK"; done
+    return 0
+  fi
+  if [ "$k" = ln ] || [ "$k" = mklink ]; then
+    local lk="" ls=()
+    if [ "$k" = mklink ]; then
+      [ "$n" -ge 1 ] && lk=${pos[0]}; [ "$n" -ge 2 ] && ls=("${pos[@]:1}")
+    elif [ -n "$tdir" ]; then lk=$tdir; ls=("${pos[@]}")
+    elif [ "$n" -eq 1 ]; then lk=.; ls=("${pos[0]}")
+    elif [ "$n" -ge 2 ]; then lk=${pos[$((n - 1))]}; ls=("${pos[@]:0:$((n - 1))}")
+    fi
+    [ -n "$lk" ] && cpd_hit "$lk" rec && block "$MSG_LINK"
+    LDIR=""; [ -n "$lk" ] && cpd_linkdir "$lk"
+    { [ "$n" -eq 1 ] || [ -n "$tdir" ]; } && [ "$k" = ln ] && [ -n "$lk" ] && { resolve_tok "${lk//\"/}" && LDIR=$RP; }
+    [ "$XARGS" = 1 ] && block "$MSG_LINK"
+    for s in "${ls[@]}"; do
+      case "$s" in *'$bt'*) block "$MSG_LINK" ;; esac
+      cpd_lnsrc "$s" "$LDIR" && block "$MSG_LINK"
+    done
+    return 0
+  fi
+  # 복사·옮기기: 목적지 → d, 원본 → srcs
+  if [ -n "$tdir" ]; then
+    d=$tdir; srcs+=("${pos[@]}")
+  elif [ "$k" = win ]; then
+    [ "$n" -ge 2 ] || return 0
+    d=${pos[1]}; srcs+=("${pos[0]}")
+    [ "$sc" = robocopy ] && for ((j = 2; j < n; j++)); do srcs+=("${pos[$j]}"); done
+  else
+    [ "$n" -ge 1 ] || return 0
+    d=${pos[$((n - 1))]}
+    for ((j = 0; j < n - 1; j++)); do srcs+=("${pos[$j]}"); done
+  fi
+  [ "$XARGS" = 1 ] && srcs+=('$bt')   # FC F4: xargs 로 넘긴 원본 = 모름
+  [ "${#srcs[@]}" -gt 0 ] || return 0
+  # FC F6: cp -l·-s·--link·--symbolic-link 은 원본을 잇는다 — 원본이 기록 폴더나 그 안·그 상위면
+  if [ "$lnk" = 1 ]; then for s in "${srcs[@]}"; do cpd_hit "$s" in && block "$MSG_LINK"; done; fi
+  cpd_where "$d"
+  case "$CW" in
+    self)   # 기록 폴더 자체나 그 안: 폴더째 · 이름을 알 수 없는 원본 · mv -T(기록 폴더를 통째 갈아 끼움 — FC2 G6)
+      [ "$rec" = 1 ] && block "$MSG_CPDIR"
+      [ "$tt" = 1 ] && [ "$sc" = mv ] && block "$MSG_CPDIR"
+      for s in "${srcs[@]}"; do cpd_unknown "$s" && block "$MSG_CPDIR"; done ;;
+    up)     # 그 상위(FC F7 — 헛막힘 좁히기): 폴더째 그리고 원본이 모름·/.·/·와일드카드·이름이 refactor·docs 일 때만
+      #   FC2 G1: -T·--no-target-directory·robocopy·xcopy 는 원본 안쪽을 붓는다 = /. 와 같다
+      if [ "$tt" = 1 ] && { [ "$rec" = 1 ] || [ "$sc" = mv ]; }; then block "$MSG_CPDIR"; fi
+      if [ "$k" = win ] && [ "$rec" = 1 ]; then block "$MSG_CPDIR"; fi
+      if [ "$rec" = 1 ]; then for s in "${srcs[@]}"; do cpd_upsrc "$s" && block "$MSG_CPDIR"; done; fi
+      #   FC2 G6: mv -b·--backup = 있던 것을 백업하고 갈아 끼운다(mv -b /tmp/refactor docs/)
+      if [ "$bk" = 1 ]; then for s in "${srcs[@]}"; do cpd_upsrc "$s" && block "$MSG_CPDIR"; done; fi ;;
+  esac
+  return 0
+}
+# 명령 전체: 백틱·$( ) 치환은 한 단어 $bt(이름을 알 수 없는 낱말)로 접고 안의 명령은 뒤에 따로 붙여 본다(FC F2) · {} 도 $bt(FC F4) ·
+#   find -exec/-execdir/-ok/-okdir 뒤는 새 조각(FC F4) · 단독 & 도 조각 경계(FC F1) — cd 를 따라 조각마다 copy_dir_seg
+copy_dir_targets() {
+  local s=$1 o="" in="" BT='`' r m dp ii ch pc DQS='"/' SQS="'/"
+  while :; do case "$s" in *"$BT"*"$BT"*) o="$o${s%%"$BT"*}\$bt"; r=${s#*"$BT"}; in="$in$NL${r%%"$BT"*}"; s=${r#*"$BT"} ;; *) break ;; esac; done
+  s="$o$s"; o=""
+  # $( ) 는 괄호 깊이로(겹친 $( ) · 따옴표 안 괄호 — FC2 G4): 다음 ) 까지 잘라 그 안의 ( 수만큼 깊이를 더한다
+  while :; do
+    case "$s" in *'$('*) ;; *) break ;; esac
+    o="$o${s%%'$('*}\$bt"; r=${s#*'$('}; dp=1; ii=""
+    while :; do
+      case "$r" in *')'*) ;; *) ii="$ii$r"; r=""; break ;; esac
+      ch=${r%%')'*}; r=${r#*')'}; pc=${ch//[!(]/}
+      dp=$((dp + ${#pc} - 1)); ii="$ii$ch"
+      [ "$dp" -le 0 ] && break
+      ii="$ii)"
+    done
+    in="$in$NL$ii"; s=$r
+  done
+  s="$o$s"
+  # 따옴표를 닫은 바로 뒤에 / 가 오면 따옴표를 지워 한 낱말로("$PWD"/docs/refactor — FC2 G3 · 이 사본에서만, 공유 판정 문자열은 그대로)
+  s=${s//"$DQS"/$SL}; s=${s//"$SQS"/$SL}
+  s="$s$in"
+  s=${s//'{}'/'$bt'}
+  for m in -execdir -exec -okdir -ok; do s=${s//" $m "/"$NL"}; done
+  cd_all copy_dir_targets1 "$s"
+}
+copy_dir_targets1() {
+  local s=$1 seg CWD_BASE=$cwd CD_PREV=$cwd
+  s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//&/$NL}
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
+    cd_seg "$seg" && continue
+    seg_targets "$seg"
+    copy_dir_seg
   done
   cwd=$CWD_BASE
 }
@@ -3699,6 +4046,9 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   if [ -n "$plugroot" ]; then case "$cwd/" in "$plugroot"/*) tchk=1 ;; esac; [ -n "$pb" ] && case "$tq" in *"$pb"*) tchk=1 ;; esac; fi
   [ "$fence" = 1 ] && tchk=1
   [ "$tchk" = 1 ] && shell_targets "$tq"
+  # 0.4.0 WC: 기록 폴더나 그 상위로 폴더째·와일드카드 복사·옮기기 · 거기에 압축 풀기 · 링크(복사·풀기·링크 낱말이 보일 때만 — tar xf x.tar 처럼 docs 낱말이 없어도)
+  has "$tq" '(^|[^[:alnum:]_.-])(cp|copy|copy-item|cpi|install|rsync|scp|xcopy|robocopy|mv|move|move-item|mi|ln|mklink|tar|bsdtar|unzip|7z|7za|7zr)([.]exe)?([[:space:]"'"'"']|$)' && copy_dir_targets "$tq"
+  has "$tq" '(^|[^[:alnum:]_.-])(expand-archive|new-item|ni)([[:space:]"'"'"']|$)' && copy_dir_targets "$tq"   # FC F6: PowerShell 풀기·링크
 
   # 2) 비밀값 ---------------------------------------------------------------
   # 명령 전체를 한 덩어리로 본다: 비밀값 파일 이름이 나오고(이름·존재만 보는 명령 조각은 제외), 명령 어딘가에

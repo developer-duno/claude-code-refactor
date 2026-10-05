@@ -864,6 +864,7 @@ def main():
     check_vercel_read_040(res)
     check_readme_040(res)
     check_fg_040(res)
+    check_copy_dir_040(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -5506,6 +5507,135 @@ def check_fg_040(res):
         res["total"] += 1
         if w not in s64:
             res["fails"].append(("0.4.0 FG2 README §6-4", "있음", "없음", "", w, ""))
+
+
+def check_copy_dir_040(res):
+    """0.4.0 WC(검사관 N #1 — 0.3.7 에도 있던 옛 구멍): 목적지가 기록 폴더(docs/refactor) 자체나 그 상위(docs · . · 프로젝트 · -t 폴더)인데
+    원본이 폴더째(-r·-a·rsync·robocopy·-Recurse·xcopy /s)이거나 이름을 미리 알 수 없으면(와일드카드·변수·명령 치환·끝 / · /. ) 막는다(C1).
+    압축 풀기(tar -x·unzip·7z x)의 풀 곳(없으면 지금 폴더)이 기록 폴더·그 상위면 막는다(C2). 링크(ln·mklink)는 원본이나 만들 자리가 기록 폴더·그 상위면
+    막는다(메인 결정). 이름을 적은 파일 복사 · 기록 폴더 밖 · 밖으로 복사 · 읽기 · 평소(STATE 없음)는 통과(C3)"""
+    W_CP = "폴더째·와일드카드 복사는 기록 폴더 안의 허락 파일·승인 기록을 덮어쓸 수 있어 막습니다"
+    W_ARC = "리팩토링 기록 폴더(docs/refactor)에 압축을 풀거나"
+    W_LN = "기록 폴더(docs/refactor)나 그 상위 폴더를 잇거나 그 자리에 링크를"
+    blocked_cp = [
+        # 검사관 N 꼴 7
+        "cp -r /tmp/d/. docs/refactor/", "cp -a /tmp/d/. docs/refactor", "cp -r /tmp/refactor docs/", "cp -R /tmp/refactor docs",
+        "rsync -a /tmp/d/ docs/refactor/", "cp -r /tmp/docs .", "cp /tmp/d/.t* docs/refactor/",
+        # 이웃 꼴
+        "cp -av /tmp/d/. docs/refactor", "cp -rT /tmp/d docs/refactor", "cp -t docs/refactor -r /tmp/d", "cp --target-directory=docs/refactor /tmp/d/*",
+        "rsync -r /tmp/d/ docs/refactor", "rsync /tmp/d/ docs/refactor", 'cp -r "/tmp/d/." "docs/refactor/"',
+        "cp -r /tmp/d/. $PWD/docs/refactor", "cd docs && cp -r /tmp/d/. refactor", "cd docs/refactor && cp /tmp/d/* .",
+        'cp -r /tmp/d/. "$(pwd)/docs/refactor"', "Copy-Item -Recurse /tmp/d/* docs/refactor", "cp --recursive /tmp/d/ docs",
+        "cp -r /tmp/d/. /", "mv /tmp/d/* docs/refactor/", "cp $(ls /tmp/d) docs/refactor", "cp `ls /tmp/d` docs/refactor", "cp /tmp/d/{a,b} docs/refactor",
+        "cp /tmp/d/.. docs/refactor", "install -t docs/refactor /tmp/d/*", "scp -r host:/d/refactor docs", "xcopy /tmp/d docs\\refactor /s", "robocopy c:/tmp/d docs/refactor",
+        "Copy-Item -Path /tmp/d -Destination docs/refactor -Recurse", "cp -r /tmp/d $X/docs/refactor", "/usr/bin/cp -r /tmp/d/. docs/refactor",
+        # FC F1 배경 실행 & · F2 $( ) · F3 옵션 읽기 · F4 xargs·find -exec · F7 상위로는 폴더째+이름 모름/refactor·docs · 기록 폴더 안으로
+        "cp -r /tmp/d/. docs/refactor &", "rsync -a /tmp/d/ docs/refactor/ &", "nohup cp -r /tmp/d/. docs/refactor &", "cp /tmp/d/* docs/refactor/ &",
+        "cp -r /tmp/d/. docs/refactor 1>&2 &", "cp -r /tmp/d/. docs/refactor &disown", "cp -r /tmp/d/. docs/refactor&", "rsync -a /tmp/d/ docs/refactor/&",
+        'cp -r /tmp/d/. "$(git rev-parse --show-toplevel)/docs/refactor"', "cp -r /tmp/d/. $(git rev-parse --show-toplevel)/docs/refactor",
+        "cp -tdocs/refactor /tmp/d/*", "cp -rtdocs/refactor /tmp/d", "cp --target=docs/refactor /tmp/d/*", "cp --targ docs/refactor -r /tmp/d",
+        "cp -r /tmp/d/. docs/refactor -S .bak", "cp -r /tmp/d/. docs/refactor --suffix .bak", "rsync -a /tmp/d/ docs/refactor/ --exclude foo",
+        "rsync -a /tmp/d/ docs/refactor -e ssh", "rsync -a --filter 'P x' /tmp/d/ docs/refactor",
+        "ls /tmp/d/* | xargs cp -t docs/refactor", "find /tmp/d -type f | xargs -I{} cp {} docs/refactor/", "find /tmp/d -type f -exec cp {} docs/refactor/ \\;",
+        "find /tmp/d -type f -exec cp -t docs/refactor {} +", "find /tmp/d -execdir cp {} $PWD/docs/refactor/ \\;",
+        "cp -r /tmp/d/. .", "rsync -a /tmp/d/ .", "cp -r ../template/. .", "cp -r /tmp/x/refactor docs/", "cp -r /tmp/d/* docs", "cp -r /tmp/d docs/refactor/sub",
+        "cp /tmp/x/$N docs/refactor/", "cp -r $X .",
+    ]
+    blocked_arc = ["tar -xf /tmp/x.tar -C docs/refactor", "tar xf x.tar", "unzip -o x.zip -d docs", "tar --extract -f x.tar --directory=docs",
+                   "tar -xzf x.tgz -C .", "git archive HEAD docs | tar -x", "7z x a.7z -odocs", "bsdtar -xf x.tar -C docs/refactor", "unzip x.zip"]
+    blocked_ln = ["ln -s /tmp/d docs/refactor", "ln -sfn /tmp/d docs", "ln -s docs/refactor /tmp/link", "cmd /c mklink /d docs\\refactor c:\\tmp\\d",
+                  "ln -sf docs /tmp/l", "ln -s . /tmp/root", "ln -n /tmp/d docs/refactor", "ln -sT /tmp/d docs", "ln -s -t docs/refactor /tmp/x",
+                  "ln docs/refactor/APPROVALS.log /tmp/a", "ln docs/refactor/STATE.md /tmp/s", "cmd /c mklink /j c:\\tmp\\j docs\\refactor",
+                  "cmd /c mklink /h c:\\tmp\\h docs\\refactor\\APPROVALS.log",
+                  # FC F5 링크가 놓일 폴더 기준 상대 원본 · F4 xargs · F6 cp -l/-s · F1 &
+                  "ln -s ../docs/refactor src/r", "ln -s ../docs src/d", "ln -sr docs/refactor src/r", "mklink /d src\\r ..\\docs\\refactor",
+                  "ln -s -t src ../docs/refactor", "ln -s docs/refactor /tmp/l &", "ls | xargs ln -s -t /tmp/l", "ln -s $(pwd)/docs/refactor /tmp/l",
+                  "cp -rl docs/refactor /tmp/l", "cp -rs $PWD/docs/refactor /tmp/l", "cp -l docs/refactor/APPROVALS.log /tmp/a", "cp -a --link docs /tmp/l",
+                  "cp --symbolic-link docs/refactor/STATE.md /tmp/s"]
+    passes = [
+        "cp /tmp/notes.md docs/refactor/notes.md", "cp a.txt docs/refactor/", "cp -r src/x src/y", "cp -r /tmp/a build/", "rsync -a dist/ /tmp/out/",
+        "cp -r docs/refactor /tmp/bak", "cp -r docs /tmp/bak", "cat docs/refactor/STATE.md", "ls -la docs/refactor", "cp src/a.ts src/b.ts", "mv /tmp/x.md docs/refactor/x.md",
+        "cp /tmp/x docs/notes.md", "cp -r /tmp/d /tmp/e", "git archive HEAD docs | tar -x -C /tmp/y", "tar -tf x.tar", "tar -czf /tmp/x.tgz docs/refactor",
+        "tar -xOf x.tar", "unzip -l x.zip", "7z l a.7z", "7z x a.7z -o/tmp/y", "unzip x.zip -d /tmp/u", "tar -xf x.tar -C build",
+        "ln -s ../shared/x.js src/x.js", "ln -s /tmp/d docs/refactor/x", "ln -sf src/a.ts src/b.ts", 'echo "cp -r /tmp/d/. docs/refactor"',
+        "Copy-Item -Recurse src/x src/y", "robocopy c:/tmp/a c:/tmp/b", "xcopy src build /s", "cp -r docs/refactor/notes /tmp/n",
+        # FC F7 상위 폴더로 보내는 무해한 꼴 · 변수가 든 다 적은 파일 이름 · F3 값 옵션 · F1 & 뒤 다른 명령
+        "cp *.md docs/", "mv *.md docs/", "cp /tmp/*.json .", "cp -r assets docs/", "cp -a /tmp/config.json .", "cp -p /tmp/config.json .",
+        "cp ../other/*.config.js .", "cp -r /tmp/backup/src .", "mv /tmp/*.log .", "cp -r build/typedoc docs/api", "cp -r build/typedoc/* docs/api/",
+        "cp -r /tmp/d ./docs", "cp --recursive /tmp/d docs", "cp -r /tmp/d /", "Copy-Item /tmp/d docs -Recurse -Force",
+        "cp $HOME/notes.md docs/refactor/", 'cp "$PWD/a.md" docs/refactor/', "rsync -a ./ /tmp/bak --exclude docs", "rsync -a --exclude docs ./ /tmp/bak/",
+        "install -m 644 file docs/", "cp -r src/a src/b -S .bak", "sleep 1 & cp a.txt docs/refactor/", "cp -r /tmp/d src/r",
+        "find src -name '*.ts' -exec cp {} /tmp/out/ \\;", "ls src | xargs -I{} cp src/{} /tmp/o/", "cp -l src/a.ts /tmp/a", "cp -s $PWD/src/a.ts /tmp/a",
+    ]
+    proj = make_project(phase="EXECUTE")
+    try:
+        _cases_034(res, proj, "WC C1 폴더째·와일드카드 복사 → 막음", [(B, bash(c)) for c in blocked_cp], need=W_CP)
+        _cases_034(res, proj, "WC C1 PowerShell 도구", [(B, ps("Copy-Item -Recurse /tmp/d/* docs/refactor")), (B, ps("Copy-Item -Path /tmp/d/* -Destination docs -Recurse"))], need=W_CP)
+        _cases_034(res, proj, "WC C2 압축 풀기 → 막음", [(B, bash(c)) for c in blocked_arc], need=W_ARC)
+        _cases_034(res, proj, "FC 변수가 든 허락 파일 이름", [(B, bash("cp $HOME/APPROVALS.log docs/refactor/")), (B, bash("cp $D/.allow-baseline-edit docs/refactor/"))])
+        _cases_034(res, proj, "WC 링크 → 막음", [(B, bash(c)) for c in blocked_ln])
+        _cases_034(res, proj, "WC 링크 문구", [(B, bash("ln -s docs/refactor /tmp/link")), (B, bash("ln -sfn /tmp/d docs"))], need=W_LN)
+        _cases_034(res, proj, "WC C3 통과", [(OK, bash(c)) for c in passes] + [(OK, ps("Copy-Item -Recurse src/x src/y"))])
+        # 하위 폴더에서(작업 폴더 = src): 상대경로 ../docs 는 막고, 풀 곳이 src 인 tar 는 통과
+        sub = {"cwd": str(proj / "src")}
+        _cases_034(res, proj, "WC 하위 폴더에서 막음", [(B, bash("cp -r /tmp/d/. ../docs/refactor")), (B, bash("cp -r /tmp/d/. ..")), (B, bash("tar xf x.tar -C ..")),
+                                                     (B, bash("ln -s ../docs/refactor r")), (B, bash("ln -s ../docs r"))], extra=sub)
+        _cases_034(res, proj, "WC 하위 폴더에서 통과", [(OK, bash("tar xf x.tar")), (OK, bash("cp -r /tmp/d .")), (OK, bash("cp -r /tmp/d ..")), (OK, bash("cp -r /tmp/d/. r"))], extra=sub)
+        # FC2(재검사 C3): G1 -T·--no-target-directory·robocopy·xcopy 는 상위로도 원본 안쪽을 붓는다 · G2 상위의 첫 칸(프로젝트 이름) ·
+        #   G3 따옴표 닫은 바로 뒤 경로 · G4 겹친 $( ) · G5 New-Item -Path/-Name·값 없는 옵션 · G6 mv -b/--backup/-T · G7 $( ) 안 명령·Expand-Archive 둘째 위치
+        pn = proj.name
+        fc2_block = ["cp -rT /tmp/x docs", "cp -r --no-target-directory /tmp/x docs", "cp -rT /tmp/y .", "cp -raT /tmp/y docs",
+                     "robocopy c:/tmp/x docs /E", "xcopy c:/tmp/x . /S", f"cp -r /tmp/x/{pn} ..", f"rsync -a /tmp/x/{pn} ..", f"cp -r /tmp/x/{pn.upper()}/ ..",
+                     'cp -r /tmp/d/. "$(git rev-parse --show-toplevel)"/docs/refactor', 'cp -r /tmp/d/. "$(pwd)"/docs/refactor', 'cp -r /tmp/d/. "$PWD"/docs/refactor',
+                     'cp -r /tmp/d/. "`pwd`"/docs/refactor', 'rsync -a /tmp/d/ "$(pwd)"/docs/refactor/', 'cp -r /tmp/x/refactor "$(pwd)"/docs',
+                     "cp -r /tmp/d/. './docs'/refactor", 'cp -r /tmp/d/. "$(cd "$(dirname x)" && pwd)/docs/refactor"',
+                     "mv -b /tmp/refactor docs/", "mv --backup=t /tmp/refactor docs/", "mv --backup /tmp/refactor docs", "mv -bT /tmp/x docs/refactor",
+                     f"mv -b /tmp/x/{pn} ..", "mv -T /tmp/x docs", 'echo "$(cp -r /tmp/d/. docs/refactor)"']
+        _cases_034(res, proj, "FC2 막힘", [(B, bash(c)) for c in fc2_block], need=W_CP)
+        _cases_034(res, proj, "FC2 하위 폴더에서 ../.. 첫 칸", [(B, bash(f"cp -r /tmp/x/{pn} ../..")), (OK, bash("cp -r /tmp/x/other ../.."))], extra={"cwd": str(proj / "src")})
+        _cases_034(res, proj, "FC2 PowerShell", [(B, ps("New-Item -ItemType SymbolicLink -Path src -Name r -Target ../docs/refactor")),
+                                                  (B, ps("New-Item -ItemType SymbolicLink -Path src/r -PassThru -Target ../docs/refactor")),
+                                                  (B, ps("New-Item -ItemType Junction -Name r -Path src -Force -Target ../docs")),
+                                                  (B, ps("Expand-Archive x.zip docs/refactor")), (B, ps("robocopy C:\\tmp\\x docs /E")),
+                                                  (OK, ps("New-Item -ItemType SymbolicLink -Path src -Name r -Target ../shared")),
+                                                  (OK, ps("New-Item -ItemType SymbolicLink -Path src/r -PassThru -Target ../shared"))])
+        _cases_034(res, proj, "FC2 G5 -Name 안 하위 폴더", [(B, ps("New-Item -ItemType SymbolicLink -Path src -Name a/r -Target ../../docs"))])
+        _cases_034(res, proj, "FC2 G7 하위 폴더에서 Expand-Archive 둘째 위치", [(B, ps("Expand-Archive x.zip ../docs/refactor")), (OK, ps("Expand-Archive x.zip vendor"))],
+                   extra={"cwd": str(proj / "src")})
+        _cases_034(res, proj, "FC2 통과", [(OK, bash(c)) for c in ["cp -r /tmp/x/other ..", "cp -rT src/a src/b", "mv -b /tmp/notes.md docs/refactor/notes.md",
+                                                                  "mv -b /tmp/a.md docs/", "cp -r /tmp/x/src ..", 'gh pr create --body "$(cat /tmp/b.md)"',
+                                                                  "npm run dev &", 'cp "a b"/c.txt docs/refactor/', "cp -rT /tmp/x build", "robocopy c:/tmp/x build /E",
+                                                                  'cp -r /tmp/d/. "$(pwd)"/build', "mv -T /tmp/x build/y"]])
+        # FC F8(#9): cd 가 실패하면(; 뒤) 지금 폴더 기준으로도 본다
+        _cases_034(res, proj, "FC cd 실패 뒤", [(B, bash("cd /nonexist; cp -r /tmp/d/. docs/refactor")), (B, bash("cd /tmp || true; cp -r /tmp/d/. docs/refactor"))])
+        # FC F6: PowerShell 풀기·링크
+        _cases_034(res, proj, "FC F6 Expand-Archive", [(B, ps("Expand-Archive x.zip -DestinationPath docs/refactor -Force")), (B, ps("Expand-Archive -Path x.zip -DestinationPath . -Force")),
+                                                      (B, ps("Expand-Archive x.zip docs")), (B, ps("Expand-Archive x.zip")), (OK, ps("Expand-Archive x.zip -DestinationPath vendor"))])
+        _cases_034(res, proj, "FC F6 New-Item 링크", [(B, ps("New-Item -ItemType Junction -Path /tmp/j -Target docs/refactor")),
+                                                     (B, ps("New-Item -ItemType SymbolicLink -Path src/r -Value docs/refactor")),
+                                                     (B, ps("New-Item -ItemType SymbolicLink -Path src/r -Target ../docs")),
+                                                     (B, ps("New-Item -ItemType HardLink -Path /tmp/h -Target docs/refactor/APPROVALS.log")),
+                                                     (B, ps("New-Item -ItemType SymbolicLink -Path docs -Target /tmp/d")),
+                                                     (OK, ps("New-Item -ItemType SymbolicLink -Path src/x.js -Target ../shared/x.js")),
+                                                     (OK, ps("New-Item -ItemType Directory -Path docs/refactor/notes")), (OK, ps("New-Item -ItemType File -Path src/a.ts"))])
+        # 하위 폴더가 프로젝트(모노레포 app/ — 그 기록 폴더 app/docs/refactor)
+        app = proj / "app"
+        (app / "docs/refactor").mkdir(parents=True)
+        lf(app / "docs/refactor/STATE.md", "---\nrefactor_state: 1\nproject: \"a\"\nphase: EXECUTE\ngate: none\n---\n")
+        _cases_034(res, app, "WC 하위 폴더 프로젝트", [(B, bash("cp -r /tmp/d/. docs/refactor")), (B, bash("tar xf x.tar")), (OK, bash("cp -r /tmp/d src/d"))])
+    finally:
+        rmtree_rw(proj)
+    # 평소(STATE 없음·스위치 없음)는 판정하지 않는다
+    plain = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-"))
+    try:
+        (plain / "docs/refactor").mkdir(parents=True)
+        for c in ["cp -r /tmp/d/. docs/refactor/", "tar xf x.tar", "ln -s docs/refactor /tmp/link", "cp /tmp/d/.t* docs/refactor/"]:
+            res["total"] += 1
+            code, err = _gate_run_040(plain, bash(c))
+            if code != OK:
+                res["fails"].append(("0.4.0 WC 평소(STATE 없음) 통과", OK, code, "Bash", c, err.strip()[:200]))
+    finally:
+        rmtree_rw(plain)
 
 
 if __name__ == "__main__":
