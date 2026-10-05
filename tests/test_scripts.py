@@ -6465,7 +6465,7 @@ def check_auto_newbranch_040(check):
 def check_auto_041(check):
     """0.4.1 자동 모드 오작동 고침: R4 합치기 되풀이 바퀴마다 허락 수명 재확인(자동 2시간 · 사람 30분) · R5 기준선 커밋 꼴(docs/refactor 허용 목록) ·
     R6 .turn-nextok 잔류(합친 뒤 거절) · R7 새 가지 직전 대화 기록 재확인(.turn-nextok ④~⑥ · 사람 줄 · AskUserQuestion 답) · X2 post-check 2시간 창.
-    시각은 파일 값으로 고정한다(실제 시간 흐름에 기대는 것은 R4 사람 꼴 하나 — 허락 1797초 전 + 첫 조회 4초, 여유 3초)."""
+    시각은 파일 값으로 고정한다(R4 사람 꼴은 허락 파일 시각을 이 실행이 처음 읽은 값으로 재므로 — 첫 조회 때 가짜 date 의 +%s 에 1801초를 더한다)."""
     made = []
     site = _Site040()
     g = _git034
@@ -6511,14 +6511,17 @@ def check_auto_041(check):
         dh = _mk035()
         made.append(str(dh))
         _grant035(dh, "합치기 68 rebase", made=made)
-        _set_grant035(dh, ago=1797)
+        # 가짜 date(이 실행의 PATH 맨 앞에만 — 다른 시험에 새지 않음): "+%s" 일 때만 진짜 값 + 같은 폴더 shift 파일의 초, 그 밖은 진짜 date 그대로
+        fd = _bin040(made, date='r=/bin/date; [ -x "$r" ] || r=/usr/bin/date\n'
+                                'if [ "$*" = "+%s" ] && [ -f "$d/shift" ]; then echo $(( $("$r" +%s) + $(cat "$d/shift") )); else exec "$r" "$@"; fi')
         fh = _fake035(made, head=g(dh, "rev-parse", "HEAD"), view_seq=[{"statusCheckRollup": IP}, {}, {}])
-        (fh / "view.hook").write_text("sleep 4\n", newline="")
+        (fh / "view.hook").write_text(f'printf 1801 > "{(fd / "shift").as_posix()}"\n', newline="")
         (fh / "view.hookn").write_text("1", newline="")
-        out, rc, _ = _mg035(dh, fg=fh, extra_env={"REFACTOR_MERGE_VIEW_LIMIT": "10"})
+        out, rc, _ = _mg035(dh, path=os.pathsep.join([str(fh), str(fd), env()["PATH"]]))
         k = _kinds035(_calls035(fh))
-        check("0.4.1 R4 사람 꼴: 허락 1797초 전 + 첫 조회 4초(도는 중) → 다음 바퀴 앞에서 30분 넘음 → 1 · ⛔ 합치기 허락이 없거나 끝났습니다 · 조회 1번 · 합치기 0번 · 허락 지움",
-              rc == 1 and "⛔ 합치기 허락이 없거나 끝났습니다" in out and k[0] == 1 and k[2] == 0 and not _gf035(dh).exists(), out)
+        check("0.4.1 R4 사람 꼴: 허락 직후 시작 · 첫 조회(도는 중) 때 시계가 1801초 뒤로 → 다음 바퀴 앞에서 30분 넘음 → 1 · ⛔ 합치기 허락이 없거나 끝났습니다 · 조회 1번 · 합치기 0번 · 허락 지움",
+              rc == 1 and "⛔ 합치기 허락이 없거나 끝났습니다" in out and k[0] == 1 and k[2] == 0 and not _gf035(dh).exists()
+              and any(c == "+%s" for c in _calls040(fd, "date")), out)
 
         # ── R5 기준선 커밋 꼴: tests/baseline ≥1 + docs/refactor 는 허용 목록(*.md·*.log·approved/.log-sum·.log-copy·바로 아래 .gitattributes·.gitignore) ──
         def r5(extra, seal=False):
