@@ -7,7 +7,10 @@
 # Claude가 직접 부르는 것은 안전장치 훅이 막는다. 사용자가 입력한 인자는 표준입력으로 받는다(셸 주입 방지).
 #   $1 = 프로젝트 폴더, $2 = --from-hook (입력 훅이 부를 때만)
 #   표준입력 = 인자 (예: "P0-1 P1-2" / "P1" / "baseline" / "보류 P1-2" / "확인" / "마무리" / "허용 P1-1" / "허용 닫기" / "푸시" /
-#              "새 가지" / "새 가지 refactor/hotfix-1" / "합치기" / "합치기 68 rebase" / 비움=현황)
+#              "새 가지" / "새 가지 refactor/hotfix-1" / "합치기" / "합치기 68 rebase" / "B1"·"묶음 B1" / "보류 B1" / 비움=현황)
+# "B1"(0.4.0 묶음)은 계획서 카드의 "- **묶음**: B1 …" 칸으로 그 묶음의 안 끝난 카드를 펼쳐 카드마다 승인(기존 승인 루틴)하고, 그 앞에
+#   "| 묶음 승인 | B1 | - | 카드 N개: … |" 한 줄을 남긴다(지문 칸 "-" — 승인 상태 계산은 이 줄을 건너뜀 · 이 카드 목록이 그 묶음의 정본).
+#   STATE.md 앞머리 current_bundle 도 여기서만 쓴다(칸이 없으면 넣는다).
 #   환경변수 REFACTOR_TURN_SID = 입력 훅이 넘기는 세션 ID("푸시"·"합치기"의 허락 파일 이름에 쓴다)
 #   환경변수 REFACTOR_TRANSCRIPT_PATH = 입력 훅이 넘기는 대화 기록 파일 경로(0.3.7 — "합치기"가 .turn-mergetp.<세션ID> 에 적는다. 없으면 빈 값)
 # "허용"(0.3.3)은 승인된 🛠 단계의 기준선 허용 파일(.allow-baseline-edit)에 단계 ID 를 적는다.
@@ -89,6 +92,8 @@ mode="approve"; want_base=0; ids=""; phases=""; bad=""; pos=0; conflict=""; spec
 # 0.3.4: '새 가지'(mode=branch — nbw=1 은 '새' 다음 '가지'를 기다림, nbname = 붙인 이름 원문, nbn = 이름 낱말 수)
 #        '합치기'(mode=merge — mprn = PR 번호, mth = 방식, mnn·mmn = 번호·방식 낱말 수)
 nbw=0; nbname=""; nbn=0; mprn=""; mth=""; mnn=0; mmn=0
+# 0.4.0: 묶음 'B1'(bundles = 묶음 ID 들 · bkw = '묶음' 낱말 수 · bzero = 앞에 0 이 붙은 이름) · '자동'(BUNDLE_AUTO=1 — 자동 모드가 쓴다)
+bundles=""; bkw=0; bzero=""; BUNDLE_AUTO=0
 # 영문 소문자만 대문자로(tr '[:lower:]' '[:upper:]' 를 LC_ALL=C 에서 쓴 것과 같게, 외부 명령 없이)
 upper_ascii() {
   local s=$1 o="" c lo=abcdefghijklmnopqrstuvwxyz UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ p i
@@ -128,7 +133,9 @@ for tok in $raw; do
       else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다(예: /refactor:approve 합치기)"; fi ;;
     확인|CONFIRM|SEAL) special=confirm ;;
     마무리|DONE|FINISH|끝|완료) special=done ;;
-    ALL|전체|모두) bad="$bad $tok(전체 승인은 지원하지 않음 — P0·P1 같은 묶음이나 단계 번호로)" ;;
+    ALL|전체|모두) bad="$bad $tok(전체 승인은 지원하지 않음 — P0·P1 같은 Phase 전체나 단계 번호, B1 같은 묶음으로)" ;;
+    묶음|BUNDLE) bkw=$((bkw + 1)) ;;
+    자동|AUTO) BUNDLE_AUTO=1 ;;
     *)
       if [[ $up =~ ^P[0-9]+-[0-9]+[A-Z]?$ ]]; then case " $ids " in *" $up "*) ;; *) ids="$ids $up" ;; esac
       elif [[ $up =~ ^P[0-9]+$ ]]; then phases="$phases $up"
@@ -140,6 +147,8 @@ for tok in $raw; do
           병합) mth=merge; mmn=$((mmn + 1)) ;;
           *) if [[ $up =~ ^#?[0-9]{1,7}$ ]]; then mprn=$((10#${up#\#})); mnn=$((mnn + 1)); else bad="$bad $tok"; fi ;;
         esac
+      elif [[ $up =~ ^B0[0-9]+$ ]]; then bzero="$bzero $tok"
+      elif [[ $up =~ ^B[0-9]+$ ]]; then case " $bundles " in *" $up "*) ;; *) bundles="$bundles $up" ;; esac
       else bad="$bad $tok"
       fi ;;
   esac
@@ -154,6 +163,16 @@ if [ -z "$conflict" ]; then
   elif [ "$mode" = "branch" ] && [ "$nbn" -gt 1 ]; then conflict="'새 가지' 뒤에는 가지 이름을 하나만 붙입니다(예: /refactor:approve 새 가지 refactor/hotfix-1)"
   elif [ "$mode" = "merge" ] && { [ -n "$ids$phases" ] || [ "$want_base" = 1 ] || [ -n "$special" ]; }; then conflict="'합치기'는 단계 번호·baseline·확인·마무리와 섞지 않습니다(뒤에는 PR 번호와 방식만)"
   elif [ "$mode" = "merge" ] && { [ "$mnn" -gt 1 ] || [ "$mmn" -gt 1 ]; }; then conflict="'합치기' 뒤에는 PR 번호 하나와 방식(rebase·squash·merge) 하나까지만 붙입니다(예: /refactor:approve 합치기 68 rebase)"
+  # 0.4.0 묶음 섞임 규칙(#17): 묶음은 단계 번호·Phase·허용·baseline·확인·마무리·푸시·새 가지·합치기와 섞지 않는다 · '자동'은 묶음 하나와만
+  elif [ -n "$bzero" ]; then conflict="묶음 이름(${bzero# })은 앞에 0 을 붙이지 않습니다(예: /refactor:approve B1)"
+  elif [ "$bkw" -gt 0 ] && [ -z "$bundles" ]; then conflict="'묶음' 뒤에는 묶음 이름을 붙입니다(예: /refactor:approve 묶음 B1 — 이름은 계획서 카드의 '묶음' 칸)"
+  elif [ "$BUNDLE_AUTO" = 1 ] && [ -z "$bundles" ]; then conflict="'자동'은 묶음 이름과 함께 씁니다(예: /refactor:approve B1 자동)"
+  elif [ -n "$bundles" ] && [ "$mode" = "allow" ]; then conflict="'허용'은 단계 번호하고만 함께 씁니다(묶음 이름과 섞지 않음 — 묶음을 승인하면 🛠 카드의 기준선 허용은 저절로 열립니다)"
+  elif [ -n "$bundles" ] && [ -n "$ids$phases" ]; then conflict="묶음 이름(${bundles# })과 단계 번호(P1-1·P1)는 섞지 않습니다 — 따로 입력하세요"
+  elif [ -n "$bundles" ] && { [ "$want_base" = 1 ] || [ -n "$special" ] || [ "$mode" = "push" ] || [ "$mode" = "branch" ] || [ "$mode" = "merge" ]; }; then conflict="묶음 이름은 baseline·확인·마무리·푸시·새 가지·합치기와 섞지 않습니다"
+  elif [ "$BUNDLE_AUTO" = 1 ] && [ "${bundles# }" != "${bundles##* }" ]; then conflict="'자동'은 묶음 하나에만 씁니다(예: /refactor:approve B1 자동)"
+  elif [ "$BUNDLE_AUTO" = 1 ] && [ "$mode" = "hold" ]; then conflict="'보류'와 '자동'은 함께 쓰지 않습니다(예: /refactor:approve 보류 B1)"
+  elif [ "$BUNDLE_AUTO" = 1 ]; then conflict="자동 모드는 아직 없습니다 — 지금은 /refactor:approve${bundles} 로 승인한 뒤 /refactor:go 로 실행하세요"
   fi
 fi
 
@@ -161,6 +180,7 @@ say "== /refactor:approve 결과 ($now KST) =="
 if [ -n "$conflict" ]; then
   say "❓ $conflict — 아무것도 바꾸지 않았습니다."
   say "   승인: /refactor:approve P1-1 P1-2    ·    승인 취소: /refactor:approve 보류 P1-2"
+  say "   묶음 승인: /refactor:approve B1    ·    묶음 승인 취소: /refactor:approve 보류 B1"
   say "   기준선 허용: /refactor:approve 허용 P1-1    ·    허용 닫기: /refactor:approve 허용 닫기    ·    올리기 허락: /refactor:approve 푸시"
   say "   PR 합치기: /refactor:approve 합치기 68 rebase    ·    합친 뒤 새 작업 가지: /refactor:approve 새 가지"
   exit 0
@@ -173,11 +193,14 @@ if [ -n "$special" ] && { [ -n "$ids$phases" ] || [ "$want_base" = 1 ] || [ "$mo
 fi
 
 set_state_front() { # $1 awk 변수 이름=값들 — STATE.md 앞머리 칸 갱신
+  # 0.4.0 B = current_bundle(지금 묶음) — 칸이 있으면 고치고, 없으면(0.4.0 전 STATE) 앞머리 끝(닫는 --- 앞)에 넣는다(#18). "-" 는 따옴표로
   [ -f "$state" ] || return 0
   local tmp="$state.tmp.$$"
   awk "$@" '
+    function cb() { return "current_bundle: " (B == "-" ? "\"-\"" : B) }
     NR == 1 && $0 ~ /^---/ { fm = 1; print; next }
-    fm && $0 ~ /^---/ { fm = 0; print; next }
+    fm && $0 ~ /^---/ { if (B != "" && !hb) print cb(); fm = 0; print; next }
+    fm && B != "" && $0 ~ /^current_bundle:/ { print cb(); hb = 1; next }
     fm && A != "" && $0 ~ /^steps_approved:/ { print "steps_approved: " A; next }
     fm && D != "" && $0 ~ /^steps_done:/ { print "steps_done: " D; next }
     fm && T != "" && T > 0 && $0 ~ /^steps_total:/ { print "steps_total: " T; next }
@@ -186,6 +209,31 @@ set_state_front() { # $1 awk 변수 이름=값들 — STATE.md 앞머리 칸 갱
     { print }
   ' "$state" > "$tmp" && [ -s "$tmp" ] && mv "$tmp" "$state"
   if [ -e "$tmp" ]; then rm -f "$tmp"; fi
+}
+# STATE.md 앞머리에 current_bundle 칸이 있나(0.4.0 — 있으면 승인할 때마다 고쳐 둔다. 외부 명령 없이)
+state_has_cb() {
+  local l fm=0
+  [ -f "$state" ] || return 1
+  while IFS= read -r l || [ -n "$l" ]; do
+    l=${l%$'\r'}
+    if [ "$fm" = 0 ]; then case "$l" in ---*) fm=1; continue ;; *) return 1 ;; esac; fi
+    case "$l" in ---*) return 1 ;; current_bundle:*) return 0 ;; esac
+  done < "$state"
+  return 1
+}
+# 지금 묶음(0.4.0 current_bundle) → CBV(B<숫자> 또는 "-"): 실행 순서(rl_ready_units)의 첫 줄의 묶음 — 첫 줄이 묶음 없는 카드면 "-".
+#   $1 실행 대기 ID 들 · $2 그 rl_ready_units 출력 · $3 후보 ID 들(안 끝남·보류 아님). 실행 대기가 없으면 후보로 다음 묶음을 짐작한다
+#   (묶음을 합친 뒤 다음 묶음을 아직 승인하기 전 — 새 가지 이름에 쓴다)
+cur_bundle() {
+  local u=$2
+  CBV="-"
+  if [ -z "${1// /}" ]; then
+    [ -n "${3// /}" ] || return 0
+    u=$(rl_ready_units "$plan" "$3")
+  fi
+  u=${u%%"$RL_NL"*}; u=${u%%"$US"*}
+  [ -n "$u" ] && CBV=$u
+  return 0
 }
 
 # rl_card_bl_paths -n 의 출력(BLP)에서 카드 순번 $1(본문 파일 c<순번>)의 기준선 경로 → BLV = "`a` `b`" / "?"(칸에 글은 있는데 백틱 경로 0) / ""(칸 없음·"없음")
@@ -266,7 +314,7 @@ if [ "$intact" = 0 ]; then
     say "$chg"
     say "   👤 직접 한 승인이 아니면 그 줄을 지운 뒤 /refactor:approve 확인 을 입력하세요."
   fi
-  if [ -n "$ids$phases$special" ] || [ "$want_base" = 1 ] || [ "$mode" = "allow" ] || [ "$mode" = "push" ] || [ "$mode" = "branch" ] || [ "$mode" = "merge" ]; then say "   (그래서 이번 요청은 처리하지 않았습니다.)"; exit 0; fi
+  if [ -n "$ids$phases$special$bundles" ] || [ "$want_base" = 1 ] || [ "$mode" = "allow" ] || [ "$mode" = "push" ] || [ "$mode" = "branch" ] || [ "$mode" = "merge" ]; then say "   (그래서 이번 요청은 처리하지 않았습니다.)"; exit 0; fi
 fi
 
 # ── 푸시 허락(0.3.3): 이번 차례에만 작업 가지를 올려도 된다는 표시 docs/refactor/.turn-push.<세션ID> ─────────
@@ -416,7 +464,24 @@ EOF
     exit 0
   fi
   if [ -z "$nb" ]; then
+    # 0.4.0 묶음 하나 = 작업 가지 하나: 다음에 실행할 묶음이 있으면 이름 끝에 그 묶음 ID(refactor/<날짜>-B2 · 겹치면 -2 …).
+    #   = current_bundle 과 같은 계산(실행 대기의 실행 순서 첫 줄 — 실행 대기가 없으면 안 끝난·보류 아닌 카드로 짐작). 지금 계산한다 —
+    #   STATE 의 current_bundle 은 지난 묶음 승인 때 값이라 막 합친 묶음을 가리킬 수 있다. 묶음 칸이 없는 계획서면 예전 이름 그대로
+    nbb="-"
+    if [ -f "$plan" ]; then
+      nbr=""; nbc=""
+      while IFS="$US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
+        [ "$kind_" = CARD ] && [ "$done_" != 1 ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ] || continue
+        [ "$st" = approved ] && nbr="$nbr $id"
+        [ "$st" != held ] && nbc="$nbc $id"
+      done <<EOF
+$(rl_cards "$plan" "$log")
+EOF
+      nbu=""; [ -n "$nbr" ] && nbu=$(rl_ready_units "$plan" "$nbr")
+      cur_bundle "$nbr" "$nbu" "$nbc"; nbb=$CBV
+    fi
     nb0="refactor/$RL_TODAY"
+    [[ $nbb =~ ^B[0-9]+$ ]] && nb0="$nb0-$nbb"
     have=$("${G[@]}" for-each-ref --format='%(refname)' "refs/heads/$nb0*" "refs/remotes/origin/$nb0*" 2>/dev/null)
     have="$RL_NL$have$RL_NL"
     nb=$nb0; i=1
@@ -594,7 +659,7 @@ EOF
       done <<EOF
 $recs
 EOF
-      [ "$found" = 0 ] && say "❓ 계획서에 $ph_ 묶음의 단계가 없습니다."
+      [ "$found" = 0 ] && say "❓ 계획서에 $ph_(Phase 전체)의 단계가 없습니다."
     done
     for id in $ids; do
       found=0
@@ -719,7 +784,7 @@ fi
 # ── 계획서 단계 ──────────────────────────────────────────────────────────────
 if [ -n "$ids$phases" ] || [ "$want_base" = 0 ]; then
   if [ ! -f "$plan" ]; then
-    [ -n "$ids$phases" ] && say "❓ 계획서(REFACTOR_PLAN.md)가 아직 없습니다. /refactor:go 로 계획서 단계까지 진행하세요."
+    [ -n "$ids$phases$bundles" ] && say "❓ 계획서(REFACTOR_PLAN.md)가 아직 없습니다. /refactor:go 로 계획서 단계까지 진행하세요."
   else
     # 카드는 한 번만 읽는다: 본문(c<순번>)·다시 쓴 뒤 본문(a<순번>)·지문(sums)을 임시 폴더 하나에 남겨
     # 승인 때 남길 카드 내용과 승인 뒤 현황을 여기서 얻는다(계획서를 두 번 읽지 않는다)
@@ -729,7 +794,7 @@ if [ -n "$ids$phases" ] || [ "$want_base" = 0 ]; then
       [ -n "$cdir" ] && trap 'rm -rf "$cdir"' EXIT
     fi
     recs=$(RL_CARDDIR=$cdir RL_ALT=${cdir:+1} rl_cards "$plan" "$log")
-    # 묶음(P1)을 단계 ID로 펼친다(완료된 단계는 건너뜀)
+    # Phase 전체(P1)를 단계 ID로 펼친다(완료된 단계는 건너뜀)
     targets=$ids
     for ph_ in $phases; do
       found=0
@@ -742,8 +807,49 @@ if [ -n "$ids$phases" ] || [ "$want_base" = 0 ]; then
       done <<EOF
 $recs
 EOF
-      [ "$found" = 0 ] && say "❓ 계획서에 $ph_ 묶음의 단계가 없습니다."
+      [ "$found" = 0 ] && say "❓ 계획서에 $ph_(Phase 전체)의 단계가 없습니다."
     done
+    # 0.4.0 묶음(B1)을 카드의 묶음 칸으로 펼친다(완료된 단계는 건너뜀). 묶음마다 먼저 확인해 하나라도 안 되면 그 묶음은 통째로 ❓(아무것도 안 바꿈):
+    #   계획서에 그 묶음 카드가 없음 · 모두 완료 · 안 끝난 카드가 5장 초과(#17) · 같은 번호 카드 · 승인 줄 없는 카드.
+    #   통과하면 기록 앞에 "| 묶음 승인 | B1 | - | 카드 N개: … |"(보류면 "묶음 보류") 한 줄 — 카드 줄은 아래 기존 루틴이 쓴다(이미 승인된 카드는 다시 안 씀)
+    blines=""; bok=""
+    if [ -n "$bundles" ]; then
+      brecs=$(rl_card_bundles "$plan")
+      for b_ in $bundles; do
+        ball=0; bc=""; bn=0; bdesc=""; bwhy=""
+        while IFS="$US" read -r bk_ bn_ bid_ bb_ bd_ bp_ bdn_; do
+          [ "$bk_" = CB ] && [ "$bb_" = "$b_" ] || continue
+          ball=$((ball + 1)); [ -z "$bdesc" ] && bdesc=$bd_
+          [ "$bdn_" = 1 ] && continue
+          case " $bc " in *" $bid_ "*) ;; *) bc="$bc $bid_"; bn=$((bn + 1)) ;; esac
+        done <<EOF
+$brecs
+EOF
+        if [ "$ball" = 0 ]; then say "❓ 계획서에 $b_ 묶음이 없습니다(카드의 '- **묶음**: $b_ …' 칸을 찾지 못함 — 묶음을 만들려면 /refactor:go 묶음)."; continue; fi
+        if [ "$bn" = 0 ]; then say "ℹ️ $b_ 묶음의 단계가 모두 완료돼 승인할 것이 없습니다."; continue; fi
+        if [ "$bn" -gt 5 ]; then say "❓ $b_ 묶음의 안 끝난 카드가 ${bn}장이라 승인하지 않았습니다(한 묶음은 5장까지 — /refactor:go 묶음 으로 나누게 하세요):$bc"; continue; fi
+        for x in $bc; do
+          while IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st; do
+            [ "$kind_" = CARD ] && [ "$id_" = "$x" ] || continue
+            if [ "${cnt:-1}" -gt 1 ]; then bwhy="[$x] 같은 번호의 단계가 ${cnt}개"; elif [ "$box" = none ]; then bwhy="[$x] 승인 줄이 없음"; fi
+            break
+          done <<EOF
+$recs
+EOF
+          [ -n "$bwhy" ] && break
+        done
+        if [ -n "$bwhy" ]; then say "⛔ $b_ 묶음을 승인하지 않았습니다 — $bwhy. /refactor:go 로 계획서를 고치게 한 뒤 다시 승인하세요."; continue; fi
+        if [ "$mode" = "approve" ]; then
+          blines="$blines$now KST | 묶음 승인 | $b_ | - | 카드 ${bn}개:$bc"$'\n'
+          say "📦 묶음 승인: [$b_${bdesc:+ $bdesc}] 카드 ${bn}개:$bc"
+        else
+          blines="$blines$now KST | 묶음 보류 | $b_ | - | 카드 ${bn}개:$bc"$'\n'
+          say "⏸ 묶음 승인 취소: [$b_${bdesc:+ $bdesc}] 카드 ${bn}개:$bc"
+        fi
+        bok="$bok $b_"
+        for x in $bc; do case " $targets " in *" $x "*) ;; *) targets="$targets $x" ;; esac; done
+      done
+    fi
 
     # 승인 화면(0.3.3)·승인하면 자동 허용(0.3.4): 이번에 승인할 수 있는 카드의 "깨질 것으로 예상되는 기준선" 경로를 한 번에 뽑아 둔다.
     #   허용 파일이 있으면 이미 승인돼 있는 허용 대상 후보(미완료·번호 하나·승인 줄 있음)의 경로도 같이(파일에 남길 ID 를 가리려고 — awk 한 번)
@@ -821,8 +927,13 @@ EOF
       fi
     done
 
+    # 묶음 줄은 카드 줄 앞에(카드가 모두 이미 승인돼 있어 카드 줄이 없어도 묶음 승인 줄은 남긴다 — 그 묶음의 정본 카드 목록)
+    if [ -n "$blines" ] && [ -z "$acted" ]; then
+      printf '%s' "$blines" >> "$log"
+      rl_log_seal "$dir"
+    fi
     if [ -n "$acted" ]; then
-      printf '%s' "$lines" >> "$log"
+      printf '%s%s' "$blines" "$lines" >> "$log"
       rl_log_seal "$dir"
       # 승인한 카드의 내용을 남겨 둔다(나중에 카드가 바뀌면 무엇이 바뀌었는지 보여 주려고)
       if [ "$mode" = "approve" ] && { [ -d "$dir/approved" ] || mkdir -p "$dir/approved"; }; then
@@ -893,7 +1004,7 @@ EOF
     elif [ -n "$acted" ]; then   # 임시 폴더를 못 만들었으면 예전처럼 다시 읽는다
       recs=$(rl_cards "$plan" "$log"); adj=""
     fi
-    n_total=0; n_ap=0; n_done=0; ready=""; pending=""; changed=""; unlogged=""; dups=""; fence_warn=""
+    n_total=0; n_ap=0; n_done=0; ready=""; pending=""; changed=""; unlogged=""; dups=""; fence_warn=""; cands=""; rtl=""
     while IFS="$US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
       case "$kind_" in
         WARN) [ "$n_" = "fence" ] && fence_warn=$id ;;
@@ -911,8 +1022,10 @@ EOF
           n_total=$((n_total + 1))
           [ "$st" = "approved" ] && n_ap=$((n_ap + 1))
           [ "$done_" = 1 ] && { n_done=$((n_done + 1)); continue; }
+          # 다음 묶음 짐작(실행 대기가 없을 때 current_bundle)용 후보 = 안 끝남·보류 아님·번호 하나
+          [ "$st" != held ] && [ "${cnt:-1}" = 1 ] && cands="$cands $id"
           case "$st" in
-            approved) [ "${cnt:-1}" -gt 1 ] || [ "$intact" = 0 ] || ready="$ready $id" ;;
+            approved) [ "${cnt:-1}" -gt 1 ] || [ "$intact" = 0 ] || { ready="$ready $id"; rtl="$rtl$id$RL_TAB$t$RL_NL"; } ;;
             changed) changed="$changed $id" ;;
             *) pending="$pending $id"; [ "$box" = "x" ] && unlogged="$unlogged $id" ;;
           esac ;;
@@ -920,18 +1033,37 @@ EOF
     done <<EOF
 $recs
 EOF
+    # 0.4.0 실행 대기를 묶음 단위·실행 순서로(/refactor:status 와 같은 꼴) — 실행 대기 카드에 묶음 칸이 하나도 없으면 옛 꼴 한 줄
+    units=""; [ -n "$ready" ] && units=$(rl_ready_units "$plan" "$ready")
     say ""
     say "📋 계획서 현황(승인 기록 기준): 전체 ${n_total}단계 · 승인 ${n_ap} · 완료 ${n_done}"
-    [ -n "$ready" ] && say "   ▶ 실행 대기(승인됨):$ready"
+    if [ -n "$units" ]; then
+      while IFS="$US" read -r ub_ ud_ ui_; do
+        [ -n "$ui_" ] || continue
+        if [ -n "$ub_" ]; then
+          un_=0; for x in $ui_; do un_=$((un_ + 1)); done
+          say "   ▶ 실행 대기: [$ub_${ud_:+ $ud_}] $ui_ ($un_)"
+        else
+          tl_=${rtl#*"$ui_$RL_TAB"}; tl_=${tl_%%"$RL_NL"*}
+          say "   ▶ 실행 대기: [$ui_] $tl_"
+        fi
+      done <<EOF
+$units
+EOF
+    elif [ -n "$ready" ]; then
+      say "   ▶ 실행 대기(승인됨):$ready"
+    fi
     [ -n "$changed" ] && say "   🔁 승인 뒤 카드가 바뀜(실행 안 함 — 다시 승인 필요):$changed"
     [ -n "$pending" ] && say "   ⏸ 승인 대기:$pending"
     [ -n "$unlogged" ] && say "   ⚠️ 체크 표시만 있고 승인 기록이 없음(실행 안 함 — 계획서를 손으로 고친 것일 수 있음):$unlogged"
     [ -n "$dups" ] && say "   ⚠️ 같은 번호의 단계가 여러 개:$dups — 계획서 번호를 고쳐야 실행할 수 있습니다."
     [ -n "$fence_warn" ] && say "   ⚠️ 닫히지 않은 코드 블록(\`\`\`)이 ${fence_warn}개 있어 무시했습니다 — 계획서 형식을 확인하세요."
-    if [ -z "$ids$phases" ] && [ "$want_base" = 0 ]; then
+    if [ -z "$ids$phases$bundles" ] && [ "$want_base" = 0 ]; then
       say ""
       say "사용법: /refactor:approve P0-1 P1-2   (단계 번호, 여러 개 가능)"
-      say "        /refactor:approve P1          (P1 묶음 전체 — 완료된 단계는 건너뜀)"
+      say "        /refactor:approve P1          (P1 Phase 전체 — 완료된 단계는 건너뜀)"
+      say "        /refactor:approve B1          (B1 묶음 — 카드의 '묶음' 칸이 B1 인 안 끝난 카드 전부, 5장까지 · '묶음 B1' 도 같음)"
+      say "        /refactor:approve 보류 B1      (묶음 승인 취소)"
       say "        /refactor:approve baseline     (기준선 계획 승인)"
       say "        /refactor:approve 보류 P1-2    (승인 취소 — 맨 앞에 '보류', 완료 전만)"
       say "        /refactor:approve 마무리        (실행 대기 단계가 없을 때 리팩토링 끝내기)"
@@ -942,13 +1074,17 @@ EOF
       say "        /refactor:approve 합치기 68 rebase (PR 합치기 — 열림·검사 초록·기본 가지에 새 커밋 없음일 때만 · 방식은 rebase/squash/merge)"
       say "        /refactor:approve 새 가지        (합친 뒤 origin 의 기본 가지에서 새 작업 가지 만들기 — 이름을 붙이면 그 이름)"
     fi
-    if [ -n "$acted" ] || [ "$n_total" != 0 ]; then
+    if [ -n "$acted$blines" ] || [ "$n_total" != 0 ]; then
       first_ready=${ready# }; first_ready=${first_ready%% *}
-      if [ -n "$acted" ]; then
+      if [ -n "$units" ]; then first_ready=${units%%"$RL_NL"*}; first_ready=${first_ready##*"$US"}; first_ready=${first_ready%% *}; fi
+      # 0.4.0 current_bundle(#18): 묶음을 승인·보류했거나 STATE 에 이미 그 칸이 있을 때만 쓴다(옛 계획서의 STATE 는 그대로)
+      cbw=""
+      if [ "$rw" = 1 ] && { [ -n "$bok" ] || state_has_cb; }; then cur_bundle "$ready" "$units" "$cands"; cbw=$CBV; fi
+      if [ -n "$acted$blines" ]; then
         if [ -n "$first_ready" ]; then nxt="/refactor:go 로 승인된 단계 실행 (다음: $first_ready)"; else nxt="계획서 확인 후 /refactor:approve <단계ID>"; fi
-        set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total" -v N="$nxt" -v U="$RL_TODAY"
+        set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total" -v N="$nxt" -v U="$RL_TODAY" -v B="$cbw"
       elif [ "$rw" = 1 ]; then
-        set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total"
+        set_state_front -v A="$n_ap" -v D="$n_done" -v T="$n_total" -v B="$cbw"
       fi
     fi
   fi

@@ -2,7 +2,7 @@
 name: go
 description: 운영 중인 프로젝트를 안전한 순서(준비 → 코드 지도 → 25항목 건강검진 → 정밀검사 → 반박 검증 → 기준선 → 계획서 → 승인된 단계 실행)로 리팩토링하는 지휘자. 진행 상황 파일(docs/refactor/STATE.md)을 읽고 다음 단계부터 이어서 한다.
 disable-model-invocation: true
-argument-hint: "[비움=계속 | 하나씩 | 다시 <단계> | 마무리]"
+argument-hint: "[비움=계속 | 하나씩 | 묶음 | 다시 <단계> | 마무리]"
 allowed-tools: Bash(bash *run.sh*refactor-status*) Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git ls-files *) Bash(git check-ignore *) Bash(git rev-parse *) Bash(git remote) Bash(git branch --show-current)
 ---
 
@@ -60,6 +60,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 2. 인자를 해석한다.
    - 비었거나 "계속": 아래 단계표에서 다음 단계를 진행한다. 단계 실행(EXECUTE)에서는 이번 차례를 시작할 때의 실행 대기 단계를 계획서 순서로 하나씩 차례로 이어서 한다(멈춤 조건은 `phases/7-execute.md` 「0-2」).
    - "하나씩": 이번 호출에서는 단계 하나만 하고 멈춘다(자동으로 이어 가지 않는다 — 단계 실행에서는 승인된 단계 하나만 실행하고 멈춘다).
+   - "묶음": 이미 있는 계획서의 카드에 `묶음`·`우선` 두 칸만 덧붙이고 `## 묶음` 표를 만든다 — `phases/6-plan.md` 「묶기만」대로(코드·승인 칸·기록은 안 건드림 · 이 차례는 안전장치가 코드 수정을 막는다). 인자 없는 호출에서도 계획서에 `## 묶음` 표가 없으면 승인·실행 전에 이 인자를 한 번 제안한다(강제 아님).
    - "다시 <단계>"(예: "다시 CHECKUP"): 그 단계**와 그 뒤 단계들**의 산출물(AUDIT_REPORT·audit/·AUDIT_VERIFY·BASELINE·REFACTOR_PLAN 중 해당하는 것)을 `*-prev.md`(폴더는 `*-prev/`)로 이름을 바꿔 두고 그 단계부터 새로 한다. 옛 승인은 새 계획에 이어지지 않는다(사용자가 `/refactor:go 다시 …`를 입력하면 훅이 승인 기록에 재설정 줄을 남기고, 그 이전 승인은 무효가 된다). `tests/baseline/`의 기존 기준선은 그대로 두고, 새 기준선 계획은 "이미 있음"으로 적는다. 지금 기본 가지(`main`·`master`) 위라면 사용자 허락을 받고 지금 위치에서 `git switch -c refactor/<날짜>` 로 작업 가지를 만든다. 지난 작업 가지 위이고 그 가지의 PR 이 이미 합쳐졌으면, 사용자에게 입력창에 `/refactor:approve 새 가지` 를 쳐 달라고 한다(최신 기본 가지에서 새 작업 가지를 만든다 — Claude 는 다른 가지로 옮기지 못한다).
    - "마무리": 실행 대기 단계가 없으면 완료 보고(아래 7)를 하고, 사용자에게 `/refactor:approve 마무리`를 입력해 달라고 한다(그 명령이 DONE을 기록한다). 실행 대기 단계가 있으면 목록을 보여 주고 "먼저 실행하거나 `/refactor:approve 보류 <ID>`로 보류하세요"라고 안내한다.
 3. 게이트(`gate`)가 걸려 있으면 "지금 상태"로 풀렸는지 확인한다.
@@ -94,7 +95,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 
 ## 3. 진행 상황 파일(STATE.md) 규칙
 
-- 형식은 `templates/STATE.md`를 따른다. 맨 위 `---` 사이의 칸 이름(phase, gate, readiness, red_open, steps_total, steps_approved, steps_done, current_step, next, updated)은 바꾸지 않는다 — 현황 명령과 여러 프로젝트 현황표가 이 칸을 읽는다.
+- 형식은 `templates/STATE.md`를 따른다. 맨 위 `---` 사이의 칸 이름(phase, gate, readiness, red_open, steps_total, steps_approved, steps_done, current_step, current_bundle, next, updated)은 바꾸지 않는다 — 현황 명령과 여러 프로젝트 현황표가 이 칸을 읽는다.
 - 단계를 **시작할 때** phase를 바꾸고, **끝날 때** "단계 기록" 표에 한 줄(날짜 · 단계 · 결과 한 줄 · 산출물)을 더하고 next를 고친다.
 - `red_open`은 "아직 안 막은 🔴 수"다. 반박 검증 뒤에 세고, 단계 실행으로 🔴를 막을 때마다 줄인다.
 - 사람에게 받은 답은 PROFILE.md의 "사람에게 확인한 답변 기록"에 날짜와 함께 남긴다.
@@ -123,7 +124,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 
 ## 5. 멈추는 때
 
-- 게이트(G1·G2·G3)에 도달했을 때 — 단계 실행(G3)은 승인된 단계를 이어서 하다가 `phases/7-execute.md` 「0-2」의 멈춤 조건(ⓐ~ⓗ)에 걸렸거나, 이번 차례의 실행 대기 단계를 모두 끝냈을 때
+- 게이트(G1·G2·G3)에 도달했을 때 — 단계 실행(G3)은 승인된 단계를 이어서 하다가 `phases/7-execute.md` 「0-2」의 멈춤 조건(ⓐ~ⓘ)에 걸렸거나, 이번 차례의 실행 대기 단계를 모두 끝냈을 때
 - 기준선을 커밋하고 결과를 보고했을 때(`phases/5-baseline.md` 2부 6)
 - 인자가 "하나씩"일 때 — 단계 하나가 끝나면
 - 사람의 결정이 꼭 필요할 때(`gate: ask-user`)
@@ -136,7 +137,7 @@ bash "${CLAUDE_SKILL_DIR}/../../hooks/run.sh" refactor-status "${CLAUDE_PROJECT_
 
 - 감사·정밀검사는 `refactor:auditor`, 반박 검증은 `refactor:verifier`, 실행 후 검사는 `refactor:reviewer`에게 맡긴다. 앞의 둘은 파일을 읽기만 하고 셸이 없다 — git 기록 확인처럼 셸이 필요한 검사는 **네가 먼저 돌려 결과를 넘겨준다**(2-checkup.md 참고). 파일 쓰기는 너만 한다.
 - 여러 명을 동시에 부를 때는 **한 메시지 안에서 Agent 도구를 여러 번** 호출한다(한 번에 최대 6명).
-- 보조 AI에게는 항상: ① 읽을 점검표의 **실제 전체 경로**(이 스킬 폴더 + `/checklists/…`) ② 범위(묶음·항목 코드) ③ PROFILE 요약 ④ 네가 돌린 셸 검사 결과(있으면) ⑤ 결과 분량(4,000자 이내)을 준다.
+- 보조 AI에게는 항상: ① 읽을 점검표의 **실제 전체 경로**(이 스킬 폴더 + `/checklists/…`) ② 범위(영역·항목 코드) ③ PROFILE 요약 ④ 네가 돌린 셸 검사 결과(있으면) ⑤ 결과 분량(4,000자 이내)을 준다.
 - 보조 AI의 결과는 **그대로 믿지 않는다.** 🔴 판정은 네가 파일:줄을 직접 열어 확인한 뒤 산출물에 넣는다.
 
 ---

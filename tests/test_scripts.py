@@ -76,6 +76,17 @@ def lf(path, text):
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
 
+
+def card_sub(text, cid, old, new):
+    """카드 [cid] 안(제목 줄부터 다음 #·##·### 제목 전까지)에서만 old 를 new 로 한 번 바꾼다 — 카드에 칸이 더 들어 있어도(0.4.0 묶음·우선)
+    줄을 이어 붙인 문자열에 기대지 않게. 카드 안에 old 가 없으면 AssertionError."""
+    i = text.index(f"### [{cid}]")
+    m = re.compile(r"\n#{1,3}[ \t]").search(text, i + 1)
+    j = m.start() if m else len(text)
+    seg = text[i:j]
+    assert old in seg, (cid, old)
+    return text[:i] + seg.replace(old, new, 1) + text[j:]
+
 PLAN = """# 계획서
 
 승인하면 `- **승인**: [x] 승인`으로 바뀝니다(설명 문장).
@@ -226,8 +237,7 @@ def main():
     check("재승인", "다시 승인" in out and "▶ 실행 대기(승인됨): P1-1" in out, out)
 
     # 3) 계획서 글자만 바꾼 체크 표시는 승인이 아니다
-    lf(p, p.read_text(encoding="utf-8").replace("### [P1-2] 알림 문구 정리\n- **종류**: 🔧 리팩토링\n- **승인**: [ ] 승인",
-                                                      "### [P1-2] 알림 문구 정리\n- **종류**: 🔧 리팩토링\n- **승인**: [x] 승인"))
+    lf(p, card_sub(p.read_text(encoding="utf-8"), "P1-2", "- **승인**: [ ] 승인", "- **승인**: [x] 승인"))
     st = sh("refactor-status", d)
     ready = st.split("▶ 실행 대기")[1].split("\n  ")[0] if "▶ 실행 대기" in st else ""
     check("현황: 기록 없는 체크 표시", "체크 표시만 있고 승인 기록이 없음" in st and "[P1-2]" not in ready, st)
@@ -295,11 +305,12 @@ def main():
     base_plan = p.read_text(encoding="utf-8")
     for label, old_t, new_t, cid in [
         ("#### 아래", "- **완료**: [ ] 완료\n\n### [P1-2]", "- **완료**: [ ] 완료\n\n#### 참고\n범위: src/** 전체\n\n### [P1-2]", "P1-1"),
-        ("승인 줄 덧붙임", "### [P1-2] 알림 문구 정리\n- **종류**: 🔧 리팩토링\n- **승인**: [x] 승인 (", "### [P1-2] 알림 문구 정리\n- **종류**: 🔧 리팩토링\n- **승인**: [x] 승인 — 범위: src 전체 (", "P1-2"),
+        ("승인 줄 덧붙임", "- **승인**: [x] 승인 (", "- **승인**: [x] 승인 — 범위: src 전체 (", "P1-2"),
         ("쌍점 없는 승인 줄", "- **👤 사람이 직접 할 일**: 결제사 테스트 키 발급\n", "- **👤 사람이 직접 할 일**: 결제사 테스트 키 발급\n- **승인** 범위 추가: src/admin.ts\n", "P1-1"),
     ]:
         assert old_t in base_plan, label
-        lf(p, base_plan.replace(old_t, new_t, 1))
+        # 승인 줄 덧붙임은 그 카드 안에서만 바꾼다(card_sub — 0.4.0: 카드에 묶음·우선 칸이 들어 있어도 같은 자리)
+        lf(p, card_sub(base_plan, cid, old_t, new_t) if label == "승인 줄 덧붙임" else base_plan.replace(old_t, new_t, 1))
         st = sh("refactor-status", d)
         check(f"카드 지문: {label}", "🔁 승인 뒤 카드 내용이 바뀜" in st and f"[{cid}]" in st.split("🔁")[1][:400], st)
     # 바뀐 줄 보여 주기(승인 때 남긴 카드 내용과 비교)
@@ -1034,6 +1045,8 @@ def main():
     check_docs_034(check)
     check_docs_fix_034(check)
     check_docs_035(check)
+    check_bundle_040(check)
+    check_docs_040(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -1666,7 +1679,7 @@ def check_approve_allow_033(check):
                           ("허용 P1-4", "[P1-4] 기준선 안 바꿈 — 기준선을 바꾸지 않는 단계라 허용이 필요 없습니다"),
                           ("허용 P1-5", "[P1-5] 경로를 안 적음 — '깨질 것으로 예상되는 기준선' 칸에 백틱 경로가 없어 허용하지 않았습니다"),
                           ("허용 P2-1", "[P2-1] 같은 번호의 단계가 2개"),
-                          ("허용 P3", "계획서에 P3 묶음의 단계가 없습니다"),
+                          ("허용 P3", "계획서에 P3(Phase 전체)의 단계가 없습니다"),
                           ("허용 엉뚱", "알아듣지 못한 입력: 엉뚱")]:
             snap = rdir_files(d)
             out = approve(d, args)
@@ -2967,8 +2980,7 @@ def check_approve_autoallow_034(check):
         shutil.rmtree(d, ignore_errors=True)
 
     # 승인 줄에 덧붙인 글이 있어 승인 뒤 "카드 바뀜"이 되는 카드 → 🔓 줄 없음 · 허용 안 열림
-    d = project(plan=PLAN_033.replace("### [P1-1] 금액 계산\n- **종류**: 🛠 개선\n- **깨질 것으로 예상되는 기준선**: `tests/baseline/money.test.ts` 중 \"금액\" 항목\n- **승인**: [ ] 승인",
-                                      "### [P1-1] 금액 계산\n- **종류**: 🛠 개선\n- **깨질 것으로 예상되는 기준선**: `tests/baseline/money.test.ts` 중 \"금액\" 항목\n- **승인**: [ ] 승인 (메모)"))
+    d = project(plan=card_sub(PLAN_033, "P1-1", "- **승인**: [ ] 승인", "- **승인**: [ ] 승인 (메모)"))
     try:
         out = approve(d, "P1-1")
         check("0.3.4 승인 뒤 바뀜이 되는 카드 → 허용 안 열림", not af(d).exists() and "🔓" not in out and "승인 뒤 카드가 바뀜" in out, out)
@@ -4440,8 +4452,8 @@ def check_docs_fix_034(check):
           "`기준선 커밋 실패: …`" in ask and "다시 묻지 않고" in ask and "5-1(커밋)부터" in ask, ask)
     # F9② 7-execute ⑦: 묶음 첫 단계 커밋의 승인 기록 단서 · README 같은 단서
     r7 = next((l for l in ex.splitlines() if l.startswith("- ⑦ 되돌리는 법")), "")
-    check("0.3.4 F9② 7-execute ⑦: 묶음 첫 단계 커밋엔 승인 기록 — revert 대신 '코드만 되돌려 줘'",
-          "**묶음의 첫 단계**" in r7 and "승인이 풀리거나 봉인이 어긋난다" in r7 and "첫 단계도 \"<ID> 단계 코드만 되돌려 줘\"로" in r7, r7[:200])
+    check("0.3.4 F9② 7-execute ⑦: 이번 차례 첫 단계 커밋엔 승인 기록 — revert 대신 '코드만 되돌려 줘'(0.4.0 낱말: 묶음의 → 이번 차례의)",
+          "**이번 차례의 첫 단계**" in r7 and "승인이 풀리거나 봉인이 어긋난다" in r7 and "첫 단계도 \"<ID> 단계 코드만 되돌려 줘\"로" in r7, r7[:200])
     check("0.3.4 F9② README 사용 순서: 첫 단계 커밋 revert 단서", "묶음의 첫 단계 커밋에는 승인 기록도 들어 있어" in rd, "")
     # F9④ README §6-4 한계 두 줄
     a = rd.find("### 6-4. 한계")
@@ -4461,7 +4473,7 @@ def check_docs_fix_034(check):
     # F12 멈춤 조건 ⓗ: 7-execute 표 · README 사용 순서·§13
     h = next((l for l in ex.splitlines() if l.startswith("| ⓗ |")), "")
     check("0.3.4 F12 7-execute ⓗ: 👤 사람 확인 필요·위험도 🔴 카드 뒤 멈춤",
-          "\"👤 사람 확인 필요\"" in h and "위험도가 🔴" in h and "`/refactor:go` 로 계속" in h and "멈춤 조건 ⓐ~ⓗ 중" in ex, h)
+          "\"👤 사람 확인 필요\"" in h and "위험도가 🔴" in h and "`/refactor:go` 로 계속" in h and "멈춤 조건 ⓐ~ⓘ 중" in ex, h)
     check("0.3.4 F12 README: 멈추는 일에 '👤 사람 확인 필요'·위험도 🔴 카드(사용 순서·§13)",
           rd.count("\"👤 사람 확인 필요\"·위험도 🔴 인 카드") == 2, "")
 
@@ -4508,8 +4520,8 @@ def check_docs_034(check):
     a = ex.find("## 0-2. 이어서 실행과 멈춤 조건")
     b = ex.find("\n## 1.", a)
     sec = ex[a:b] if a >= 0 and b > a else ""
-    marks = ["| ⓐ |", "| ⓑ |", "| ⓒ |", "| ⓓ |", "| ⓔ |", "| ⓕ |", "| ⓖ |", "| ⓗ |"]
-    check("0.3.4 D1 7-execute 0-2: 멈춤 조건 표 ⓐ~ⓗ 여덟 줄",
+    marks = ["| ⓐ |", "| ⓑ |", "| ⓒ |", "| ⓓ |", "| ⓔ |", "| ⓕ |", "| ⓖ |", "| ⓗ |", "| ⓘ |"]   # ⓘ = 0.4.0 다른 묶음
+    check("0.3.4 D1 7-execute 0-2: 멈춤 조건 표 ⓐ~ⓘ 아홉 줄",
           sec != "" and all(sec.count(m) == 1 for m in marks), str([m for m in marks if sec.count(m) != 1]))
     needs = ["`/refactor:go 하나씩`", "묻지 않고", "`current_step: \"<ID> (완료)\"`", "`gate: G3-step`",
              "`current_step: \"<다음 ID> (진행 중)\"`", "| 단계 | 상태 | 커밋 |", "승인된 단계를 모두 끝냄",
@@ -4525,7 +4537,7 @@ def check_docs_034(check):
           "「0-2」의 멈춤 조건" in s36 and "다음 단계의 1.(시작 전 확인)로 간다" in s36 and "묶음 요약을 보고하고 멈춘다" in s36, s36)
     check("0.3.4 D1 go/SKILL: 하나씩·이어서 실행 설명 · G3-step 이어서 · 멈추는 때에 멈춤 조건",
           "단계 실행에서는 승인된 단계 하나만 실행하고 멈춘다" in gs and "하나씩 차례로 이어서 한다" in gs
-          and "남은 실행 대기 단계를 이어서 실행한다" in gs and "「0-2」의 멈춤 조건(ⓐ~ⓗ)" in gs, "")
+          and "남은 실행 대기 단계를 이어서 실행한다" in gs and "「0-2」의 멈춤 조건(ⓐ~ⓘ)" in gs, "")
 
     # §9 자동 허용: 멈추고 부탁하는 것은 닫혀 있을 때만 · PowerShell 대안은 Windows 경로일 때만
     r2 = next((l for l in ex.splitlines() if "🛠에서 예상된 기준선을 새 동작으로 바꿔야 하면" in l), "")
@@ -4786,6 +4798,408 @@ def check_docs_035(check):
     check("0.3.5 C2 test.yml: 시험 단계 뒤 로그 단계 — if: always() · ::group:: 묶음 · 맨 끝에 'N/N 통과' 줄",
           after and "        if: always()" in logs and 'echo "::group::$n"' in logs and 'echo "::endgroup::"' in logs
           and "grep -E '^[0-9]+/[0-9]+ 통과'" in logs, logs)
+
+
+
+PLAN_040 = """# 계획서
+
+## Phase별 단계 목록
+- P1-1 금액 · P1-2 주소 · P2-1 화면 · P3-1 결제 뒤 · P1-3 끝난 단계 · P0-1 안전망
+
+### [P1-1] 금액
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/money.test.ts`
+  `tests/baseline/golden/d.json`
+- **위험도**: 🟠 보통
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-2] 주소
+- **종류**: 🔧 리팩토링
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P2-1] 화면
+- **종류**: 🔧 리팩토링
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P3-1] 결제 뒤
+- **종류**: 🔧 리팩토링
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P1-3] 끝난 단계
+- **종류**: 🔧 리팩토링
+- **승인**: [ ] 승인
+- **완료**: [x] 완료
+
+### [P0-1] 안전망
+- **종류**: 🔧 리팩토링
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+"""
+
+# 카드마다 종류 칸 바로 다음에 넣을 묶음·우선 칸(0.4.0 §1-1 꼴)
+FIELDS_040 = {
+    "P1-1": "- **묶음**: B1 결제 안전\n- **우선**: 12.3 · 빠른 승리\n",
+    "P3-1": "- **묶음**: B1 결제 안전\n",
+    "P2-1": "- **묶음**: B2 화면\n- **우선**: 3 · 틈날 때\n",
+    "P1-3": "- **묶음**: B3 끝\n",
+}
+
+
+def add_fields040(text, fields=None, after="- **종류**:"):
+    """카드마다(fields 의 ID) 그 카드의 종류 칸 줄 바로 다음에 칸 줄을 넣는다(card_sub 와 같은 카드 범위)."""
+    for cid, add in (FIELDS_040 if fields is None else fields).items():
+        i = text.index(f"### [{cid}]")
+        k = text.index(after, i)
+        e = text.index("\n", k) + 1
+        text = text[:e] + add + text[e:]
+    return text
+
+
+def _status_plan040(st):
+    a = st.find("== 계획서")
+    b = st.find("\n== ", a + 1)
+    return st[a:b] if a >= 0 else ""
+
+
+def check_bundle_040(check):
+    """0.4.0 §1 묶음 계획(P2~P9): 묶음·우선 칸은 꼴이 맞을 때만 지문 밖 · rl_card_bundles · 묶음 승인(B1·섞임·5장) · current_bundle ·
+    실행 대기 묶음 단위·순서·8줄 · 묶음이 승인 때와 다름 ⚠ · 새 가지 이름 · /refactor:go 묶음 차례."""
+    cards = lambda d: _lib033(d, 'rl_cards "$R/REFACTOR_PLAN.md" "$R/APPROVALS.log"')[0]
+    plan_p = lambda d: d / "docs/refactor/REFACTOR_PLAN.md"
+    state_of = lambda d, cid: next((l.split("\x1f")[-1] for l in cards(d).splitlines() if l.split("\x1f")[2:3] == [cid]), "?")
+
+    # ── P2 지문: 승인된 카드에 꼴에 맞는 두 칸을 더해도 지문·승인·실행 대기가 그대로 ──────────────
+    d = project(plan=PLAN_040)
+    try:
+        approve(d, "P1-1 P1-2 P2-1")
+        c0, st0 = cards(d), _status_plan040(sh("refactor-status", d))
+        base_plan = plan_p(d).read_text(encoding="utf-8")
+        lf(plan_p(d), add_fields040(base_plan))
+        c1, st1 = cards(d), _status_plan040(sh("refactor-status", d))
+        check("0.4.0 P2 승인된 카드에 꼴 맞는 묶음·우선 칸 → rl_cards(지문·상태) 그대로", c1 == c0, c0 + "\n---\n" + c1)
+        check("0.4.0 P2 승인된 카드에 두 칸 → 🔁 없음 · 실행 대기 그대로(묶음 단위로)",
+              "🔁" not in st1 and "▶ 실행 대기: [B1 결제 안전] P1-1 (1)" in st1 and "▶ 실행 대기: [P1-2] 주소" in st1
+              and "▶ 실행 대기: [B2 화면] P2-1 (1)" in st1, st1)
+        # 기준선 칸 중간에 넣어도(경로 줄 사이) 기준선 경로 그대로 · 지문 그대로
+        mid = card_sub(base_plan, "P1-1", "money.test.ts`\n", "money.test.ts`\n- **묶음**: B1 결제 안전\n")
+        lf(plan_p(d), mid)
+        blp = _lib033(d, 't=$(mktemp -d); rl_card_text "$R/REFACTOR_PLAN.md" P1-1 > "$t/c1"; rl_card_bl_paths "$t/c1"; rm -rf "$t"')[0]
+        check("0.4.0 P2 기준선 칸 중간의 묶음 칸 → 기준선 경로 둘 다 그대로 · 승인 그대로",
+              blp == "tests/baseline/money.test.ts\ntests/baseline/golden/d.json\n" and state_of(d, "P1-1") == "approved", blp + cards(d))
+        # 반대 방향: 꼴 밖이면 그 줄은 지문에 들어가고(카드 바뀜) 기준선 칸을 끊는다(제외가 다른 줄로 번지지 않음)
+        mid_bad = card_sub(base_plan, "P1-1", "money.test.ts`\n", "money.test.ts`\n- **묶음**: 결제 안전\n")
+        lf(plan_p(d), mid_bad)
+        blp = _lib033(d, 't=$(mktemp -d); rl_card_text "$R/REFACTOR_PLAN.md" P1-1 > "$t/c1"; rl_card_bl_paths "$t/c1"; rm -rf "$t"')[0]
+        check("0.4.0 P2 반대: 기준선 칸 중간의 꼴 밖 묶음 줄 → 카드 바뀜 · 칸이 끊김(경로 하나)",
+              blp == "tests/baseline/money.test.ts\n" and state_of(d, "P1-1") == "changed", blp + cards(d))
+        for label, add in [("묶음 B 없음", "- **묶음**: 결제 안전\n"), ("묶음 소문자 b1", "- **묶음**: b1 결제\n"),
+                           ("묶음 설명에 |", "- **묶음**: B1 결제 | 범위 src 전체\n"), ("묶음 B 뒤 숫자 없음", "- **묶음**: B 결제\n"),
+                           ("우선 소수 두 자리", "- **우선**: 12.34 · 빠른 승리\n"), ("우선 4칸 이름 밖", "- **우선**: 12.3 · 빠름\n"),
+                           ("우선 가운뎃점 없음", "- **우선**: 12.3 빠른 승리\n"), ("우선 뒤에 글", "- **우선**: 12.3 · 빠른 승리 그리고 src 전체\n"),
+                           ("칸 이름이 다름(묶음 메모)", "- **묶음 메모**: B1 결제\n"), ("들여 쓴 묶음 줄", "  - **묶음**: B1 결제\n"),
+                           ("인용 묶음 줄", "> - **묶음**: B1 결제\n"), ("다른 줄 변경(무엇을)", "- **무엇을**: 범위를 넓힘\n")]:
+            lf(plan_p(d), add_fields040(base_plan, {"P1-1": add}))
+            check(f"0.4.0 P2 꼴 밖·다른 줄 → 카드 바뀜: {label}", state_of(d, "P1-1") == "changed", cards(d))
+        # 꼴 맞는 값의 변형(설명 없음·정수 점수·4칸 이름 넷)은 지문 밖
+        for label, add in [("설명 없음", "- **묶음**: B12\n"), ("정수 점수", "- **우선**: 7 · 계획된 큰 공사\n"),
+                           ("하지 말 것", "- **우선**: 0.5 · 하지 말 것\n"), ("줄 끝 공백", "- **묶음**: B1 결제 안전   \n")]:
+            lf(plan_p(d), add_fields040(base_plan, {"P1-1": add}))
+            check(f"0.4.0 P2 꼴 맞는 값 → 승인 그대로: {label}", state_of(d, "P1-1") == "approved", cards(d))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ── P3 rl_card_bundles: 카드 순번→묶음 ID·설명·우선·완료 + "## 묶음" 표 · rl_cards 의 CARD 줄은 그대로 ──────────
+    tbl = ("## 묶음\n| 묶음 | 설명 | 우선 | 카드 | 왜 함께 |\n|---|---|---|---|---|\n"
+           "| B1 | 결제 안전 | 12.3 · 빠른 승리 | P1-1 [P3-1] | 같은 파일 |\n| **B2** | 화면 | 3 · 틈날 때 | `p2-1` | 같은 영역 |\n"
+           "| B3 | 끝 | - | P1-3(완료) | - |\n| 설명 줄 | x | x | P9-9 | x |\n\n")
+    plan_b = add_fields040(PLAN_040).replace("### [P1-1]", tbl + "### [P1-1]", 1)
+    d = project(plan=plan_b)
+    try:
+        out = _lib033(d, 'rl_card_bundles "$R/REFACTOR_PLAN.md"')[0].replace("\x1f", "|")
+        want = ("CB|1|P1-1|B1|결제 안전|12.3 · 빠른 승리|0\nCB|2|P1-2||||0\nCB|3|P2-1|B2|화면|3 · 틈날 때|0\nCB|4|P3-1|B1|결제 안전||0\n"
+                "CB|5|P1-3|B3|끝||1\nCB|6|P0-1||||0\nTB|B1|P1-1 P3-1\nTB|B2|P2-1\nTB|B3|P1-3\n")
+        check("0.4.0 P3 rl_card_bundles: 카드마다 CB 줄 · 표 줄 TB(머리·구분·B 꼴 밖 줄 건너뜀 · 대괄호·백틱·소문자)", out == want, out)
+        c = cards(d)
+        check("0.4.0 P3 rl_cards CARD 줄은 12칸 그대로(묶음 칸 없음)",
+              all(len(l.split("\x1f")) == 12 for l in c.splitlines() if l.startswith("CARD")) and c.count("CARD") == 6, c)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ── P4·P5 묶음 승인 ───────────────────────────────────────────────────
+    d = project(plan=add_fields040(PLAN_040))
+    try:
+        approve(d, "P1-1")   # 이미 승인된 카드는 승인 줄을 다시 쓰지 않는다
+        n0 = _log033(d).count("\n")
+        out = approve(d, "B1")
+        lg = _log033(d).splitlines()
+        check("0.4.0 P4 B1 → 묶음 승인 줄이 카드 줄 앞 · 이미 승인된 P1-1 은 다시 안 씀 · P3-1 승인 줄",
+              len(lg) == n0 + 2 and lg[-2].endswith(" KST | 묶음 승인 | B1 | - | 카드 2개: P1-1 P3-1")
+              and " KST | 승인 | P3-1 | card=" in lg[-1] and _log033(d).count("| 승인 | P1-1 |") == 1, "\n".join(lg))
+        check("0.4.0 P4 B1 출력: 📦 묶음 승인 · 이미 승인됨 · 승인함 · 승인 직후 현황 묶음 꼴",
+              "📦 묶음 승인: [B1 결제 안전] 카드 2개: P1-1 P3-1" in out and "이미 승인됨: [P1-1]" in out and "승인함: [P3-1]" in out
+              and "   ▶ 실행 대기: [B1 결제 안전] P1-1 P3-1 (2)" in out, out)
+        check("0.4.0 P4 상태 계산 불변(묶음 줄은 지문 칸 '-' — 건너뜀)",
+              state_of(d, "P1-1") == "approved" and state_of(d, "P3-1") == "approved" and state_of(d, "P2-1") == "pending"
+              and _lib033(d, 'rl_log_intact "$R" && echo ok')[0] == "ok\n", cards(d))
+        stt = (d / "docs/refactor/STATE.md").read_text(encoding="utf-8")
+        fm = stt.split("---\n")[1]
+        check("0.4.0 P5 옛 STATE(칸 없음)에 묶음 승인 → 앞머리 안에 current_bundle: B1 생김 · 다른 칸 그대로",
+              "current_bundle: B1\n" in fm and fm.count("current_bundle:") == 1 and "steps_approved: 2" in fm and stt.count("---\n") == 2, stt)
+        st = sh("refactor-status", d)
+        check("0.4.0 P5 status 가 current_bundle 을 보여 줌", "  current_bundle: B1" in st, st)
+        bd = subprocess.run([BASH, str(RUN), "refactor-board", str(d)], input=str(d).encode(), capture_output=True, env=env(), timeout=90).stdout.decode("utf-8", "replace")
+        check("0.4.0 P5 board 에 묶음 칸 · 값 B1", "| 계획(완료/승인/전체) | 묶음 | 준비도 |" in bd and "| B1 |" in bd, bd)
+        # 같은 묶음 다시 → 묶음 줄만(카드 줄 없음 — 모두 이미 승인됨)
+        n1 = _log033(d).count("\n")
+        out = approve(d, "묶음 b1")
+        lg = _log033(d).splitlines()
+        check("0.4.0 P4 '묶음 b1'(소문자·낱말) = B1 · 다시 치면 묶음 줄 하나만",
+              len(lg) == n1 + 1 and lg[-1].endswith("| 묶음 승인 | B1 | - | 카드 2개: P1-1 P3-1") and "이미 승인됨: [P3-1]" in out, out)
+        out = approve(d, "BUNDLE B2")
+        check("0.4.0 P4 'BUNDLE B2' = B2 · current_bundle 은 실행 순서 첫 묶음(B1) 그대로",
+              _log033(d).splitlines()[-2].endswith("| 묶음 승인 | B2 | - | 카드 1개: P2-1")
+              and "current_bundle: B1\n" in (d / "docs/refactor/STATE.md").read_text(encoding="utf-8"), out)
+        # 보류 B1 → 묶음 보류 줄 + 카드마다 보류 · current_bundle 은 다음 묶음(B2)
+        out = approve(d, "보류 B1")
+        lg = _log033(d).splitlines()
+        check("0.4.0 P4 보류 B1 → 묶음 보류 줄 + 카드 둘 보류 · current_bundle B2",
+              lg[-3].endswith("| 묶음 보류 | B1 | - | 카드 2개: P1-1 P3-1") and "| 보류 | P1-1 |" in lg[-2] and "| 보류 | P3-1 |" in lg[-1]
+              and state_of(d, "P1-1") == "held" and state_of(d, "P3-1") == "held"
+              and "current_bundle: B2\n" in (d / "docs/refactor/STATE.md").read_text(encoding="utf-8"), "\n".join(lg[-4:]) + out)
+        # 섞임 규칙·없는 묶음·다 끝난 묶음 → ❓ · 아무것도 안 바뀜
+        for args, msg in [("B01", "묶음 이름(B01)은 앞에 0 을 붙이지 않습니다"), ("B1 P1-1", "묶음 이름(B1)과 단계 번호(P1-1·P1)는 섞지 않습니다"),
+                          ("B1 P1", "묶음 이름(B1)과 단계 번호"), ("허용 B1", "'허용'은 단계 번호하고만 함께 씁니다(묶음 이름과 섞지 않음"),
+                          ("B1 B2 자동", "'자동'은 묶음 하나에만 씁니다"), ("B1 자동", "자동 모드는 아직 없습니다"), ("자동 B1", "자동 모드는 아직 없습니다"),
+                          ("자동", "'자동'은 묶음 이름과 함께 씁니다"), ("묶음", "'묶음' 뒤에는 묶음 이름을 붙입니다"), ("묶음 A", "'묶음' 뒤에는 묶음 이름을 붙입니다"),
+                          ("B1 baseline", "묶음 이름은 baseline·확인·마무리·푸시·새 가지·합치기와 섞지 않습니다"),
+                          ("B1 확인", "섞지 않습니다"), ("보류 B1 자동", "'보류'와 '자동'은 함께 쓰지 않습니다"),
+                          ("B9", "계획서에 B9 묶음이 없습니다"), ("B3", "B3 묶음의 단계가 모두 완료돼 승인할 것이 없습니다")]:
+            snap = rdir_files(d)
+            out = approve(d, args)
+            check(f"0.4.0 P4 {args!r} → 안 바뀜 + 까닭", rdir_files(d) == snap and msg in out, out)
+        check("0.4.0 P4 섞임 ❓ 는 '아무것도 바꾸지 않았습니다' + 묶음 예시 줄",
+              "아무것도 바꾸지 않았습니다" in approve(d, "B1 P1-1") and "묶음 승인: /refactor:approve B1" in approve(d, "B1 P1-1"), "")
+        # 마무리: 묶음 줄이 든 기록에서도 '마지막 줄 = 마무리' 그대로
+        for cid in ("P1-1", "P1-2", "P2-1", "P3-1", "P0-1"):
+            _done033(d, cid)
+        out = approve(d, "마무리")
+        check("0.4.0 P4 묶음 줄이 든 기록에서 마무리 → 마무리 확인 그대로", "마무리했습니다" in out
+              and _lib033(d, 'rl_done_confirmed "$R" && echo ok')[0] == "ok\n", out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 5장 초과 ❓ · 5장 통과 · 같은 번호 ⛔ · 묶음 아닌 승인은 옛 STATE 에 칸을 넣지 않음
+    many = "# 계획서\n\n" + "".join(f"### [P1-{i}] 카드{i}\n- **종류**: 🔧 리팩토링\n- **묶음**: B{1 if i <= 6 else 2} 큰 묶음\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n\n"
+                                      for i in range(1, 12))
+    d = project(plan=many)
+    try:
+        snap = (_log033(d), plan_p(d).read_text(encoding="utf-8"))
+        out = approve(d, "B1")
+        check("0.4.0 P4 안 끝난 카드 6장 묶음 → ❓ 5장까지 · 기록·계획서 안 바뀜",
+              (_log033(d), plan_p(d).read_text(encoding="utf-8")) == snap and "안 끝난 카드가 6장이라 승인하지 않았습니다" in out, out)
+        _done033(d, "P1-6")
+        out = approve(d, "B1")
+        check("0.4.0 P4 완료 1장 빼고 5장 → 승인(완료 카드는 펼치지 않음)", _log033(d).count("| 묶음 승인 | B1 | - | 카드 5개: P1-1 P1-2 P1-3 P1-4 P1-5") == 1
+              and "| 승인 | P1-6 |" not in _log033(d), out)
+        # 반대: 단계 번호 승인은 옛 STATE 에 current_bundle 을 넣지 않는다(묶음을 쓰지 않는 계획서는 그대로)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    d = project(plan=add_fields040(PLAN_040) + "\n### [P2-1] 같은 번호\n- **묶음**: B2 화면\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n")
+    try:
+        approve(d, "P1-2")
+        check("0.4.0 P5 반대: 단계 번호 승인은 옛 STATE 에 current_bundle 을 넣지 않음",
+              "current_bundle" not in (d / "docs/refactor/STATE.md").read_text(encoding="utf-8"), "")
+        snap = rdir_files(d)
+        out = approve(d, "B2")
+        check("0.4.0 P4 같은 번호 카드가 든 묶음 → ⛔ 통째로 안 바뀜", rdir_files(d) == snap and "⛔ B2 묶음을 승인하지 않았습니다 — [P2-1] 같은 번호의 단계가 2개" in out, out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ── P6 실행 대기: 순서(Phase 0 맨 앞 · 묶음의 자리 = 가장 앞 Phase · 묶음 없는 카드도 Phase 안) · 8줄 · ⚠ 묶음 다름 ──
+    d = project(plan=add_fields040(PLAN_040))
+    try:
+        approve(d, "P0-1 P1-2")
+        approve(d, "B1 B2")
+        st = _status_plan040(sh("refactor-status", d))
+        want = ["  ▶ 실행 대기: [P0-1] 안전망", "  ▶ 실행 대기: [B1 결제 안전] P1-1 P3-1 (2)", "  ▶ 실행 대기: [P1-2] 주소", "  ▶ 실행 대기: [B2 화면] P2-1 (1)"]
+        got = [l for l in st.splitlines() if "▶ 실행 대기:" in l]
+        check("0.4.0 P6 실행 순서: P0(계획서 맨 뒤여도) → B1(P1 자리, P3-1 끌어옴) → 묶음 없는 P1-2 → B2", got == want, st)
+        check("0.4.0 P6 묶음 꼴이면 옛 머리줄 대신 안내 한 줄", "▶ 실행 대기(승인됨 — 이 목록만 실행한다):" not in st
+              and "(이 목록만 위에서부터 실행한다 — 묶음 하나 = 작업 가지 하나 = PR 하나)" in st and "⚠️ 묶음이" not in st, st)
+        # ⚠ 묶음이 승인 때와 다름: P2-1 을 B1 로 옮김(지문 밖이라 승인은 그대로) → B1·B2 둘 다 ⚠
+        p = plan_p(d)
+        base_plan = p.read_text(encoding="utf-8")
+        lf(p, card_sub(base_plan, "P2-1", "- **묶음**: B2 화면", "- **묶음**: B1 결제 안전"))
+        st = _status_plan040(sh("refactor-status", d))
+        check("0.4.0 P6 묶음 칸을 옮기면 ⚠ 묶음이 승인 때와 다릅니다(B1·B2)",
+              "  ⚠️ 묶음이 승인 때와 다릅니다 — 다시 /refactor:approve B1 (승인 때 안 끝난 카드: P1-1 P3-1 · 지금: P1-1 P2-1 P3-1)" in st
+              and "다시 /refactor:approve B2 (승인 때 안 끝난 카드: P2-1 · 지금: 없음)" in st, st)
+        # 다시 승인하면 조용(정본 = 마지막 묶음 승인 줄 · 카드는 한 묶음에만 — B1 에 넘어간 P2-1 은 B2 의 승인 목록에서 빠짐)
+        out = approve(d, "B1")
+        check("0.4.0 P6 다시 /refactor:approve B1 → ⚠ 없어짐(B2 의 옛 목록에서 P2-1 도 빠짐)",
+              "카드 3개: P1-1 P2-1 P3-1" in out and "⚠️ 묶음이" not in _status_plan040(sh("refactor-status", d)), out)
+        # 완료 카드는 대조에서 빠진다(#14): P1-1 완료 → ⚠ 없음
+        _done033(d, "P1-1")
+        st = _status_plan040(sh("refactor-status", d))
+        check("0.4.0 P6 완료 카드는 대조 밖(#14) — 거짓 ⚠ 없음", "⚠️ 묶음이" not in st, st)
+        # 표가 있으면 표의 카드 칸도 대조: 표가 승인 때와 같으면(완료 표시 포함) 조용 · 다르면 ⚠
+        t_ok = "## 묶음\n| 묶음 | 설명 | 우선 | 카드 | 왜 함께 |\n|---|---|---|---|---|\n| B1 | 결제 안전 | 12.3 · 빠른 승리 | P1-1(완료) P2-1 P3-1 | 같은 파일 |\n\n"
+        cur_t = p.read_text(encoding="utf-8")
+        lf(p, cur_t.replace("### [P1-1]", t_ok + "### [P1-1]", 1))
+        check("0.4.0 P6 표 = 승인 때(완료 표시) → ⚠ 없음", "⚠️ 묶음이" not in _status_plan040(sh("refactor-status", d)), "")
+        lf(p, cur_t.replace("### [P1-1]", t_ok.replace("P1-1(완료) P2-1 P3-1", "P1-1(완료) P2-1 P3-1 P1-2") + "### [P1-1]", 1))
+        st = _status_plan040(sh("refactor-status", d))
+        check("0.4.0 P6 표가 승인 때와 다름 → ⚠ (표 쪽 카드)", "다시 /refactor:approve B1 (승인 때 안 끝난 카드: P2-1 P3-1 · 지금: P1-2 P2-1 P3-1)" in st, st)
+        # 계획서에 없는 카드 ID 는 대조 밖(표의 오타·지운 카드로 영영 ⚠ 가 남지 않게)
+        lf(p, cur_t.replace("### [P1-1]", t_ok.replace("P1-1(완료) P2-1 P3-1", "P1-1(완료) P2-1 P3-1 P9-9") + "### [P1-1]", 1))
+        check("0.4.0 P6 표에 계획서에 없는 카드 → 대조 밖(⚠ 없음)", "⚠️ 묶음이" not in _status_plan040(sh("refactor-status", d)), "")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 8줄 자름은 묶음 줄 기준(묶음 하나에 카드 2장 + 묶음 없는 카드 9장 = 10줄 → 8줄 + … 외 2개)
+    big = "# 계획서\n\n" + "".join(f"### [P2-{i}] 카드{i}\n- **종류**: 🔧 리팩토링\n" + ("- **묶음**: B1 둘\n" if i <= 2 else "") + "- **승인**: [ ] 승인\n- **완료**: [ ] 완료\n\n"
+                                     for i in range(1, 12))
+    d = project(plan=big)
+    try:
+        approve(d, " ".join(f"P2-{i}" for i in range(1, 12)))
+        st = _status_plan040(sh("refactor-status", d))
+        got = [l for l in st.splitlines() if "▶ 실행 대기:" in l]
+        check("0.4.0 P6 8줄 자름은 묶음 줄 기준 — 첫 줄 = 묶음(카드 2) · 8줄 · … 외 2개",
+              len(got) == 8 and got[0] == "  ▶ 실행 대기: [B1 둘] P2-1 P2-2 (2)" and "     … 외 2개" in st, st)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 옛 계획서(묶음 칸 없음) → 옛 꼴 그대로(반대 방향)
+    d = project()
+    try:
+        approve(d, "P1-1")
+        st = sh("refactor-status", d)
+        check("0.4.0 P6 반대: 묶음 칸 없는 계획서 → 옛 꼴(머리줄 + 카드 줄) · 묶음 줄 없음",
+              "▶ 실행 대기(승인됨 — 이 목록만 실행한다):\n     [P1-1] 결제 금액 확인" in st and "▶ 실행 대기: [" not in st, st)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ── P8 새 가지 이름: refactor/<날짜>-<다음 묶음> · 겹치면 -2 · 실행 대기 없으면 다음 묶음 짐작 · 묶음 없으면 옛 이름 ──
+    g = _git034
+    today = _today_kst034()
+
+    def mkg(plan, approve_args):
+        d = project(plan=plan)
+        g(d, "init", "-q"); g(d, "symbolic-ref", "HEAD", "refs/heads/main")
+        g(d, "remote", "add", "origin", str(d.parent / "no-such-origin.git"))
+        if approve_args:
+            approve(d, approve_args)
+        g(d, "add", "-A"); g(d, "commit", "-qm", "i")
+        g(d, "update-ref", "refs/remotes/origin/main", "HEAD")
+        g(d, "checkout", "-q", "-b", "feat/x")
+        return d
+
+    d = mkg(add_fields040(PLAN_040), "B2")
+    try:
+        out, _ = _ap034(d, "새 가지")
+        check("0.4.0 P8 실행 대기 = B2 → 새 가지 refactor/<날짜>-B2", g(d, "branch", "--show-current") == f"refactor/{today}-B2"
+              and f"🌿 새 작업 가지: refactor/{today}-B2 " in out, out)
+        g(d, "checkout", "-q", "feat/x")
+        out, _ = _ap034(d, "새 가지")
+        check("0.4.0 P8 같은 이름이 있으면 -2", g(d, "branch", "--show-current") == f"refactor/{today}-B2-2", out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    d = mkg(add_fields040(PLAN_040).replace("### [P0-1] 안전망\n- **종류**: 🔧 리팩토링\n- **승인**: [ ] 승인\n- **완료**: [ ] 완료",
+                                            "### [P0-1] 안전망\n- **종류**: 🔧 리팩토링\n- **승인**: [ ] 승인\n- **완료**: [x] 완료"), "")
+    try:
+        out, _ = _ap034(d, "새 가지")
+        check("0.4.0 P8 실행 대기 없음 → 안 끝난 카드로 다음 묶음 짐작(B1)", g(d, "branch", "--show-current") == f"refactor/{today}-B1", out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    d = mkg(add_fields040(PLAN_040), "P0-1")
+    try:
+        out, _ = _ap034(d, "새 가지")
+        check("0.4.0 P8 반대: 실행 순서 첫 줄이 묶음 없는 카드(P0-1) → 옛 이름 refactor/<날짜>", g(d, "branch", "--show-current") == f"refactor/{today}", out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ── P9 /refactor:go 묶음 차례: ready 빈 칸(코드 수정 막힘) · .turn-auto.* 지움 · 인자 없는 go 는 그대로 ──
+    d = project(plan=add_fields040(PLAN_040))
+    try:
+        approve(d, "B1")
+        lf(d / "docs/refactor/STATE.md", STATE.replace("phase: PLAN", "phase: EXECUTE"))
+        rd = d / "docs/refactor"
+        lf(rd / ".turn-auto.B1", "B1\n")
+        lf(rd / ".turn-auto.B2", "B2\n")
+        hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go 묶음"})
+        t = (rd / ".turn.s1").read_text(encoding="utf-8") if (rd / ".turn.s1").exists() else ""
+        check("0.4.0 P9 /refactor:go 묶음 → .turn 표시 'go s1' + ready 빈 칸 · .turn-auto.* 모두 지움",
+              t == "go s1\nready\n" and not (rd / ".turn-auto.B1").exists() and not (rd / ".turn-auto.B2").exists(), t)
+        pl = {"session_id": "s1", "tool_name": "Edit", "cwd": str(d),
+              "tool_input": {"file_path": str(d / "src/a.ts"), "old_string": "a", "new_string": "b"}}
+        _, se, rc, _ = hook("guard", d, pl)
+        check("0.4.0 P9 /refactor:go 묶음 차례의 코드 수정 → 안전장치가 막음(실행 대기 없음)", rc == 2 and "승인된 실행 대기 단계가 없어" in se, se)
+        # 반대: 인자 없는 /refactor:go 는 실행 대기를 적고 .turn-auto 를 이 자리에서 지우지 않는다 · 코드 수정 울타리 없음
+        lf(rd / ".turn-auto.B1", "B1\n")
+        hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+        t = (rd / ".turn.s1").read_text(encoding="utf-8")
+        _, se, rc, _ = hook("guard", d, pl)
+        check("0.4.0 P9 반대: 인자 없는 /refactor:go → ready P1-1 P3-1 · .turn-auto 그대로 · 울타리 문구 없음",
+              t == "go s1\nready P1-1 P3-1\n" and (rd / ".turn-auto.B1").exists() and "승인된 실행 대기 단계가 없어" not in se, t + se)
+        hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go 묶음이"})
+        check("0.4.0 P9 반대: '/refactor:go 묶음이' 는 묶음 차례가 아님", (rd / ".turn.s1").read_text(encoding="utf-8") == "go s1\nready P1-1 P3-1\n", "")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def check_docs_040(check):
+    """0.4.0 §1 문서: 6-plan 카드 형식·묶음·묶기만 · 7-execute ⓘ·ⓖ·이번 차례·8 자리 · go SKILL 인자 묶음 · STATE 칸 · §1-4 낱말 · README 정의."""
+    sk = ROOT / "plugins/refactor/skills/go"
+    pl = (sk / "phases/6-plan.md").read_text(encoding="utf-8")
+    ex = (sk / "phases/7-execute.md").read_text(encoding="utf-8")
+    gs = (sk / "SKILL.md").read_text(encoding="utf-8")
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    a = pl.find("```\n### [P1-2] 제목")
+    blk = pl[a:pl.find("```", a + 3)] if a >= 0 else ""
+    check("0.4.0 P1 6-plan 카드 형식: 종류 다음에 묶음·우선 두 칸(값 꼴 그대로) · 건드릴 파일 백틱 · 사전 조건 [P1-1]",
+          "- **종류**: 🔧 리팩토링 / 🛠 개선(바뀌는 동작: 전 → 후)\n- **묶음**: B1 결제 안전\n- **우선**: 12.3 · 빠른 승리\n" in blk
+          and "백틱 경로" in blk and "`[P1-1]`" in blk, blk[:400])
+    need = ["**실행 순서 = 의존 관계 > Phase > 우선 점수.**", "Phase 0(안전망) 카드는 묶음이든 아니든 **맨 앞**", "**Phase 순서 안에**",
+            "카드 5장·건드릴 파일 10개까지", "`| 묶음 | 설명 | 우선 | 카드 | 왜 함께 |`", "`P1-3(완료)`", "### 묶기만 (`/refactor:go 묶음`",
+            "**`묶음`·`우선` 두 줄만**", "다른 줄은 한 글자도 바꾸지 않는다", "`/refactor:approve B1 자동`", "강제 아님",
+            "① 같은 파일·모듈", "② 앞 카드에 의존", "③ 같은 영역·진단 항목", "`종류`·`위험도`·`사람이 직접 할 일` 낱말을 넣지 않는다",
+            "**묶음 = 함께 고칠 카드 몇 장 = 작업 가지 하나 = PR 하나.**"]
+    check("0.4.0 P1 6-plan: 순서 규칙·묶는 규칙·크기·표·묶기만·칸 이름", all(n in pl for n in need), str([n for n in need if n not in pl]))
+    i_row = next((l for l in ex.splitlines() if l.startswith("| ⓘ |")), "")
+    g_row = next((l for l in ex.splitlines() if l.startswith("| ⓖ |")), "")
+    check("0.4.0 P7 7-execute ⓘ: 다른 묶음이면 멈춤 + 푸시→PR→합치기→새 가지→go · 자동이면 8",
+          "**다른 묶음**" in i_row and all(n in i_row for n in ("`/refactor:approve 푸시`", "`/refactor:approve 합치기`", "`/refactor:approve 새 가지`", "「8. 자동 마감」")), i_row)
+    check("0.4.0 P7 7-execute ⓖ: 자동 모드는 세션이 바뀌면 꺼짐", "\"자동 모드는 세션이 바뀌면 꺼짐 — 다시 `B1 자동`\"" in g_row, g_row)
+    check("0.4.0 P7 7-execute: '묶음의 첫 단계' → '이번 차례의 첫 단계' · 「8. 자동 마감」 제목 자리 · 0. 묶음 단위 실행 대기",
+          "묶음의 첫 단계" not in ex and "**이번 차례의 첫 단계**" in ex and "\n## 8. 자동 마감\n" in ex
+          and "`▶ 실행 대기: [B1 결제 안전] P1-1 P1-2 (2)`" in ex, "")
+    arg = next((l for l in gs.splitlines() if l.lstrip().startswith("- \"묶음\":")), "")
+    check("0.4.0 P1 go SKILL: 인자 '묶음' 한 줄(6-plan 묶기만 · 코드 막힘 · 인자 없는 go 도 제안) · argument-hint",
+          "「묶기만」" in arg and "강제 아님" in arg and "| 묶음 |" in gs.split("\n")[4], arg)
+    tp = (sk / "templates/STATE.md").read_text(encoding="utf-8")
+    check("0.4.0 P5 STATE 틀: current_bundle 칸 · 칸 설명 · go SKILL 칸 목록",
+          "current_step: \"-\"\ncurrent_bundle: \"-\"\n" in tp and "current_bundle: 지금 묶음" in tp and "current_step, current_bundle, next" in gs, "")
+    # §1-4 낱말: 옛 "묶음" 두 뜻(Phase 전체 · A~D 영역)이 남지 않음
+    olds = {"plugins/refactor/scripts/refactor-approve.sh": ["같은 묶음이나", "묶음의 단계가 없습니다", "P1 묶음 전체", "묶음(P1)을"],
+            "plugins/refactor/scripts/refactor-lib.sh": ["같은 묶음의 숫자 범위", "묶음이 다르거나(P1-1~P2-3)"],
+            "README.md": ["`P1`(묶음 전체)"],
+            "plugins/refactor/skills/go/phases/2-checkup.md": ["묶음"], "plugins/refactor/skills/go/checklists/checkup.md": ["묶음"],
+            "plugins/refactor/skills/go/phases/4-verify.md": ["묶음"], "plugins/refactor/agents/auditor.md": ["묶음"],
+            "plugins/refactor/skills/go/SKILL.md": ["범위(묶음"]}
+    left = [f"{f}:{w}" for f, ws in olds.items() for w in ws if w in (ROOT / f).read_text(encoding="utf-8")]
+    check("0.4.0 P10 옛 낱말 0(Phase 전체·영역으로)", not left, str(left))
+    check("0.4.0 P10 새 낱말: approve·README Phase 전체 · 2-checkup 4영역 · auditor 범위(영역",
+          "P1 Phase 전체" in (ROOT / "plugins/refactor/scripts/refactor-approve.sh").read_text(encoding="utf-8")
+          and "`P1`(Phase 전체)" in rd and "4영역 25항목" in (sk / "phases/2-checkup.md").read_text(encoding="utf-8")
+          and "범위(영역·항목 코드)" in (ROOT / "plugins/refactor/agents/auditor.md").read_text(encoding="utf-8"), "")
+    check("0.4.0 P10 README: 새 뜻 정의 · approve 표 B1·묶음 B1·보류 B1 · 새 가지 이름 -B2 · go 묶음",
+          "**묶음 = 함께 고칠 카드 몇 장 = 작업 가지 하나 = PR 하나.**" in rd and "`B1`(묶음" in rd and "`묶음 B1` 도 같음" in rd
+          and "`보류 B1`" in rd and "`refactor/<오늘 날짜>-B2`" in rd and "`묶음`(진행 중인 계획서에 묶음만 덧붙이기" in rd, "")
+    check("0.4.0 P10 픽스처 '둘째 묶음' 그대로", "### [P2-1] 둘째 묶음" in PLAN, "")
 
 
 if __name__ == "__main__":

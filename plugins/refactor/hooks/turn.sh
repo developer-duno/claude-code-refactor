@@ -233,6 +233,7 @@ mark() { # go 표시(1줄 "go <세션ID>", 2줄 "ready$1")를 임시 파일 "$T.
 
 re_go='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt]|$)'
 re_again='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+다시(([[:space:]]|\\[nrt])+([A-Za-z_]+))?'
+re_bundle='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+묶음(([[:space:]]|\\[nrt])|$)'
 re_slash='^[[:space:]]*/'
 if [[ $prompt =~ $re_go ]]; then
   [ -d "$rdir" ] || mkdir -p "$rdir" 2>/dev/null || exit 0
@@ -248,6 +249,14 @@ if [[ $prompt =~ $re_go ]]; then
     printf '.allow-*\n.turn*\n*.tmp.*\n' > "$rdir/.gitignore"
   fi
   sweep
+  # 0.4.0 "/refactor:go 묶음"(진행 중 계획서에 묶음·우선 칸만 덧붙이는 차례 — 6-plan 「묶기만」): 실행 대기를 비워 코드 수정을 막고(ready 빈 칸 →
+  #   안전장치가 단계 실행의 코드 수정을 막음) 자동 모드 허락 파일(.turn-auto.*)을 지운다(#16 — 이 차례에 자동 마감이 돌지 않게)
+  if [[ $prompt =~ $re_bundle ]]; then
+    for af_ in "$rdir"/.turn-auto.*; do [ -e "$af_" ] && rm -f "$af_"; done
+    mark ""
+    snapshot
+    exit 0
+  fi
   if [[ $prompt =~ $re_again ]]; then
     step=${BASH_REMATCH[4]}
     step=$(printf '%s' "${step:--}" | tr '[:lower:]' '[:upper:]')

@@ -102,7 +102,8 @@ RECS
       if (STEPS != "") flag = flag " " STEPS
       plan = (v["steps_total"] + 0 > 0) ? (v["steps_done"] + 0) "/" (v["steps_approved"] + 0) "/" (v["steps_total"] + 0) : "-"
       when = (days < 0) ? "?" : (days == 0 ? "오늘" : days "일 전")
-      printf "%d\t%d\t| %s | %s%s | %s | %s | %s | %s | %s | %s | %s |\n", rank, (days < 0 ? 0 : days), NAME, st, flag, (ph == "" ? "?" : ph), (g == "" ? "-" : g), red, plan, (v["readiness"] == "" ? "-" : v["readiness"]), v["next"], when
+      bd = (v["current_bundle"] == "") ? "-" : v["current_bundle"]   # 0.4.0 지금 묶음(STATE 앞머리 — 승인 스크립트가 씀)
+      printf "%d\t%d\t| %s | %s%s | %s | %s | %s | %s | %s | %s | %s | %s |\n", rank, (days < 0 ? 0 : days), NAME, st, flag, (ph == "" ? "?" : ph), (g == "" ? "-" : g), red, plan, bd, (v["readiness"] == "" ? "-" : v["readiness"]), v["next"], when
     }' "$st")
   [ -n "$row" ] && rows="$rows$row"$'\n'
 done
@@ -111,8 +112,8 @@ echo "== 리팩토링 현황표 — 기준 폴더: $root ($today KST) =="
 if [ -z "$rows" ]; then
   echo "(이 폴더 아래에서 docs/refactor/STATE.md를 찾지 못했습니다. 프로젝트들이 모여 있는 상위 폴더를 알려 주세요. 예: /refactor:board ~/projects)"
 else
-  echo "| 프로젝트 | 상태 | 단계 | 대기 | 🔴 | 계획(완료/승인/전체) | 준비도 | 다음 할 일 | 마지막 갱신 |"
-  echo "|---|---|---|---|---|---|---|---|---|"
+  echo "| 프로젝트 | 상태 | 단계 | 대기 | 🔴 | 계획(완료/승인/전체) | 묶음 | 준비도 | 다음 할 일 | 마지막 갱신 |"
+  echo "|---|---|---|---|---|---|---|---|---|---|"
   printf '%s' "$rows" | sort -t "$TAB" -k1,1n -k2,2nr | cut -f3-
   echo
   echo "상태 뜻: 🔴 급한 구멍 있음 · 🙋 사장님 승인·답변 차례 · ▶ 승인된 다음 단계 실행 가능 · ⏳ 진행 중 · ✅ 완료 · ⏰ 14일 넘게 멈춤"

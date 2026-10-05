@@ -81,6 +81,15 @@ function field(s, name,   t) {
   sub("^[ \t>]*([-+*][ \t]+)?\\*\\*[^*]*" name "[^*]*\\*\\*[ \t]*:?[ \t]*", "", t)
   return trim(t)
 }
+# 0.4.0 카드의 선택 칸 "- **묶음**: B1 결제 안전" · "- **우선**: 12.3 · 빠른 승리" — 줄 머리가 이 꼴이고 값이 꼴에 맞을 때만 "B"/"P"(값은 BVAL).
+#   이 두 줄은 지문에서 뺀다(진행 중인 계획서·승인된 카드에도 덧붙일 수 있게). 값이 꼴 밖이면 "" → 보통 줄처럼 지문에 들어간다
+#   (묶음·우선 줄에 범위를 바꾸는 글을 몰래 넣으면 "승인 뒤 카드 바뀜"으로 잡힌다)
+function bline(s,   t) {
+  BVAL = ""; t = s; sub(/[ \t\r]+$/, "", t)
+  if (sub(/^-[ \t]+\*\*묶음\*\*:[ \t]*/, "", t)) { if (t ~ /^B[0-9]+( [^|]+)?$/) { BVAL = t; return "B" } return "" }
+  if (sub(/^-[ \t]+\*\*우선\*\*:[ \t]*/, "", t)) { if (t ~ /^[0-9]+(\.[0-9])? · (빠른 승리|계획된 큰 공사|틈날 때|하지 말 것)$/) { BVAL = t; return "P" } return "" }
+  return ""
+}
 function readlog(   line, f, k, act, id, hv, x) {
   if (LOG == "") return
   while ((getline line < LOG) > 0) {
@@ -102,17 +111,27 @@ function logstate(id, hv) {
 }
 BEGIN {
   US = "\037"
-  if (MODE == "cards") {
-    n = readall(PLAN); fences(n); nc = 0; cur = 0
+  if (MODE == "cards" || MODE == "bundles") {
+    n = readall(PLAN); fences(n); nc = 0; cur = 0; intab = 0; nt = 0
     for (i = 1; i <= n; i++) {
       s = L[i]
       if (!INF[i] && is_head(s)) {
+        intab = (s ~ /^##[ \t]+묶음([ \t\r]|$)/)   # 0.4.0 "## 묶음" 표(카드 밖 — 지문에 안 들어감, 보기용)
         if (is_card(s)) {
           cur = ++nc; ID[cur] = card_id(s); CNT[ID[cur]]++
           t = s; sub(/^###[ \t]*\[[A-Za-z0-9_-]+\][ \t]*/, "", t); TITLE[cur] = trim(t)
           BOX[cur] = "none"; DONE[cur] = 0; NB[cur] = 0
           addtxt(cur, s); if (ALT) addtxt("a" cur, s)
         } else cur = 0
+        continue
+      }
+      if (intab && !INF[i] && MODE == "bundles" && s ~ /^[ \t]*\|/) {   # 표 줄: | 묶음 | 설명 | 우선 | 카드 | 왜 함께 |
+        k = split(s, TF, "|"); tb = TF[2]; gsub(/[*`]/, "", tb); tb = toupper(trim(tb))
+        if (k >= 6 && tb ~ /^B[0-9]+$/) {
+          tc = TF[5]; gsub(/\[/, " ", tc); gsub(/\]/, " ", tc); gsub(/[`*]/, " ", tc); tl = ""
+          while (match(tc, /[A-Za-z0-9_]+-[0-9]+[A-Za-z]?/)) { tl = tl " " toupper(substr(tc, RSTART, RLENGTH)); tc = substr(tc, RSTART + RLENGTH) }
+          TROW[++nt] = "TB" US tb US substr(tl, 2)
+        }
         continue
       }
       if (!cur) continue
@@ -126,12 +145,24 @@ BEGIN {
         else if ((r = rest_of(s, "완료")) != "") { addtxt(cur, "(완료 줄 덧붙임) " r); if (ALT) addtxt("a" cur, "(완료 줄 덧붙임) " r) }
         continue
       }
+      if (!INF[i] && (bk = bline(s)) != "") {   # 0.4.0 묶음·우선 칸(꼴에 맞는 줄만) — 지문 밖. 같은 칸이 여럿이면 나중 줄
+        if (bk == "B") BUND[cur] = BVAL; else PRIO[cur] = BVAL
+        continue
+      }
       if (!INF[i]) {
         if ((v = field(s, "종류")) != "") KIND[cur] = v
         if ((v = field(s, "위험도")) != "") RISK[cur] = v
         if ((v = field(s, "사람이 직접 할 일")) != "") HUMAN[cur] = v
       }
       addtxt(cur, s); if (ALT) addtxt("a" cur, s)
+    }
+    if (MODE == "bundles") {
+      for (c = 1; c <= nc; c++) {
+        b = BUND[c]; d = ""; if ((p = index(b, " ")) > 0) { d = trim(substr(b, p + 1)); b = substr(b, 1, p - 1) }
+        print "CB" US c US ID[c] US b US d US PRIO[c] US DONE[c]
+      }
+      for (c = 1; c <= nt; c++) print TROW[c]
+      exit
     }
     for (c = 1; c <= nc; c++) {
       f = DIR "/c" c; printf "%s", TXT[c] > f; close(f)
@@ -214,6 +245,81 @@ rl_card_text() { # $1 계획서 $2 ID
 }
 
 rl_base_text() { awk -v MODE=base -v PLAN="$1" "$RL_AWK"; }   # 기준선 계획의 지문용 본문
+
+# 0.4.0 묶음(함께 고칠 카드 몇 장 = 작업 가지 하나 = PR 하나) — 카드의 묶음·우선 칸과 "## 묶음" 표를 읽는다(rl_cards 의 CARD 줄은 그대로).
+#   $1 계획서 → 표준출력(칸 구분 \037):
+#   CB 순번 ID 묶음ID 설명 우선 완료(0/1)   카드마다(rl_cards 와 같은 순번). 칸이 없거나 꼴 밖이면 묶음ID·설명·우선은 빈 칸
+#   TB 묶음ID 카드ID…(공백 구분·대문자)      "## 묶음" 표의 줄마다(묶음 칸이 B<숫자> 꼴인 줄만 — 머리·구분 줄은 건너뜀)
+rl_card_bundles() { [ -f "$1" ] || return 0; awk -v MODE=bundles -v PLAN="$1" "$RL_AWK"; }
+
+# 실행 순서(0.4.0 §1-1): $1 계획서 $2 카드 ID 들(공백 구분 — 보통 실행 대기). 그 카드들을 묶음 단위로 모아 순서대로 한 줄씩:
+#   "<묶음ID>\037<설명>\037<ID…(공백 구분)>"  — 묶음 없는 카드는 묶음ID·설명이 빈 칸이고 카드 하나가 한 줄
+#   순서 = Phase(ID 의 P<숫자>- — 숫자가 없으면 맨 뒤) → 같으면 계획서에서 먼저 나온 것. 묶음의 자리는 그 안 가장 앞 Phase 카드의 자리
+#   (Phase 0 은 묶음이든 아니든 맨 앞 · 묶음 없는 카드도 Phase 순서 안). 같은 Phase 안·묶음 안의 순서는 계획서 순서(의존·우선 점수 순으로 적는다 — 6-plan)
+#   주어진 카드 중 묶음 칸이 있는 카드가 하나도 없으면 빈 출력(옛 꼴 그대로 보여 주라는 뜻)
+rl_ready_units() {
+  [ -n "${2// /}" ] || return 0
+  rl_card_bundles "$1" | awk -F "$RL_US" -v IDS=" $2 " -v US="$RL_US" '
+    $1 == "CB" && index(IDS, " " $3 " ") && !(($3) in SEEN) {
+      SEEN[$3] = 1; id = $3; b = $4; ph = 999999
+      if (match(id, /^P[0-9]+-/)) ph = substr(id, 2, RLENGTH - 2) + 0
+      if (b != "") anyb = 1
+      u = (b == "") ? ("#" NR) : b
+      if (!(u in FP)) { FP[u] = NR; MP[u] = ph; ORD[++n] = u; UB[u] = b; UD[u] = $5; UL[u] = id }
+      else { UL[u] = UL[u] " " id; if (ph < MP[u]) MP[u] = ph; if (UD[u] == "") UD[u] = $5 }
+    }
+    END {
+      if (!anyb) exit
+      for (i = 1; i <= n; i++) { K[i] = MP[ORD[i]] * 1000000 + FP[ORD[i]]; S[i] = ORD[i] }
+      for (i = 2; i <= n; i++) { k = K[i]; s = S[i]; j = i - 1; while (j >= 1 && K[j] > k) { K[j + 1] = K[j]; S[j + 1] = S[j]; j-- } K[j + 1] = k; S[j + 1] = s }
+      for (i = 1; i <= n; i++) print UB[S[i]] US UD[S[i]] US UL[S[i]]
+    }'
+}
+
+# 묶음이 승인 때와 다른가(0.4.0 §1-2 — 정본 = 승인 기록의 "묶음 승인" 줄의 카드 목록): $1 계획서 $2 승인 기록 → 다른 묶음마다 한 줄
+#   "<묶음ID>\037<승인 때 카드(안 끝난 것만)>\037<지금 카드(안 끝난 것만)>". 대조는 계획서에 있는 안 끝난 카드만(지운 카드·표의 오타는 대조 밖).
+#   지금 카드 = 카드의 묶음 칸, 그리고 "## 묶음" 표에 그 묶음 줄이 있으면 표의 카드 칸도(둘 중 하나라도 다르면 다름 — 표가 다르면 표 쪽을 보여 준다).
+#   카드는 한 묶음에만 든다 — 나중 "묶음 승인" 줄에 든 카드는 앞서 승인한 다른 묶음의 목록에서 뺀다(카드를 옮겨 다시 승인하면 옛 묶음의 ⚠ 도 사라지게).
+#   그 묶음의 마지막 줄이 "묶음 보류" 이거나 "재설정" 뒤에 승인이 없으면 대조하지 않는다
+rl_bundle_drift() {
+  [ -f "$1" ] && [ -f "$2" ] || return 0
+  rl_card_bundles "$1" | awk -F "$RL_US" -v LOG="$2" -v US="$RL_US" '
+    function tr_(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+    function inc(l,   a, k, i, j, o, x, t, m) {   # 계획서에 있는 안 끝난 카드만 · 중복 없이 · 정렬해서 공백으로 잇는다
+      k = split(l, a, " "); m = 0
+      for (i = 1; i <= k; i++) { x = a[i]; if (x == "" || !(x in DN) || DN[x] == 1 || (x in Q)) continue; Q[x] = 1; o[++m] = x }
+      for (i = 1; i <= m; i++) delete Q[o[i]]
+      for (i = 2; i <= m; i++) { t = o[i]; j = i - 1; while (j >= 1 && o[j] > t) { o[j + 1] = o[j]; j-- } o[j + 1] = t }
+      t = ""; for (i = 1; i <= m; i++) t = t " " o[i]
+      return substr(t, 2)
+    }
+    BEGIN {
+      while ((getline line < LOG) > 0) {
+        k = split(line, f, "|"); if (k < 4) continue
+        act = tr_(f[2]); b = toupper(tr_(f[3]))
+        if (act == "재설정") { for (x in AL) delete AL[x]; continue }
+        if (k < 5) continue
+        if (act == "묶음 승인") {
+          v = toupper(tr_(f[5])); sub(/^카드 [0-9]+개:[ \t]*/, "", v); AL[b] = v
+          k = split(v, nv, " ")
+          for (x in AL) if (x != b) { t = " " AL[x] " "; for (i = 1; i <= k; i++) gsub(" " nv[i] " ", " ", t); AL[x] = tr_(t) }
+        }
+        else if (act == "묶음 보류") delete AL[b]
+      }
+      close(LOG)
+    }
+    $1 == "CB" { DN[$3] = $7; if ($4 != "") CUR[$4] = CUR[$4] " " $3 }
+    $1 == "TB" { TB[$2] = TB[$2] " " $3; HT[$2] = 1 }
+    END {
+      m = 0; for (b in AL) BS[++m] = b
+      for (i = 2; i <= m; i++) { t = BS[i]; j = i - 1; while (j >= 1 && (substr(BS[j], 2) + 0) > (substr(t, 2) + 0)) { BS[j + 1] = BS[j]; j-- } BS[j + 1] = t }
+      for (i = 1; i <= m; i++) {
+        b = BS[i]; a = inc(AL[b]); c = inc(CUR[b])
+        if (a != c) { print b US a US c; continue }
+        if (b in HT) { t = inc(TB[b]); if (t != a) print b US a US t }
+      }
+    }'
+}
 
 # 바뀐 내용 보여 주기: $1 승인 때 남긴 본문 파일, 표준입력 = 지금 본문 → 바뀐 줄(최대 12줄, 앞에 -/+)
 rl_show_diff() {
@@ -448,8 +554,8 @@ rl_allow_baseline() {
     done < "$rd/STATE.md"
   fi
   while [ "$i" -lt 26 ]; do cw=${cw//${lo:i:1}/${up:i:1}}; i=$((i + 1)); done
-  # 같은 묶음의 숫자 범위 "P1-1~P1-5"(물결 앞뒤 공백 허용 · 시작 ≤ 끝 · 99칸 이하)는 사이 단계까지 펼친다(검사 보완 F1).
-  #   묶음이 다르거나(P1-1~P2-3)·끝이 숫자가 아니거나(P1-3A)·거꾸로·너무 넓으면 펼치지 않는다(양 끝 낱말만 남는다)
+  # 같은 Phase 의 숫자 범위 "P1-1~P1-5"(물결 앞뒤 공백 허용 · 시작 ≤ 끝 · 99칸 이하)는 사이 단계까지 펼친다(검사 보완 F1).
+  #   Phase 가 다르거나(P1-1~P2-3)·끝이 숫자가 아니거나(P1-3A)·거꾸로·너무 넓으면 펼치지 않는다(양 끝 낱말만 남는다)
   local re_rng='([A-Z0-9_]+)-([0-9]{1,6})[[:space:]]*~[[:space:]]*([A-Z0-9_]+)-([0-9]{1,6})([^A-Z0-9_-]|$)' rs=$cw ro="" rm rb rc rj rx
   while [[ $rs =~ $re_rng ]]; do
     rm=${BASH_REMATCH[0]}; rm=${rm%"${BASH_REMATCH[5]}"}; rx=${BASH_REMATCH[1]}; rb=$((10#${BASH_REMATCH[2]})); rc=$((10#${BASH_REMATCH[4]}))
