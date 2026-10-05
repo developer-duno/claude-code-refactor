@@ -2952,7 +2952,7 @@ cpd_short() {
 # 긴 옵션 이름($1, -- 뗀 = 앞)이 $2 의 줄임인가(--targ → target-directory)
 cpd_long() { [ -n "$1" ] && case "$2" in "$1"*) return 0 ;; esac; return 1; }
 copy_dir_seg1() {
-  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=()
+  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 ab=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=()
   case "$sc" in cp|mv|ln) vl=tS ;; install) vl=tSmog ;; scp) vl=PiFoclJS ;; rsync) vl=efTBM ;; esac
   for ((i = 0; i < ${#SARGS[@]}; i++)); do
     a=${SARGS[$i]}; nx=${SARGS[$((i + 1))]:-}
@@ -3012,14 +3012,15 @@ copy_dir_seg1() {
       tar)
         case "$a" in
           --extract|--get|--extr*) ext=1 ;;
+          --ab|--abs*|--insecure) ab=1 ;;   # 보안 검사(10-06): 절대경로·.. 를 그대로 풀면 풀 곳과 상관없이 어디든 씀(GNU 긴 옵션 줄임 · bsdtar --insecure = -P)
           --to-stdout|--to-command*) out=1 ;;
           --directory=*) dirs+=("${a#*=}") ;;
           --directory) dirs+=("$nx"); skip=1 ;;
           -C) dirs+=("$nx"); skip=1 ;;
           -C?*) dirs+=("${a#-C}") ;;
           --*) ;;
-          -[A-Za-z]*) case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac ;;
-          *) if [ "$i" -eq 0 ]; then case "$a" in *[!A-Za-z]*) ;; *x*) ext=1; case "$a" in *O*) out=1 ;; esac ;; esac; fi ;;
+          -[A-Za-z]*) case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac ;;
+          *) if [ "$i" -eq 0 ]; then case "$a" in *[!A-Za-z]*) ;; *) case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac ;; esac; fi ;;
         esac ;;
       unzip)
         ext=1
@@ -3027,12 +3028,14 @@ copy_dir_seg1() {
           -d) dirs+=("$nx"); skip=1 ;;
           -d?*) dirs+=("${a#-d}") ;;
           --*) ;;
+          -*:*) ab=1 ;;   # unzip -: = ../ 를 그대로 풂
           -[A-Za-z]*) case "$a" in *[lvtzZpc]*) out=1 ;; esac ;;
         esac ;;
       7z)
         case "$a" in
           -o?*) dirs+=("${a#-o}") ;;
           -so) out=1 ;;
+          -spf*) ab=1 ;;   # 7z -spf = 절대경로 그대로
           -*) ;;
           *) [ "${#pos[@]}" -eq 0 ] && case "$a" in x|e) ext=1 ;; esac; pos+=("$a") ;;
         esac ;;
@@ -3060,6 +3063,7 @@ copy_dir_seg1() {
     tar|unzip|7z|xa)
       [ "$k" = xa ] && [ "${#dirs[@]}" -eq 0 ] && [ "${#pos[@]}" -ge 2 ] && dirs=("${pos[1]}")
       [ "$ext" = 1 ] && [ "$out" = 0 ] || return 0
+      [ "$ab" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"
       [ "${#dirs[@]}" -eq 0 ] && dirs=(.)
       for d in "${dirs[@]}"; do cpd_where "$d"; [ "$CW" != no ] && block "$MSG_UNPACK" "$MSG_HUMAN"; done
       return 0 ;;

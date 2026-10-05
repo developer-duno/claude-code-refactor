@@ -5602,6 +5602,11 @@ def check_copy_dir_040(res):
         _cases_034(res, proj, "FC2 G5 -Name 안 하위 폴더", [(B, ps("New-Item -ItemType SymbolicLink -Path src -Name a/r -Target ../../docs"))])
         _cases_034(res, proj, "FC2 G7 하위 폴더에서 Expand-Archive 둘째 위치", [(B, ps("Expand-Archive x.zip ../docs/refactor")), (OK, ps("Expand-Archive x.zip vendor"))],
                    extra={"cwd": str(proj / "src")})
+        _cases_034(res, proj, "보안 검사 풀기 절대경로·.. 그대로", [(B, bash(c)) for c in ["tar -xPf /tmp/e.tar -C /tmp/out", "tar -xf /tmp/e.tar -P -C /tmp/out",
+            "tar --absolute-names -xf /tmp/e.tar -C /tmp/out", "tar -xvPzf /tmp/e.tgz -C /tmp/out", "tar xPf /tmp/e.tar -C /tmp/out",
+            "unzip -: /tmp/x.zip -d /tmp/out", "unzip -o -: /tmp/x.zip -d /tmp/out", "7z x /tmp/x.7z -o/tmp/out -spf",
+            "tar --abs -xf /tmp/e.tar -C /tmp/out", "tar --ab -xf /tmp/e.tar -C /tmp/out", "tar Pf /tmp/e.tar --extract -C /tmp/out", "bsdtar -x --insecure -f /tmp/e.tar -C /tmp/out"]] +
+            [(OK, bash(c)) for c in ["tar -xf /tmp/ok.tar -C /tmp/out", "unzip /tmp/x.zip -d /tmp/out", "tar -tPf /tmp/e.tar", "tar -cPf /tmp/b.tar src", "tar cPf /tmp/b.tar src", "tar tf /tmp/e.tar"]])
         _cases_034(res, proj, "FC2 통과", [(OK, bash(c)) for c in ["cp -r /tmp/x/other ..", "cp -rT src/a src/b", "mv -b /tmp/notes.md docs/refactor/notes.md",
                                                                   "mv -b /tmp/a.md docs/", "cp -r /tmp/x/src ..", 'gh pr create --body "$(cat /tmp/b.md)"',
                                                                   "npm run dev &", 'cp "a b"/c.txt docs/refactor/', "cp -rT /tmp/x build", "robocopy c:/tmp/x build /E",
