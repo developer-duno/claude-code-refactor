@@ -5725,7 +5725,6 @@ def check_auto_stage_fail_040(check):
         st0 = (rd / "STATE.md").read_text(encoding="utf-8")
         el0 = (rd / "EXECUTION_LOG.md").read_text(encoding="utf-8")
         for label, setup, undo, msg in [
-                ("red_open 2", lambda: lf(rd / "STATE.md", st0.replace("red_open: 0", "red_open: 2")), lambda: lf(rd / "STATE.md", st0), "red_open 이 2"),
                 ("기준선 결과 줄 없음", lambda: lf(rd / "EXECUTION_LOG.md", "# 실행 기록\n"), lambda: lf(rd / "EXECUTION_LOG.md", el0), "'- 기준선 결과: P3-1 통과 N/N' 줄이 없습니다"),
                 ("기준선 일부 실패 6/7", lambda: lf(rd / "EXECUTION_LOG.md", el0.replace("7/7", "6/7")), lambda: lf(rd / "EXECUTION_LOG.md", el0), "줄이 없습니다"),
                 ("운영 주소 500", lambda: site.set("/", "x", 500), lambda: _site_old040(site), "지금 500 입니다"),
@@ -5736,6 +5735,12 @@ def check_auto_stage_fail_040(check):
             out, rc = _auto040(d, "preflight", [fg, noplay])
             check(f"0.4.0 A4 preflight {label} → 1 · ⛔ · 자동 끝(허락 지움)", rc == 1 and out.startswith("⛔") and msg in out and _af040(d) is None, out)
             undo()
+        # 사장님 결정 10-05: STATE red_open(프로젝트 전체의 안 막은 🔴 수)은 자동 마감을 막지 않는다 — 기준선 결과 줄만 본다
+        lf(rd / "STATE.md", st0.replace("red_open: 0", "red_open: 2"))
+        lf(rd / ".turn-auto.B1", "\n".join(a))
+        out, rc = _auto040(d, "preflight", [fg, noplay])
+        check("0.4.0 A4 preflight red_open 2(다른 묶음의 🔴) → 막지 않음(0 · 허락 그대로)", rc == 0 and _af040(d) is not None and "red_open" not in out, out)
+        lf(rd / "STATE.md", st0)
         lf(d / "a.txt", "b\n")
         _git034(d, "add", "--", "a.txt"); _git034(d, "commit", "-qm", "fix: 손으로 고침")
         lf(rd / ".turn-auto.B1", "\n".join(a))

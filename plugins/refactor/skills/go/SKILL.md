@@ -3,7 +3,7 @@ name: go
 description: 운영 중인 프로젝트를 안전한 순서(준비 → 코드 지도 → 25항목 건강검진 → 정밀검사 → 반박 검증 → 기준선 → 계획서 → 승인된 단계 실행)로 리팩토링하는 지휘자. 진행 상황 파일(docs/refactor/STATE.md)을 읽고 다음 단계부터 이어서 한다.
 disable-model-invocation: true
 argument-hint: "[비움=계속 | 하나씩 | 묶음 | 다시 <단계> | 마무리]"
-allowed-tools: Bash(bash *run.sh*refactor-status*) Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git ls-files *) Bash(git check-ignore *) Bash(git rev-parse *) Bash(git remote) Bash(git branch --show-current)
+allowed-tools: Bash(bash *run.sh*refactor-status*) Bash(bash *run.sh*refactor-auto*) Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git ls-files *) Bash(git check-ignore *) Bash(git rev-parse *) Bash(git remote) Bash(git branch --show-current)
 ---
 
 # 리팩토링 지휘자 (/refactor:go)

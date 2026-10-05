@@ -210,12 +210,8 @@ EOF
     [ "$d_" = 1 ] || left="$left $x"
   done
   [ -z "$left" ] || no "⛔ $B 묶음에 아직 안 끝난 카드가 있습니다:$left — 묶음 카드가 모두 끝나야 자동 마감을 합니다"
-  # 기준선 통과(#6): STATE red_open 0 + 묶음 마지막 카드의 EXECUTION_LOG "- 기준선 결과: <ID> 통과 N/N"(N > 0, 같은 수)
-  ro=""
-  if [ -f "$dir/STATE.md" ]; then
-    while IFS= read -r x || [ -n "$x" ]; do x=${x%$'\r'}; case "$x" in red_open:*) ro=${x#red_open:}; ro=${ro//[[:space:]\"]/}; break ;; esac; done < "$dir/STATE.md"
-  fi
-  [ "$ro" = 0 ] || no "⛔ 기준선 통과를 확인하지 못했습니다: STATE.md 의 red_open 이 ${ro:-없음} 입니다(아직 안 막은 🔴 가 0 이어야 자동으로 합칩니다)"
+  # 기준선 통과(#6): 묶음 마지막 카드의 EXECUTION_LOG "- 기준선 결과: <ID> 통과 N/N"(N > 0, 같은 수) — 사장님 결정 10-05: STATE red_open(프로젝트 전체의
+  #   안 막은 🔴 수)은 보지 않는다(다른 묶음의 🔴 가 이 묶음 자동 마감을 막지 않게 · 이 묶음 카드가 다 끝났는지는 위에서 봄)
   bok=0
   if [ -f "$dir/EXECUTION_LOG.md" ]; then
     re_bl="^- 기준선 결과: $last 통과 ([0-9]+)/([0-9]+)[[:space:]]*\$"

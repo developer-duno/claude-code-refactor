@@ -106,4 +106,4 @@ STATE의 `current_step`이 "<ID> (진행 중)"이면 지난번 실행이 끝나�
 - **배포 방식이 수동이면**(`merge` 결과에 "배포는 사람이 → 끝나면 Claude 에게 검증 부탁") 여기서 보고하고 멈춘다. 사용자가 배포를 마쳤다고 하면 같은 꼴로 `verify` 를 한 번 실행한다(합친 뒤 2시간 안).
 - **6. 보고**: 단계마다의 4. 보고 · 묶음 요약 표 뒤에 `| 자동 단계 | 결과 |` 표(preflight·push·pr·merge·deploy-wait·verify 마다 결과 첫 줄 그대로) · PR 번호와 합친 커밋 · 판 표지(옛 값 → 새 값) · 화면 열기 결과와 스크린샷 폴더(`docs/refactor/verify/<B1>/` — git 이 무시) · 검증이 실패했으면 `⛔ 라이브 검증 실패` 와 되돌리는 길(사람이 — 호스팅 화면에서 이전 배포로 · GitHub PR 화면의 Revert. 자동 되돌리기는 없다) · 다음 안내: 다음 묶음은 `/refactor:approve 새 가지` → `/refactor:approve B2`(또는 `B2 자동`) → `/refactor:go`(지금 묶음 `current_bundle` 은 그 승인 때 승인 스크립트가 고친다).
 - 허락 파일(`.turn-auto.*`·`.turn-autopre.*`·`.turn-merged.*`)은 승인 스크립트·자동 마감 스크립트·입력 훅만 만들고 지운다 — Claude 는 만들거나 지우지 않는다(`verify` 가 끝나면 `.turn-merged` 를 스크립트가 지운다).
-- **기준선 통과 확인**: `preflight` 는 STATE `red_open: 0` 과 묶음 마지막 카드의 EXECUTION_LOG `- 기준선 결과: <ID> 통과 N/N` 줄(통과 수 = 전체 수 > 0)을 본다 — 3. 순서 5(기록)에서 이 줄을 꼭 적는다.
+- **기준선 통과 확인**: `preflight` 는 묶음 마지막 카드의 EXECUTION_LOG `- 기준선 결과: <ID> 통과 N/N` 줄(통과 수 = 전체 수 > 0)을 본다 — 3. 순서 5(기록)에서 이 줄을 꼭 적는다.
