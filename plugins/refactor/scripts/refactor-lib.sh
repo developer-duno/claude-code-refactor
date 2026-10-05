@@ -84,9 +84,14 @@ function field(s, name,   t) {
 # 0.4.0 카드의 선택 칸 "- **묶음**: B1 결제 안전" · "- **우선**: 12.3 · 빠른 승리" — 줄 머리가 이 꼴이고 값이 꼴에 맞을 때만 "B"/"P"(값은 BVAL).
 #   이 두 줄은 지문에서 뺀다(진행 중인 계획서·승인된 카드에도 덧붙일 수 있게). 값이 꼴 밖이면 "" → 보통 줄처럼 지문에 들어간다
 #   (묶음·우선 줄에 범위를 바꾸는 글을 몰래 넣으면 "승인 뒤 카드 바뀜"으로 잡힌다)
-function bline(s,   t) {
+function bline(s,   t, d) {
   BVAL = ""; t = s; sub(/[ \t\r]+$/, "", t)
-  if (sub(/^-[ \t]+\*\*묶음\*\*:[ \t]*/, "", t)) { if (t ~ /^B[0-9]+( [^|]+)?$/) { BVAL = t; return "B" } return "" }
+  # 보안 검사(10-05): 설명 글은 64까지(바이트 — macOS awk 가 UTF-8 이면 글자)·범위를 바꾸는 데 쓰일 기호(: 백틱 | * ( ) / \ < > $ = [ ])가 없을 때만 지문 밖 — 아니면 지문에 넣는다
+  if (sub(/^-[ \t]+\*\*묶음\*\*:[ \t]*/, "", t)) {
+    if (t ~ /^B[0-9]+$/) { BVAL = t; return "B" }
+    if (t ~ /^B[0-9]+ [^ ]/ && length(t) <= 64) { d = t; sub(/^B[0-9]+ /, "", d); if (d !~ /[|:`*()<>$=\/\\[]/ && index(d, "]") == 0) { BVAL = t; return "B" } }
+    return ""
+  }
   if (sub(/^-[ \t]+\*\*우선\*\*:[ \t]*/, "", t)) { if (t ~ /^[0-9]+(\.[0-9])? · (빠른 승리|계획된 큰 공사|틈날 때|하지 말 것)$/) { BVAL = t; return "P" } return "" }
   return ""
 }
@@ -145,8 +150,8 @@ BEGIN {
         else if ((r = rest_of(s, "완료")) != "") { addtxt(cur, "(완료 줄 덧붙임) " r); if (ALT) addtxt("a" cur, "(완료 줄 덧붙임) " r) }
         continue
       }
-      if (!INF[i] && (bk = bline(s)) != "") {   # 0.4.0 묶음·우선 칸(꼴에 맞는 줄만) — 지문 밖. 같은 칸이 여럿이면 나중 줄
-        if (bk == "B") BUND[cur] = BVAL; else PRIO[cur] = BVAL
+      if (!INF[i] && (bk = bline(s)) != "" && !(bk == "B" && HAVEB[cur]) && !(bk == "P" && HAVEP[cur])) {   # 0.4.0 묶음·우선 칸(꼴에 맞는 줄만) — 지문 밖. 카드마다 첫 줄만(같은 칸 두 번째 줄부터는 지문 — 보안 검사 10-05)
+        if (bk == "B") { BUND[cur] = BVAL; HAVEB[cur] = 1 } else { PRIO[cur] = BVAL; HAVEP[cur] = 1 }
         continue
       }
       if (!INF[i]) {
