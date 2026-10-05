@@ -1053,6 +1053,7 @@ def main():
     check_auto_stage_fail_040(check)
     check_auto_fix_040(check)
     check_auto_newbranch_040(check)
+    check_auto_041(check)
     check_auto_docs_040(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
@@ -3146,6 +3147,8 @@ case "$1 $2" in
   *) k=other ;;
 esac
 n=0; [ -f "$d/$k.n" ] && n=$(cat "$d/$k.n"); n=$((n + 1)); printf '%s\\n' "$n" > "$d/$k.n"
+# 0.4.1 R4 시험: n 번째 호출 때 그 종류의 .hook 을 돌린다(되풀이 사이에 허락 파일을 시험이 적어 둔 값으로 바꾸는 등)
+[ -f "$d/$k.hook" ] && [ "$n" = "$(cat "$d/$k.hookn")" ] && bash "$d/$k.hook"
 if [ "$k" = merge ] && [ -n "${FAKE_GH_GRANT:-}" ]; then if [ -e "$FAKE_GH_GRANT" ]; then echo yes; else echo no; fi >> "$d/merge.grant"; fi
 o=out; [ -f "$d/$k.then" ] && [ "$n" -ge "$(cat "$d/$k.then")" ] && o=out2
 if [ -f "$d/$k.seqn" ]; then m=$n; [ "$m" -gt "$(cat "$d/$k.seqn")" ] && m=$(cat "$d/$k.seqn"); o=out.$m; fi
@@ -5387,10 +5390,10 @@ def _go040(d, sid="s1", prompt="/refactor:go"):
     return hook("turn", d, {"session_id": sid, "prompt": prompt})
 
 
-def _ready040(d, fg, done=True, log_line=True):
-    """B1 자동 승인 → 카드 둘 완료·커밋 · EXECUTION_LOG 기준선 결과 줄 → 인자 없는 /refactor:go(go= 채움)."""
+def _ready040(d, fg, done=True, log_line=True, tp=None):
+    """B1 자동 승인 → 카드 둘 완료·커밋 · EXECUTION_LOG 기준선 결과 줄 → 인자 없는 /refactor:go(go= 채움). tp = 대화 기록 경로(자동 허락 ⑥)."""
     g = _git034
-    out = _ap040(d, "B1 자동", path_front=[fg])
+    out = _ap040(d, "B1 자동", path_front=[fg], tp=tp)
     if done:
         for cid, t in (("P1-1", "금액"), ("P3-1", "결제 뒤")):
             _done033(d, cid)
@@ -5593,7 +5596,7 @@ def check_auto_docs_040(check):
     esc = "멈추려면 아무 말이나 입력하세요 — Esc 는 지금 도는 명령만 멈추고 자동 모드는 끄지 않습니다(그 뒤 한마디 입력하면 꺼집니다)."
     need = [esc, "(Claude 가 실행 중이면 Esc 로도)", "사람이 친 인자 없는 go 한 번 — 그 뒤 작업반·백그라운드 알림으로 이어지는 차례도 같은 차례",
             "기준선 결과 줄은 Claude 가 실행 기록에 적은 글 — 사람이 보는 기준선 실행 결과와 같은지는 보고로 확인",
-            "제목이 `test: 기준선` 으로 시작하고 `tests/baseline/`·`docs/refactor/` 아래 파일만 바꾼", "preflight 뒤에 새 커밋이 생김",
+            "제목이 `test: 기준선` 으로 시작하고 `tests/baseline/` 파일을 하나 이상 바꾸며 `docs/refactor/` 아래는 기록 파일 꼴", "preflight 뒤에 새 커밋이 생김",
             "  ## 자동 모드 (👤 사람이 적음)\n  - 운영 주소: https://shop.example.com\n  - 배포 끝 보는 법: vercel\n  - 판 표지: `/version.txt`\n  - 확인할 화면:",
             "  | 경로 | 기대 글자 |\n  |---|---|\n", "사용자·전체 npm 설정은 빈 파일로 바꿉니다", "커밋 해시가 들어 있는 것을 권장", "`카드 0개`"]
     check("0.4.0 보완 A7·A9·A10·A12 README §6-5(Esc 는 자동 모드를 끄지 않음 · ⓒ 알림 차례 · 기준선 줄 · 복사용 예시 · playwright · 판 표지 권장)",
@@ -6359,10 +6362,10 @@ def check_auto_newbranch_040(check):
         same(out, rc, W_IN, "표시가 빈 파일")
         out, rc = verify(mode="merge-only", host="-")
         same(out, rc, "ℹ️ 배포 방식이 '수동'(합치기까지만)이라 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지", "merge-only(표시가 있어도)")
-        # 검증 실패 → 표시·가지·기록 그대로(지금처럼 같은 가지에서 고침)
+        # 검증 실패 → 가지·기록 그대로(지금처럼 같은 가지에서 고침) · 0.4.1 R6(N#2): 표시는 지움(자동 모드가 끝남 — 남으면 다음 차례에 엉뚱하게 읽힘)
         site.set("/shop", "nope", code=404)
         out, rc = verify()
-        same(out, rc, "⛔ 라이브 검증 실패(B1)", "검증 실패", nx_gone=False, rc_want=1)
+        same(out, rc, "⛔ 라이브 검증 실패(B1)", "검증 실패", nx_gone=True, rc_want=1)
         site.set("/shop", "<html><body>상품 목록 새 판</body></html>")
         # fetch 실패(origin 주소 없음) → 안내 + 까닭 · 0
         g(d, "remote", "set-url", "origin", str(d.parent / "no-such-040.git"))
@@ -6453,6 +6456,221 @@ def check_auto_newbranch_040(check):
                 (s65, "합친 뒤 새 가지는 자동 모드가 만들지만"), (s13, "→ 다음 묶음의 새 작업 가지(다음 묶음 승인은 사람"), (s13, "`.turn-nextok.*`")]
         check("0.4.0 N5 문서(7-execute 8 · approve SKILL · README §6-5 흐름·네 경우·한계 ⑤ · §13)", all(n in t for t, n in need),
               str([n for t, n in need if n not in t]))
+    finally:
+        site.close()
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
+def check_auto_041(check):
+    """0.4.1 자동 모드 오작동 고침: R4 합치기 되풀이 바퀴마다 허락 수명 재확인(자동 2시간 · 사람 30분) · R5 기준선 커밋 꼴(docs/refactor 허용 목록) ·
+    R6 .turn-nextok 잔류(합친 뒤 거절) · R7 새 가지 직전 대화 기록 재확인(.turn-nextok ④~⑥ · 사람 줄 · AskUserQuestion 답) · X2 post-check 2시간 창.
+    시각은 파일 값으로 고정한다(R4 사람 꼴은 허락 파일 시각을 이 실행이 처음 읽은 값으로 재므로 — 첫 조회 때 가짜 date 의 +%s 에 1801초를 더한다)."""
+    made = []
+    site = _Site040()
+    g = _git034
+    IP = [{"__typename": "CheckRun", "name": "test", "status": "IN_PROGRESS", "conclusion": None}]
+    W_END = "⛔ 자동 허락이 끝났습니다(2시간) — 합치지 않았습니다"
+    W_IN = "ℹ️ 합친 뒤 입력이 있어 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지"
+    T0 = '{"type":"user","timestamp":"2026-01-01T00:00:00.000Z"}\n'
+    try:
+        _site_old040(site)
+        noplay = _bin040(made, npx="exit 1")
+        tpd = pathlib.Path(tempfile.mkdtemp(prefix="tp041-"))
+        made.append(str(tpd))
+        tp = tpd / "t.jsonl"
+        tp.write_text(T0, newline="")
+
+        # ── R4 자동 꼴(검사 C#13): 되풀이 바퀴 앞마다 auto_grant_ok ─────────────────────────────
+        for hook in (True, False):
+            d, _ = _mkauto040(made, site.url)
+            rd = d / "docs/refactor"
+            fg = _fake035(made)
+            _ready040(d, fg, tp=tp.as_posix())
+            out0, rc0 = _auto040(d, "preflight", [fg, noplay])
+            fp = _fake035(made, head=g(d, "rev-parse", "HEAD"), headRefName="refactor/x",
+                          view_seq=[{"statusCheckRollup": IP, "headRefName": "refactor/x"}, {"headRefName": "refactor/x"}, {"headRefName": "refactor/x"}])
+            if hook:
+                a = _af040(d)
+                (fp / "af.new").write_text("\n".join(a[:1] + [str(int(time.time()) - 7201)] + a[2:]), newline="")
+                (fp / "view.hook").write_text(f'cp "{(fp / "af.new").as_posix()}" "{(rd / ".turn-auto.B1").as_posix()}"\n', newline="")
+                (fp / "view.hookn").write_text("1", newline="")
+            out, rc = _auto040(d, "merge", [fp, noplay])
+            k = _kinds035(_calls035(fp))
+            if hook:
+                check("0.4.1 R4 자동 꼴: 검사 도는 중 되풀이 사이에 .turn-auto.B1 ② 가 7201초 전으로 바뀜 → 다음 바퀴 앞에서 1 · ⛔ 자동 허락이 끝났습니다(2시간) · 조회 1번 · 합치기 0번",
+                      rc0 == 0 and rc == 1 and W_END in out and k[0] == 1 and k[2] == 0 and not (rd / ".turn-merge.s1").exists(), out0 + out)
+            else:
+                nx = (rd / ".turn-nextok.B1").read_text(encoding="utf-8").split("\n") if (rd / ".turn-nextok.B1").exists() else []
+                check("0.4.1 R4 반대: 허락이 살아 있으면 같은 되풀이(도는 중 → 초록 → 초록)로 합침 · 0",
+                      rc0 == 0 and rc == 0 and "✅ 합쳤습니다(자동 B1)" in out and k[2] == 1, out0 + out)
+                check("0.4.1 R7 merge → .turn-nextok.B1 ④ 대화 기록 경로 ⑤ 허락 때 크기 ⑥ 허락 시각(UTC) — 합치기 스크립트가 지우는 .turn-mergetp 세 줄 그대로",
+                      len(nx) >= 6 and nx[3] == tp.as_posix() and nx[4] == str(tp.stat().st_size)
+                      and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", nx[5]) is not None and not (rd / ".turn-mergetp.s1").exists(), str(nx))
+        # ── R4 사람 꼴(수동 허락 30분): 같은 재확인 ─────────────────────────────────────────
+        dh = _mk035()
+        made.append(str(dh))
+        _grant035(dh, "합치기 68 rebase", made=made)
+        # 가짜 date(이 실행의 PATH 맨 앞에만 — 다른 시험에 새지 않음): "+%s" 일 때만 진짜 값 + 같은 폴더 shift 파일의 초, 그 밖은 진짜 date 그대로
+        fd = _bin040(made, date='r=/bin/date; [ -x "$r" ] || r=/usr/bin/date\n'
+                                'if [ "$*" = "+%s" ] && [ -f "$d/shift" ]; then echo $(( $("$r" +%s) + $(cat "$d/shift") )); else exec "$r" "$@"; fi')
+        fh = _fake035(made, head=g(dh, "rev-parse", "HEAD"), view_seq=[{"statusCheckRollup": IP}, {}, {}])
+        (fh / "view.hook").write_text(f'printf 1801 > "{(fd / "shift").as_posix()}"\n', newline="")
+        (fh / "view.hookn").write_text("1", newline="")
+        out, rc, _ = _mg035(dh, path=os.pathsep.join([str(fh), str(fd), env()["PATH"]]))
+        k = _kinds035(_calls035(fh))
+        check("0.4.1 R4 사람 꼴: 허락 직후 시작 · 첫 조회(도는 중) 때 시계가 1801초 뒤로 → 다음 바퀴 앞에서 30분 넘음 → 1 · ⛔ 합치기 허락이 없거나 끝났습니다 · 조회 1번 · 합치기 0번 · 허락 지움",
+              rc == 1 and "⛔ 합치기 허락이 없거나 끝났습니다" in out and k[0] == 1 and k[2] == 0 and not _gf035(dh).exists()
+              and any(c == "+%s" for c in _calls040(fd, "date")), out)
+        # ── R4 합치기 직전 재확인(검사 A 🟡): 초록 두 번으로 되풀이를 빠져나온 뒤 비교 조회(compare) 첫 호출 때 시계를 넘긴다 →
+        #    바퀴 앞 재확인은 이미 지났고 합치기 직전 재확인만 잡는 꼴(사람 꼴 +1801 · 자동 꼴 +7201) ───────────────────
+        dq = _mk035()
+        made.append(str(dq))
+        _grant035(dq, "합치기 68 rebase", made=made)
+        fdq = _bin040(made, date='r=/bin/date; [ -x "$r" ] || r=/usr/bin/date\n'
+                                 'if [ "$*" = "+%s" ] && [ -f "$d/shift" ]; then echo $(( $("$r" +%s) + $(cat "$d/shift") )); else exec "$r" "$@"; fi')
+        fq = _fake035(made, head=g(dq, "rev-parse", "HEAD"))
+        (fq / "compare.hook").write_text(f'printf 1801 > "{(fdq / "shift").as_posix()}"\n', newline="")
+        (fq / "compare.hookn").write_text("1", newline="")
+        out, rc, _ = _mg035(dq, path=os.pathsep.join([str(fq), str(fdq), env()["PATH"]]))
+        k = _kinds035(_calls035(fq))
+        check("0.4.1 R4 사람 꼴 합치기 직전: 초록 두 번 뒤 비교 조회 때 시계가 1801초 뒤로 → 1 · ⛔ 합치기 허락이 없거나 끝났습니다 · 조회 2번 · 비교 1번 · 합치기 0번 · 허락 지움",
+              rc == 1 and "⛔ 합치기 허락이 없거나 끝났습니다" in out and k == (2, 1, 0) and not _gf035(dq).exists(), out)
+        da, _ = _mkauto040(made, site.url)
+        ra = da / "docs/refactor"
+        fga = _fake035(made)
+        _ready040(da, fga)
+        out0, rc0 = _auto040(da, "preflight", [fga, noplay])
+        fda = _bin040(made, date='r=/bin/date; [ -x "$r" ] || r=/usr/bin/date\n'
+                                 'if [ "$*" = "+%s" ] && [ -f "$d/shift" ]; then echo $(( $("$r" +%s) + $(cat "$d/shift") )); else exec "$r" "$@"; fi')
+        fpa = _fake035(made, head=g(da, "rev-parse", "HEAD"), headRefName="refactor/x")
+        (fpa / "compare.hook").write_text(f'printf 7201 > "{(fda / "shift").as_posix()}"\n', newline="")
+        (fpa / "compare.hookn").write_text("1", newline="")
+        out, rc = _auto040(da, "merge", [fpa, fda, noplay])
+        k = _kinds035(_calls035(fpa))
+        check("0.4.1 R4 자동 꼴 합치기 직전: 초록 두 번 뒤 비교 조회 때 시계가 7201초 뒤로 → 1 · ⛔ 자동 허락이 끝났습니다(2시간) · 조회 2번 · 비교 1번 · 합치기 0번",
+              rc0 == 0 and rc == 1 and W_END in out and k == (2, 1, 0) and not (ra / ".turn-merge.s1").exists(), out0 + out)
+
+        # ── R5 기준선 커밋 꼴: tests/baseline ≥1 + docs/refactor 는 허용 목록(*.md·*.log·approved/.log-sum·.log-copy·바로 아래 .gitattributes·.gitignore) ──
+        def r5(extra, seal=False):
+            d, _ = _mkauto040(made, site.url)
+            r = d / "docs/refactor"
+            fg = _fake035(made)
+            _ready040(d, fg)
+            files = {"tests/baseline/x.test.ts": "t\n", "docs/refactor/BASELINE.md": "# 기준선\n\n바뀜\n"}
+            files.update(extra)
+            if seal:   # 봉인 파일이 바뀌는 기준선 커밋(실제 5-baseline 꼴 — 기록 한 줄 + 봉인 · .gitattributes·.gitignore 도)
+                with open(r / "APPROVALS.log", "a", encoding="utf-8", newline="\n") as fh_:
+                    fh_.write("2026-10-05 12:00 KST | 메모 | x | - | 기준선\n")
+                _lib033(d, 'rl_log_seal "$R"')
+                for p in (".gitattributes", ".gitignore"):
+                    old = (r / p).read_text(encoding="utf-8") if (r / p).exists() else ""
+                    files["docs/refactor/" + p] = old + "# 041\n"
+            for p, body in files.items():
+                (d / p).parent.mkdir(parents=True, exist_ok=True)
+                lf(d / p, body)
+            paths = list(files) + (["docs/refactor/APPROVALS.log", "docs/refactor/approved/.log-sum", "docs/refactor/approved/.log-copy"] if seal else [])
+            g(d, "add", "-f", "--", *paths)
+            g(d, "commit", "-qm", "test: 기준선 테스트 추가")
+            ch = g(d, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n")
+            out, rc = _auto040(d, "preflight", [fg, noplay])
+            return out, rc, ch
+
+        out, rc, ch = r5({"docs/refactor/x.log": "l\n", "docs/refactor/audit/a.md": "a\n"}, seal=True)
+        need = ["docs/refactor/approved/.log-sum", "docs/refactor/approved/.log-copy", "docs/refactor/.gitattributes", "docs/refactor/.gitignore",
+                "docs/refactor/BASELINE.md", "docs/refactor/x.log", "docs/refactor/audit/a.md", "tests/baseline/x.test.ts"]
+        check("0.4.1 R5 반대: 기준선 커밋에 봉인 파일 넷(.log-sum·.log-copy·.gitattributes·.gitignore) + BASELINE.md + *.log + 하위 폴더 *.md + 기준선 파일 → preflight 0",
+              all(n in ch for n in need) and rc == 0, str(ch) + "\n" + out)
+        for nm, extra in [("docs/refactor/run.js", {"docs/refactor/run.js": "deploy()\n"}), ("docs/refactor/audit/x.sh", {"docs/refactor/audit/x.sh": "rm -rf /\n"}),
+                          ("docs/refactor/approved/x.json", {"docs/refactor/approved/x.json": "{}\n"})]:
+            out, rc, _ = r5(extra)
+            check(f"0.4.1 R5 기준선 제목 + 기준선 파일이 있어도 {nm} 가 들면 → preflight ⛔ 묶음 밖 1개(그 커밋)",
+                  rc == 1 and "묶음 밖 커밋이 1개" in out and "test: 기준선 테스트 추가" in out, out)
+
+        # ── R6·R7 verify 끝(새 가지 직전) — 맨 저장소 main = 작업 가지 커밋(GitHub 에서 합친 꼴 · check_auto_newbranch_040 과 같은 준비) ──
+        site.set("/version.txt", "build-new-2\n")
+        d7, bare7 = _mkauto040(made, site.url)
+        r7 = d7 / "docs/refactor"
+        fg7 = _fake035(made)
+        _ready040(d7, fg7)
+        for cid in ("P0-1", "P1-2"):
+            _done033(d7, cid)
+        g(d7, "add", "--", "docs"); g(d7, "commit", "-qm", "refactor: P0-1 안전망")
+        g(d7, "push", "-q", "origin", "refactor/x")
+        h7 = g(d7, "rev-parse", "HEAD")
+        subprocess.run(["git", "--git-dir", str(bare7), "update-ref", "refs/heads/main", h7], check=True, capture_output=True)
+        _pc040(d7)
+        nxf = r7 / ".turn-nextok.B1"
+        keep = {p: (r7 / p).read_bytes() for p in ("APPROVALS.log", "approved/.log-sum", "approved/.log-copy") if (r7 / p).exists()}
+        lg7 = _log033(d7)
+        cnt = [0]
+
+        def v7(add, ts="2026-01-01T00:00:00", lines=True):
+            cnt[0] += 1
+            t = tpd / f"v{cnt[0]}.jsonl"
+            t.write_text(T0, newline="")
+            tail = f"{t.as_posix()}\n{t.stat().st_size}\n{ts}\n" if lines else ""
+            lf(nxf, f"B1\n{int(time.time())}\ns1\n{tail}")
+            with open(t, "a", encoding="utf-8", newline="") as fh_:
+                fh_.write(add)
+            _mf040(d7, site.url, deployed="build-new-2")
+            return _auto040(d7, "verify", [fg7, noplay])
+
+        def undo():
+            nb = g(d7, "symbolic-ref", "--short", "HEAD")
+            if nb != "refactor/x":
+                g(d7, "checkout", "-q", "refactor/x")
+                g(d7, "branch", "-q", "-D", nb)
+            for p, b in keep.items():
+                (r7 / p).write_bytes(b)
+            return nb
+
+        Q_HUMAN = '{"type":"queue-operation","operation":"enqueue","timestamp":"2099-01-01T00:00:00.000Z","sessionId":"s1","content":"잠깐 멈춰"}\n'
+        Q_NOTE = '{"type":"queue-operation","operation":"enqueue","timestamp":"2099-01-01T00:00:00.000Z","sessionId":"s1","content":"<task-notification>\\n<task-id>x</task-id>"}\n'
+        ASK = ('{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Your questions have been answered"}]},'
+               '"timestamp":"2099-01-01T00:00:00.000Z","toolUseResult":{"questions":[{"question":"q"}],"answers":{"q":"a"}}}\n')
+        BASH_R = ('{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]},'
+                  '"timestamp":"2099-01-01T00:00:00.000Z","toolUseResult":{"stdout":"ok","stderr":""}}\n')
+        for nm, add in [("허락 뒤 사람이 친 줄(queue-operation enqueue · content 가 < 아님)", Q_HUMAN), ("허락 뒤 AskUserQuestion 답 줄(toolUseResult.questions)", ASK)]:
+            out, rc = v7(add)
+            check(f"0.4.1 R7 {nm} → 새 가지 안 만듦 · 0 · '합친 뒤 입력' 안내 · 가지·기록 그대로 · 표시 지움",
+                  rc == 0 and W_IN in out and g(d7, "symbolic-ref", "--short", "HEAD") == "refactor/x" and _log033(d7) == lg7 and not nxf.exists() and "🌿" not in out, out)
+        out, rc = v7(ASK, ts="2099-12-31T00:00:00", lines=True)
+        nb = undo()
+        check("0.4.1 R7 반대: 허락 시각이 지금보다 뒤(꼴 오류 — 크기만으로)여도 AskUserQuestion 답 줄 → 새 가지 안 만듦", rc == 0 and W_IN in out and nb == "refactor/x", out)
+        for nm, add in [("알림 줄(< 로 시작하는 content)만", Q_NOTE), ("보통 Bash 도구 결과 user 줄만", BASH_R), ("대화 기록 줄 없는 옛 표시(3줄)", None)]:
+            out, rc = v7(add or "", lines=add is not None)
+            nb = undo()
+            check(f"0.4.1 R7 반대: 허락 뒤 {nm} 늘어남 → 새 가지 만듦(막히지 않음) · 0",
+                  rc == 0 and "🌿 새 작업 가지:" in out and re.fullmatch(r"refactor/\d{4}-\d{2}-\d{2}-B2(-\d+)?", nb) is not None and not nxf.exists(), out)
+        # R6(N#2): 합친 뒤 거절(nom — 합친 지 2시간)에도 .turn-nextok 을 지운다 · 순서 거절(refuse)은 남긴다(다음 verify 가 씀)
+        lf(nxf, "B1\n%d\ns1\n" % int(time.time()))
+        _mf040(d7, site.url, deployed="build-new-2", ago=7300)
+        out, rc = _auto040(d7, "verify", [fg7, noplay])
+        check("0.4.1 R6 verify 합친 지 2시간(nom) → 1 · .turn-nextok 지움", rc == 1 and "합친 지 2시간이 지났습니다" in out and not nxf.exists(), out)
+        lf(nxf, "B1\n%d\ns1\n" % int(time.time()))
+        _mf040(d7, site.url, ago=60, host="marker")
+        out, rc = _auto040(d7, "deploy-wait", [fg7, noplay], extra={"REFACTOR_AUTO_DEPLOY_LIMIT": "30"})
+        check("0.4.1 R6 deploy-wait 합친 뒤 한도 지남(nom) → 1 · .turn-nextok 지움", rc == 1 and "합친 뒤" in out and not nxf.exists(), out)
+        lf(nxf, "B1\n%d\ns1\n" % int(time.time()))
+        _mf040(d7, site.url)
+        out, rc = _auto040(d7, "verify", [fg7, noplay])
+        check("0.4.1 R6 반대: deploy-wait 전에 verify(순서 거절 — 자동 모드 안 끝남) → 1 · .turn-nextok 그대로", rc == 1 and "먼저 deploy-wait" in out and nxf.exists(), out)
+
+        # ── X2 post-check 2시간 창: .turn-auto ② 가 7201초 전이면 이 차례의 자동 꼴 줄도 알림 ──────────────
+        dx, _ = _mkauto040(made, site.url)
+        rx = dx / "docs/refactor"
+        fgx = _fake035(made)
+        _ready040(dx, fgx)
+        _pc040(dx)   # _go040 때 남은 한 번짜리 알림(허용 파일 지움)을 여기서 받아 둔다
+        lgx = _log033(dx)
+        ax = _af040(dx)
+        lf(rx / "APPROVALS.log", lgx + f"2026-10-05 12:00 KST | 푸시 | {ax[3]} | - | 자동 B1 으로 실행\n")
+        rc0, se0 = _pc040(dx)
+        check("0.4.1 X2 반대: 자동 꼴 푸시 줄 + 살아 있는 .turn-auto → post-check 조용", rc0 == 0 and "승인 기록" not in se0, se0)
+        lf(rx / ".turn-auto.B1", "\n".join(ax[:1] + [str(int(time.time()) - 7201)] + ax[2:]))
+        rc1, se1 = _pc040(dx)
+        check("0.4.1 X2 .turn-auto ② 가 7201초 전(2시간 넘음) → post-check 알림(근거 아님)", rc1 == 2 and "승인 기록" in se1, se1)
     finally:
         site.close()
         for m_ in made:

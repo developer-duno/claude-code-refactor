@@ -858,6 +858,7 @@ def main():
     check_guard_037(res)
     check_auto_files_040(res)
     check_auto_call_040(res)
+    check_auto_args_041(res)
     check_auto_still_040(res)
     check_deploy_write_040(res)
     check_netlify_api_040(res)
@@ -5164,7 +5165,7 @@ def check_auto_call_040(res):
         _agrant_040(proj, "merged")
         _cases_034(res, proj, "G2 .turn-merged · 합친 뒤 단계 통과", [(OK, bash(_acmd_040(proj, s))) for s in AUTO_POST])
         _cases_034(res, proj, "G2 .turn-merged · 합치기 전 단계 차단", [(B, bash(_acmd_040(proj, s))) for s in AUTO_PRE], need=W_AUTO_FORM)
-        # 허락 유효성 — 단계 6 × (만료 · 미래 · 세션 다름) 은 차단, 7100초·CRLF·다른 B 번호는 통과
+        # 허락 유효성 — 단계 6 × (만료 · 미래 · 세션 다름) 은 차단, 7100초·CRLF 는 통과 · 0.4.1 R3: 명령(B1)과 다른 B 번호(B12) 허락은 차단
         for s in AUTO_PRE + AUTO_POST:
             kind = "auto" if s in AUTO_PRE else "merged"
             for label, kw in (("7201초 지남", {"ago": 7201}), ("시각이 미래", {"ago": -120}), ("세션 다름", {"sid": "t2"})):
@@ -5172,7 +5173,7 @@ def check_auto_call_040(res):
                 _cases_034(res, proj, f"G2 {s} · {label}", [(B, bash(_acmd_040(proj, s)))], need=W_AUTO_NO)
             _agrant_040(proj, kind, ago=7100)
             _cases_034(res, proj, f"G2 {s} · 7100초는 통과", [(OK, bash(_acmd_040(proj, s)))])
-        for label, kw, want in (("CRLF", {"crlf": True}, OK), ("B12", {"bid": "B12"}, OK), ("세션 대문자", {"sid": "T"}, B),
+        for label, kw, want in (("CRLF", {"crlf": True}, OK), ("B12(명령은 B1)", {"bid": "B12"}, B), ("세션 대문자", {"sid": "T"}, B),
                                 ("2줄 숫자 아님", {"lines": ["B1", "now", "t"]}, B), ("3줄 없음", {"lines": ["B1", str(int(time.time()))]}, B),
                                 ("3줄 뒤 공백", {"lines": ["B1", str(int(time.time())), "t "]}, B), ("이름 소문자 b1", {"name": ".turn-auto.b1"}, B),
                                 ("이름 B 뒤 글자", {"name": ".turn-auto.B1x"}, B), ("이름 B 없음", {"name": ".turn-auto.1"}, B),
@@ -5187,7 +5188,7 @@ def check_auto_call_040(res):
         X = _acmd_040(proj, "push")
         ok_forms = [X, X + " 2>&1", "  " + X + "  ", _acmd_040(proj, "push", ' "$CLAUDE_PROJECT_DIR" B1 t'),
                     _acmd_040(proj, "push", ' "${CLAUDE_PROJECT_DIR}" B1 t'), _acmd_040(proj, "merge"), _acmd_040(proj, "push", f' "{P}/" B1 t'),
-                    _acmd_040(proj, "push", f' "{P}/docs/.." B1 t'), _acmd_040(proj, "push", " . B1 t"), _acmd_040(proj, "push", f' "{P}" B12 t'),
+                    _acmd_040(proj, "push", f' "{P}/docs/.." B1 t'), _acmd_040(proj, "push", " . B1 t"),
                     f'bash "{R}/skills/go/../../hooks/run.sh" refactor-auto push "{P}" B1 t', f"bash {run_sh} refactor-auto push {P} B1 t",
                     f'bash "{R}//hooks/./run.sh" refactor-auto pr "{P}" B1 t',
                     'bash "' + R.replace("/", "\\") + '\\hooks\\run.sh" refactor-auto push "' + P + '" B1 t']   # Windows 역슬래시 경로(따옴표 경로 안만)
@@ -5208,7 +5209,8 @@ def check_auto_call_040(res):
                _acmd_040(proj, "push", f' "{P}/sub" B1 t'), _acmd_040(proj, "push", f' "{P}/.." B1 t'), _acmd_040(proj, "push", f' "{P}x" B1 t'),
                _acmd_040(proj, "push", ' "~/x" B1 t'), _acmd_040(proj, "push", ' "$HOME" B1 t'), _acmd_040(proj, "push", ' "$PWD" B1 t'),
                _acmd_040(proj, "push", f' "{P}" B1 t2'), _acmd_040(proj, "push", f' "{P}" B1 T'), _acmd_040(proj, "push", f' "{P}" B1 "t"'),
-               _acmd_040(proj, "push", f' "{P}" B1 t 2>&1 x'), _acmd_040(proj, "verify", ' "/tmp/other" B1 t')]
+               _acmd_040(proj, "push", f' "{P}" B1 t 2>&1 x'), _acmd_040(proj, "verify", ' "/tmp/other" B1 t'),
+               _acmd_040(proj, "push", f' "{P}" B12 t')]   # 0.4.1 R3: 허락은 B1 — 다른 묶음 명령
         _cases_034(res, proj, "G2 허락 있음 · 다른 꼴 차단", [(B, bash(c)) for c in bad], need=W_AUTO)
         _cases_034(res, proj, "G2 허락 있음 · 안내는 정해진 꼴", [(B, bash(c)) for c in [X + "; echo x", f"bash -c '{X}'"]], need=W_AUTO_FORM)
         _cases_034(res, proj, "G2 허락 있음 · 인터프리터·새 세션", [(B, bash(c)) for c in forms[-7:]], need=W_AUTO)
@@ -5240,6 +5242,81 @@ def check_auto_call_040(res):
             res["fails"].append(("0.4.0 G2 평소(STATE 없음) 통과", OK, code, "Bash", "", err.strip()[:200]))
     finally:
         rmtree_rw(plain)
+
+
+def _agrant_add_041(proj, kind, bid, sid="t", line1=None, name=None):
+    """_agrant_040 과 같은 허락 파일을 하나 더 만든다(있는 파일은 지우지 않는다 — 두 묶음이 함께 살아 있는 꼴). line1 = 1줄을 이름과 다르게"""
+    rows = [line1 or bid, str(int(time.time())), sid] + (["feat", "rebase", "/tmp/t.jsonl", "https://x.example", "vercel", "/version.txt", "/ 홈", "go="]
+                                                         if kind == "auto" else [SHA40, "https://x.example"])
+    (proj / "docs/refactor" / (name or f".turn-{kind}.{bid}")).write_bytes(("\n".join(rows) + "\n").encode("utf-8"))
+
+
+def check_auto_args_041(res):
+    """0.4.1 R3(검사 C#7): 자동 모드 스크립트 호출은 명령의 묶음(B<n>)·세션 인자와 같은 허락 파일이 있을 때만 통과 — 이름 .turn-auto.<그 B>
+    (합친 뒤 단계는 .turn-merged.<그 B>) · 1줄 = 그 B · 3줄 = 훅 입력 세션 = 명령의 세션. 같은 세션의 다른 묶음 허락은 근거가 아니다(두 창이
+    각자 자동 모드일 때 남의 묶음을 밀지 않게). 문구는 0.4.0 그대로(새 문구 없음). X1: 끝 표시(.turn-autoend)는 허락이 아니다"""
+    proj = make_project(phase="EXECUTE")
+    try:
+        P = proj.as_posix()
+        a = lambda s, bid="B1", sid="t", pj=None: _acmd_040(proj, s, f' {pj or chr(34) + P + chr(34)} {bid} {sid}')
+        # R3-a: 같은 세션 B1 허락만 유효 → B2·B12·B11 명령은 차단, B1 은 통과
+        _agrant_040(proj, "auto")
+        _cases_034(res, proj, "R3 B1 허락 · 다른 묶음 명령 차단", [(B, bash(a(s, b))) for s in AUTO_PRE for b in ("B2", "B12", "B11", "B10")], need=W_AUTO)
+        _cases_034(res, proj, "R3 B1 허락 · B1 명령 통과", [(OK, bash(a(s))) for s in AUTO_PRE])
+        _agrant_040(proj, "auto", bid="B12")
+        _cases_034(res, proj, "R3 B12 허락 · B1 명령 차단", [(B, bash(a(s))) for s in AUTO_PRE], need=W_AUTO)
+        _cases_034(res, proj, "R3 B12 허락 · B12 명령 통과", [(OK, bash(a(s, "B12"))) for s in AUTO_PRE])
+        # 1줄이 이름과 다른 파일(.turn-auto.B1 인데 1줄 = B2) → 그 B 의 허락이 아니다
+        _agrant_040(proj, None)
+        _agrant_add_041(proj, "auto", "B1", line1="B2")
+        _cases_034(res, proj, "R3 1줄이 이름과 다름", [(B, bash(a("merge"))), (B, bash(a("merge", "B2")))], need=W_AUTO)
+        _agrant_040(proj, None)
+        _agrant_add_041(proj, "auto", "B1", line1="B1 ")
+        _cases_034(res, proj, "R3 1줄 뒤 공백", [(B, bash(a("push")))], need=W_AUTO)
+        # 두 묶음 허락이 함께 살아 있음(B1·B2 — 같은 세션) → 각자 자기 B 만, B3 은 차단
+        _agrant_040(proj, "auto")
+        _agrant_add_041(proj, "auto", "B2")
+        _cases_034(res, proj, "R3 B1·B2 허락 · 각자 통과", [(OK, bash(a("merge", b))) for b in ("B1", "B2")])
+        _cases_034(res, proj, "R3 B1·B2 허락 · B3 차단", [(B, bash(a("merge", "B3")))], need=W_AUTO)
+        # R3-b: 세션 — 명령의 세션 ≠ 훅 세션(t) 이면 허락 파일이 그 세션 것이어도 차단
+        _agrant_040(proj, "auto", sid="t2")
+        _cases_034(res, proj, "R3 허락 세션 t2 · 명령 t2", [(B, bash(a("merge", sid="t2")))], need=W_AUTO)
+        _cases_034(res, proj, "R3 허락 세션 t2 · 명령 t", [(B, bash(a("merge")))], need=W_AUTO)
+        _agrant_040(proj, "auto")
+        _cases_034(res, proj, "R3 허락 세션 t · 명령 t2", [(B, bash(a("merge", sid="t2")))], need=W_AUTO)
+        _agrant_add_041(proj, "auto", "B2", sid="t2")
+        _cases_034(res, proj, "R3 B2 는 다른 세션 허락 · B2 명령 차단", [(B, bash(a("merge", "B2"))), (B, bash(a("merge", "B2", "t2")))], need=W_AUTO)
+        # R3-c: 인자가 없거나 B 꼴이 아님 → 차단
+        _agrant_040(proj, "auto")
+        _cases_034(res, proj, "R3 인자 빠짐·B 꼴 아님", [(B, bash(_acmd_040(proj, "merge", f' "{P}"'))), (B, bash(_acmd_040(proj, "merge", f' "{P}" t'))),
+                                                       (B, bash(_acmd_040(proj, "merge", f' "{P}" B1'))), (B, bash(a("merge", "X1"))),
+                                                       (B, bash(a("merge", "B"))), (B, bash(a("merge", "B1234567"))), (B, bash(a("merge", "B1.")))], need=W_AUTO)
+        # R3-d: 합친 뒤 단계는 .turn-merged.<그 B> 와 대조
+        _agrant_040(proj, "merged")
+        _cases_034(res, proj, "R3 merged B1 · B1 통과", [(OK, bash(a(s))) for s in AUTO_POST])
+        _cases_034(res, proj, "R3 merged B1 · B2 차단", [(B, bash(a(s, "B2"))) for s in AUTO_POST], need=W_AUTO)
+        _agrant_add_041(proj, "auto", "B2")
+        _cases_034(res, proj, "R3 merged B1 + auto B2", [(OK, bash(a("push", "B2"))), (B, bash(a("push"))), (B, bash(a("verify", "B2"))),
+                                                         (OK, bash(a("deploy-wait")))])
+        # X1: 끝 표시(.turn-autoend.B1)만 → 차단 · 끝 표시 B1 + 다른 묶음 허락 B2 → B1 차단(옛 "하나라도 유효" 꼴이면 통과하던 자리)
+        _agrant_040(proj, None)
+        _agrant_add_041(proj, "auto", "B1", name=".turn-autoend.B1")
+        _cases_034(res, proj, "R3 X1 끝 표시만", [(B, bash(a(s))) for s in AUTO_PRE + AUTO_POST], need=W_AUTO_NO)
+        _agrant_add_041(proj, "auto", "B2")
+        _cases_034(res, proj, "R3 X1 끝 표시 B1 + 허락 B2", [(B, bash(a("merge"))), (OK, bash(a("merge", "B2")))])
+        for p in (proj / "docs/refactor").glob(".turn-autoend*"):
+            p.unlink()
+        # 다른 철자: "$CLAUDE_PROJECT_DIR" · 2>&1 꼬리 · 따옴표 "B1"(지금 규칙 = 맨글자만) · 소문자 b1 · 6자리
+        _agrant_040(proj, "auto")
+        pd = '"$CLAUDE_PROJECT_DIR"'
+        _cases_034(res, proj, "R3 철자 · 통과", [(OK, bash(a("merge", pj=pd))), (OK, bash(a("merge") + " 2>&1")), (OK, bash(a("merge", pj='"${CLAUDE_PROJECT_DIR}"')))])
+        _cases_034(res, proj, "R3 철자 · 차단", [(B, bash(a("merge", "B2", pj=pd))), (B, bash(a("merge", "B2") + " 2>&1")), (B, bash(a("merge", '"B1"'))),
+                                               (B, bash(a("merge", '"B2"'))), (B, bash(a("merge", "b1"))), (B, bash(a("merge", "B1", '"t"')))], need=W_AUTO)
+        _agrant_040(proj, "auto", bid="B123456")
+        _cases_034(res, proj, "R3 6자리", [(OK, bash(a("merge", "B123456"))), (B, bash(a("merge", "B12345"))), (B, bash(a("merge", "B1234560"))),
+                                          (B, bash(a("merge")))])
+    finally:
+        rmtree_rw(proj)
 
 
 def check_auto_still_040(res):
