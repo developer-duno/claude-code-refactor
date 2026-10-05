@@ -4957,6 +4957,15 @@ def check_guard_037(res):
             "python3 - <<'EOF'\nopen('src/out.txt','w').write('x')\nEOF", "python3 - <<'EOF'\nopen('/tmp/x.txt','w')\nEOF",
             "cat > notes.md <<'EOF'\nopen('tests/baseline/money.test.ts','w')\nEOF",
             "python3 -c \"print(open('tests/baseline/money.test.ts').read())\""]])
+        # 0.3.7 K4(WB): 합치기 허락과 함께 만드는 대화 기록 경로 파일(.turn-mergetp.<세션ID>)도 기존 .turn 보호(docs/refactor/\.turn)에 걸린다 —
+        #   Claude 가 경로를 바꿔 써(없는 파일·다른 파일) 입력 감시를 끄지 못하게
+        tpw = [bash("echo /tmp/x.jsonl > docs/refactor/.turn-mergetp.t"), bash(f"printf '%s\\n' /dev/null > {P}/docs/refactor/.turn-mergetp.t"),
+               bash("rm docs/refactor/.turn-mergetp.t"), bash("cp /tmp/x docs/refactor/.turn-mergetp.t"),
+               bash("python3 -c \"open('docs/refactor/.turn-mergetp.t','w').write('x')\""),
+               ("Write", {"file_path": "docs/refactor/.turn-mergetp.t", "content": "/tmp/x\n"}),
+               ("Edit", {"file_path": f"{P}/docs/refactor/.turn-mergetp.t", "old_string": "a", "new_string": "b"}),
+               ps("Set-Content docs/refactor/.turn-mergetp.t x")]
+        _cases_034(res, proj, "K4 대화 기록 경로 파일(.turn-mergetp) 쓰기·지우기 차단", [(B, c) for c in tpw])
     finally:
         rmtree_rw(proj)
     # G6 읽기 전용 단계(/refactor:go 의 MAP): 안전 실행기로 감싼 히어독도 -c 꼴과 같게 프로젝트 쓰기 차단, /tmp 는 통과

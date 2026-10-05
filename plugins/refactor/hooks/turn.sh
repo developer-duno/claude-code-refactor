@@ -73,6 +73,8 @@ re_sys='^([[:space:]]|\\[nrt])*<(task-notification|system-reminder|agent-message
 [ -f "$rdir/.turn-push.$sid" ] && rm -f "$rdir/.turn-push.$sid"
 # 0.3.5: 합치기 허락(/refactor:approve 합치기 가 만든 .turn-merge.<세션ID>)도 그 차례에만 — 같은 자리에서 지운다
 [ -f "$rdir/.turn-merge.$sid" ] && rm -f "$rdir/.turn-merge.$sid"
+# 0.3.7: 합치기 허락과 함께 만든 대화 기록 경로 파일(.turn-mergetp.<세션ID>)도 같이 지운다(하루 정리 .turn* 글로브도 덮는다)
+[ -f "$rdir/.turn-mergetp.$sid" ] && rm -f "$rdir/.turn-mergetp.$sid"
 
 T="$rdir/.turn.$sid"
 # 정리(하루 지난 표시 파일·0.2.0 의 세션 공용 .turn)는 외부 프로그램(find·date·rm)을 띄우므로 표시 처리(go 턴의 닫힌 표시 쓰기,
@@ -119,8 +121,18 @@ if [[ $prompt =~ $re_approve ]]; then
   # JSON 문자열 속 이스케이프를 되돌린다(\n·\r·\t 는 칸 나눔, \" → ", \\ → \)
   a_args=${a_args//\\n/ }; a_args=${a_args//\\r/ }; a_args=${a_args//\\t/ }
   a_args=${a_args//\\\"/\"}; a_args=${a_args//\\\\/\\}
+  # 0.3.7: 훅 입력의 transcript_path(대화 기록 파일 — 공식 공통 입력 칸)를 REFACTOR_TRANSCRIPT_PATH 로 넘긴다(합치기 허락이 경로를 적어 두고
+  #   합치기 스크립트가 확인 도중 사람 입력을 알아챈다). 닫는 따옴표까지 읽혀야 쓰고, \\ → \ · \/ → / 밖의 이스케이프가 있으면 빈 값
+  a_tp=""
+  re_tp='"transcript_path"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+  if [[ $input =~ $re_tp ]]; then
+    a_bs='\'; a_sl='/'; a_one=$'\001'
+    a_tp=${BASH_REMATCH[1]}; a_tp=${a_tp//"$a_bs$a_bs"/$a_one}; a_tp=${a_tp//"$a_bs$a_sl"/$a_sl}
+    case "$a_tp" in *"$a_bs"*) a_tp="" ;; esac
+    a_tp=${a_tp//"$a_one"/$a_bs}
+  fi
   if [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$REFACTOR_ROOT/hooks/run.sh" ]; then
-    a_out=$(printf '%s' "$a_args" | REFACTOR_TURN_SID=$sid bash "$REFACTOR_ROOT/hooks/run.sh" refactor-approve "$proj" --from-hook 2>&1)
+    a_out=$(printf '%s' "$a_args" | REFACTOR_TURN_SID=$sid REFACTOR_TRANSCRIPT_PATH=$a_tp bash "$REFACTOR_ROOT/hooks/run.sh" refactor-approve "$proj" --from-hook 2>&1)
   else
     a_out="⚠️ 승인 스크립트를 찾지 못해 아무것도 바꾸지 않았습니다(REFACTOR_ROOT 없음). 플러그인을 다시 설치해 주세요."
   fi
