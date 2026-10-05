@@ -5399,7 +5399,11 @@ def check_fg_040(res):
         _cases_034(res, proj, "보안 claude 따옴표 리다이렉트 글자", [(B, bash(c)) for c in [
             "claude -p '>' --resume x", 'claude -p ">" -r x', 'claude -p "<" --continue', "claude -p '>>' --from-pr 5", "claude -p > --resume x"]])
         _cases_034(res, proj, "보안 claude 진짜 리다이렉트는 통과", [(OK, bash(c)) for c in [
-            'claude -p "질문" > out.txt', "claude -p hi 2>/dev/null", 'claude -p "요약" < notes.md']])
+            'claude -p "질문" > out.txt', "claude -p hi 2>/dev/null", 'claude -p "요약" < notes.md',
+            'claude -p hi >"$OUT"', 'claude -p hi 2>"$ERR"', 'claude -p "요약" <"$IN"', "claude -p hi &>log.txt", "claude -p hi >>log.txt"]])
+        _cases_034(res, proj, "보안 claude 옵션에 붙인 리다이렉트", [(B, bash(c)) for c in [
+            "claude -p --resume>x", "claude -p>x --resume y", "claude --resume y -p>x", "claude -p --resume>>x", "claude -p -r<f",
+            "claude -c&>x -p", "claude -p -r2>x", "claude --resume x -p>out"]])
         _cases_034(res, proj, "FG2 H2 gh -R 알 수 없는 값 · 읽기는 통과", [(OK, bash(c)) for c in [
             'gh -R "$R" pr view 1', 'gh -R "$R" pr list', "gh -R ${R} run list", "gh -Ro/r pr view 1"]])
         _cases_034(res, proj, "FG F1 gh -R 앞 · 읽기는 통과", [(OK, bash(c)) for c in [

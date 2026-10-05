@@ -5953,7 +5953,7 @@ def check_auto_stage_fail_040(check):
         pwjs = (ROOT / "plugins/refactor/scripts/refactor-auto.sh").read_text(encoding="utf-8")
         check("0.4.0 A9 화면 열기 스크립트: 같은 출처 비GET 요청 route abort · 콘솔 오류 · 스크린샷",
               "o === origin && q.method() !== 'GET' && q.method() !== 'HEAD'" in pwjs and "r.abort()" in pwjs and "page.screenshot" in pwjs
-              and "npx --no-install playwright --version" in pwjs and 'env -i "${PWENV[@]}"' in pwjs, "")
+              and "npx --no-install playwright --version" in pwjs and 'env -i "${PWENV[@]}"' in pwjs and 'npm_config_userconfig="$TD/npmrc-u"' in pwjs and 'npm_config_globalconfig="$TD/npmrc-g"' in pwjs, "")
         # 재검사 A3: 그 최소 환경으로 진짜 npm 이 설정을 읽고 뜨는지(같은 파일을 두 설정에 주면 npm 이 바로 멈춘다) — npm 이 없는 PC 는 건너뜀
         if shutil.which("npx"):
             tdn = pathlib.Path(tempfile.mkdtemp(prefix="npmrc-")); made.append(str(tdn))
