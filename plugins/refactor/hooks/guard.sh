@@ -2931,8 +2931,10 @@ copy_dir_seg() {
     new-item|ni) k=ni ;;
     *) return 0 ;;
   esac
-  local wk=0 rec=0 lnk=0 tt=0 bk=0 sc=$SCMD
+  local wk=0 rec=0 lnk=0 tt=0 bk=0 sc=$SCMD envx=0 j
   case "$SCMD" in copy|move|xcopy|robocopy) wk=1 ;; esac
+  # FC3 H3: 같은 조각에 붙인 대입(TAR_OPTIONS=… tar · env UNZIP=… unzip)은 풀기 옵션을 몰래 더한다 — seg_words 가 명령 앞(SI 전)에 남긴 낱말
+  for ((j = 0; j < SI; j++)); do case "${SW[$j]}" in TAR_OPTIONS=*|UNZIP=*|UNZIPOPT=*) envx=1 ;; esac; done
   case "$SCMD" in robocopy|rsync) rec=1 ;; esac
   shopt -u nocasematch
   copy_dir_seg1 "$k"
@@ -2952,8 +2954,8 @@ cpd_short() {
 # 긴 옵션 이름($1, -- 뗀 = 앞)이 $2 의 줄임인가(--targ → target-directory)
 cpd_long() { [ -n "$1" ] && case "$2" in "$1"*) return 0 ;; esac; return 1; }
 copy_dir_seg1() {
-  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 ab=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=()
-  case "$sc" in cp|mv|ln) vl=tS ;; install) vl=tSmog ;; scp) vl=PiFoclJS ;; rsync) vl=efTBM ;; esac
+  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 ab=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=() tvl=gCTXfFLbHVIKN tq="" o c
+  case "$sc" in cp|mv|ln) vl=tS ;; install) vl=tSmog ;; scp) vl=PiFoclJS ;; rsync) vl=efTBM ;; bsdtar) tvl="${tvl}s" ;; esac
   for ((i = 0; i < ${#SARGS[@]}; i++)); do
     a=${SARGS[$i]}; nx=${SARGS[$((i + 1))]:-}
     if [ "$skip" = 1 ]; then skip=0; continue; fi
@@ -3016,11 +3018,25 @@ copy_dir_seg1() {
           --to-stdout|--to-command*) out=1 ;;
           --directory=*) dirs+=("${a#*=}") ;;
           --directory) dirs+=("$nx"); skip=1 ;;
-          -C) dirs+=("$nx"); skip=1 ;;
-          -C?*) dirs+=("${a#-C}") ;;
           --*) ;;
-          -[A-Za-z]*) case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac ;;
-          *) if [ "$i" -eq 0 ]; then case "$a" in *[!A-Za-z]*) ;; *) case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac ;; esac; fi ;;
+          -[A-Za-z]*)   # FC3 H1·H2: 앞 글자부터 보다가 값 받는 글자에서 멈춘다(-xPfOevil.tar 의 O 는 파일 이름) · C 의 값은 풀 곳
+            cpd_short "$a" "$tvl"
+            case "$OL" in *x*) ext=1 ;; esac; case "$OL" in *O*) out=1 ;; esac; case "$OL" in *P*) ab=1 ;; esac
+            if [ -n "$OC" ]; then
+              if [ "$OVN" = 1 ]; then [ "$OC" = C ] && dirs+=("$nx"); skip=1
+              else [ "$OC" = C ] && dirs+=("$OV"); fi
+            fi ;;
+          *)
+            if [ "$i" -eq 0 ]; then
+              case "$a" in
+                *[!A-Za-z]*) ;;
+                *)   # 옛꼴 첫 낱말(xfC): 글자는 모두 옵션 · 값 받는 글자마다 뒤 위치 인자를 차례로 소비(tq)
+                  case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac
+                  o=$a; while [ -n "$o" ]; do c=${o:0:1}; o=${o:1}; case "$tvl" in *"$c"*) tq="$tq$c" ;; esac; done ;;
+              esac
+            elif [ -n "$tq" ]; then
+              c=${tq:0:1}; tq=${tq:1}; [ "$c" = C ] && dirs+=("$a")
+            fi ;;
         esac ;;
       unzip)
         ext=1
@@ -3062,8 +3078,11 @@ copy_dir_seg1() {
   case "$k" in
     tar|unzip|7z|xa)
       [ "$k" = xa ] && [ "${#dirs[@]}" -eq 0 ] && [ "${#pos[@]}" -ge 2 ] && dirs=("${pos[1]}")
-      [ "$ext" = 1 ] && [ "$out" = 0 ] || return 0
-      [ "$ab" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"
+      [ "$ext" = 1 ] || return 0
+      [ "$ab" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"     # FC3 H1: 절대경로·.. 그대로 풀기는 표준출력 표시와 상관없이
+      # FC3 H3: TAR_OPTIONS·UNZIP·UNZIPOPT 대입이 붙은 풀기(unzip 의 목록 보기 -l·-t·-p 같은 것만 통과 — tar 는 -O 여도 막음)
+      [ "$envx" = 1 ] && { [ "$out" = 0 ] || [ "$k" != unzip ]; } && block "$MSG_UNPACK" "$MSG_HUMAN"
+      [ "$out" = 0 ] || return 0
       [ "${#dirs[@]}" -eq 0 ] && dirs=(.)
       for d in "${dirs[@]}"; do cpd_where "$d"; [ "$CW" != no ] && block "$MSG_UNPACK" "$MSG_HUMAN"; done
       return 0 ;;

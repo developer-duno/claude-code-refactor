@@ -5607,6 +5607,18 @@ def check_copy_dir_040(res):
             "unzip -: /tmp/x.zip -d /tmp/out", "unzip -o -: /tmp/x.zip -d /tmp/out", "7z x /tmp/x.7z -o/tmp/out -spf",
             "tar --abs -xf /tmp/e.tar -C /tmp/out", "tar --ab -xf /tmp/e.tar -C /tmp/out", "tar Pf /tmp/e.tar --extract -C /tmp/out", "bsdtar -x --insecure -f /tmp/e.tar -C /tmp/out"]] +
             [(OK, bash(c)) for c in ["tar -xf /tmp/ok.tar -C /tmp/out", "unzip /tmp/x.zip -d /tmp/out", "tar -tPf /tmp/e.tar", "tar -cPf /tmp/b.tar src", "tar cPf /tmp/b.tar src", "tar tf /tmp/e.tar"]])
+        # FC3(보안 검사 887bf38): H1 tar 묶음은 값 받는 글자에서 멈춤(-xPfOevil.tar 의 O 는 파일 이름) · 절대경로 풀기는 -O 여도 막음 ·
+        #   H2 묶음·옛꼴 안 C 의 값 = 풀 곳 · H3 같은 조각의 TAR_OPTIONS·UNZIP·UNZIPOPT 대입(앞에 붙임·env)
+        fc3_b = ["tar -xPfOevil.tar -C /tmp/out", "tar -xPf x.tar -O", "tar -xPOf x.tar", "tar -xf x.tar -P -O -C /tmp/out", "tar xPf x.tar -C /tmp/out", "tar xPOf x.tar",
+                 "tar -xvC docs/refactor -f x.tar", "tar -xvCdocs/refactor -f x.tar", "tar xfC x.tar docs/refactor", "tar xCf docs x.tar", "tar -xf x.tar -Cdocs",
+                 "tar -xzvf /tmp/x.tgz -Cdocs/refactor", "TAR_OPTIONS=-P tar -xf x.tar -C /tmp/out", "env TAR_OPTIONS=--absolute-names tar -xf x.tar -C /tmp/out",
+                 "UNZIP=-: unzip x.zip -d /tmp/out", "env UNZIPOPT=-: unzip -o x.zip -d /tmp/out", "TAR_OPTIONS='-P -v' bsdtar -xf x.tar -C /tmp/out",
+                 "TAR_OPTIONS=-P tar -xOf x.tar"]
+        fc3_ok = ["tar -xOf x.tar", "tar -xf x.tar -O", "tar -xf /tmp/Pkg.tar -C /tmp/out", "TAR_OPTIONS=-v tar -tf x.tar", "tar -xzvf /tmp/x.tgz -C /tmp/out",
+                  "tar xfC x.tar /tmp/out", "tar -xf x.tar -C vendor", "tar -xvCvendor -f x.tar", "UNZIP=-q unzip -l x.zip", "tar -cPf /tmp/o.tar src",
+                  "tar -xf /tmp/Ox.tar -C /tmp/out", "tar --to-stdout -xf x.tar"]
+        _cases_034(res, proj, "FC3 풀기 막힘", [(B, bash(c)) for c in fc3_b], need=W_ARC)
+        _cases_034(res, proj, "FC3 풀기 통과", [(OK, bash(c)) for c in fc3_ok])
         _cases_034(res, proj, "FC2 통과", [(OK, bash(c)) for c in ["cp -r /tmp/x/other ..", "cp -rT src/a src/b", "mv -b /tmp/notes.md docs/refactor/notes.md",
                                                                   "mv -b /tmp/a.md docs/", "cp -r /tmp/x/src ..", 'gh pr create --body "$(cat /tmp/b.md)"',
                                                                   "npm run dev &", 'cp "a b"/c.txt docs/refactor/', "cp -rT /tmp/x build", "robocopy c:/tmp/x build /E",
