@@ -977,18 +977,25 @@ writes_to() {
   done
   return 1
 }
-# 파이썬·노드 같은 인터프리터 코드가 이 경로에 쓰는가($1 = 경로 정규식). 검사 대상: lr
+# 파이썬·노드 같은 인터프리터 코드가 이 경로에 쓰는가($1 = 경로 정규식). 검사 대상: lr · 0.3.7 G6: 단순 따옴표를 벗기기 전 사본 lr0 도(다를 때만)
 interp_writes() {
-  has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
-  has "$lr" "$1" || return 1
+  iw_one "$lr" "$1" && return 0
+  [ -n "${lr0:-}" ] && [ "$lr0" != "$lr" ] && iw_one "$lr0" "$1"
+}
+iw_one() {
+  has "$1" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
+  has "$1" "$2" || return 1
   # 0.3.5 F7②: open 의 방식 글자에 > 도(perl open(F,">",…) · ">>")
-  has "$lr" "open[(][^)]*['\"][wax+>]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate)|[.]unlink|rmtree|os[.](remove|rename|replace)|shutil[.](move|copy)|set-content|out-file|add-content|[.]replace[(]" || return 1
+  has "$1" "open[(][^)]*['\"][wax+>]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate)|[.]unlink|rmtree|os[.](remove|rename|replace)|shutil[.](move|copy)|set-content|out-file|add-content|[.]replace[(]" || return 1
   return 0
 }
 # 0.3.5 X2: 인터프리터 코드가 플러그인 폴더(.claude/plugins · 지금 플러그인 폴더 plugroot)에 쓰는가. 플러그인 폴더 경로는 글자 그대로의 정규식으로
 #   (구분자 / 와 \ 는 같게 · Windows 의 c:/… 는 Git Bash 꼴 /c/… 도). 인터프리터 낱말이 없으면 경로 정규식을 만들지 않는다(평소 비용 0)
 interp_plug_writes() {
   has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
+  # 0.3.7 G7: 명령이 도는 폴더(cwd)가 플러그인 폴더 안이면 상대경로(open('scripts/…','w'))도 — 쓰기 낱말만으로 막는다(plugroot 가 비면 그 비교는 건너뜀)
+  case "$cwd/" in */.claude/plugins/*) interp_writes '.' && return 0 ;; esac
+  if [ -n "$plugroot" ]; then case "$cwd/" in "$plugroot"/*) interp_writes '.' && return 0 ;; esac; fi
   interp_writes '\.claude[/\\]+plugins' && return 0
   [ -n "$plugroot" ] || return 1
   local p=$plugroot c i re="" alt=""
@@ -1814,15 +1821,30 @@ hv_git() {
   local gseg grest=$t re_gha="gh[[:space:]]+api([[:space:]][^;&|]*)?"
   while [[ $grest =~ $re_gha ]]; do
     gseg=${BASH_REMATCH[0]}; grest=${grest#*"$gseg"}
-    if has "$gseg" "[[:space:]](-X[[:space:]]*|--method([[:space:]]+|=))[\"']?delete([\"'[:space:])]|$)" \
+    # 0.3.7 G2: -H 'X-HTTP-Method-Override: DELETE' 도 DELETE 와 같게
+    if { has "$gseg" "[[:space:]](-X[[:space:]]*|--method([[:space:]]+|=))[\"']?delete([\"'[:space:])]|$)" \
+        || { [[ $gseg =~ $RE_HMO ]] && has "$gseg" "x-http-method-override[[:space:]]*:[[:space:]]*[\"']?delete([\"'[:space:])]|$)"; }; } \
       && has "$gseg" "/git/refs/|[[:space:]][\"']?/?repos/[^/[:space:]\"']+/[^/[:space:]\"']+/?([\"'[:space:])]|$)"; then
       block "$MSG_GHDEL" "사용자에게 명령을 안내하고 사람이 직접 실행하게 하세요."
     fi
   done
   has "$t" "gh[[:space:]]+repo[[:space:]]+delete([[:space:]\"')]|$)" && block "$MSG_GHDEL" "사용자에게 명령을 안내하고 사람이 직접 실행하게 하세요."
+  # 0.3.7 G4: 리팩토링 중에는 저장소 설정 바꾸기(gh repo rename·archive · edit --default-branch·--visibility · sync --force) — 설명·홈페이지·주제 고치기와 조회는 통과
+  if [ "$refactor_on" = 1 ] && [ "${AGENT_MODE:-0}" != 1 ]; then
+    if has "$t" "gh([.]exe)?[[:space:]]+repo[[:space:]]+(rename|archive)([^A-Za-z0-9_-]|$)" \
+      || has "$t" "gh([.]exe)?[[:space:]]+repo[[:space:]]+edit([[:space:]][^;&|]*)?[[:space:]][\"']?(--default-branch|--visibility)([[:space:]=\"')]|$)" \
+      || has "$t" "gh([.]exe)?[[:space:]]+repo[[:space:]]+sync([[:space:]][^;&|]*)?[[:space:]][\"']?--force([[:space:]=\"')]|$)"; then
+      block "$MSG_REPOSET" "$MSG_REPOSET2"
+    fi
+  fi
   return 0
 }
 MSG_GHDEL="원격 가지·저장소 삭제는 사람이 직접 합니다(gh api DELETE 도 같습니다)."
+# 0.3.7 G2: gh api 의 -H/--header 값 X-HTTP-Method-Override: <방식>(따옴표·= 붙임·-iH 묶음 · 대소문자 무시) — BASH_REMATCH[4] = 방식 값
+RE_HMO="[[:space:]][\"']?(-i*h|--header)([[:space:]]+|=)?[\"']?x-http-method-override[[:space:]]*:[[:space:]]*([\"']?)([^[:space:]\"';&|)]*)"
+# 0.3.7 G3·G4: 저장소 설정(기본 가지·이름·보관·공개 여부·가지 보호·강제 동기화·가지 이름 바꾸기)
+MSG_REPOSET="리팩토링 중에는 저장소 설정(기본 가지·이름·공개 여부·가지 보호·강제 동기화)을 바꾸지 않습니다 — 끝난 뒤 사람이 GitHub 화면에서 하세요."
+MSG_REPOSET2="읽기(gh repo view · gh api repos/<주인>/<저장소>)는 됩니다. 꼭 지금 바꿔야 하면 멈추고 사람에게 부탁하세요."
 MSG_GHW="리팩토링 진행 중에는 GitHub API 로 가지·파일을 직접 쓰지 않습니다(PR 없이 합치는 길)."
 MSG_GHW2="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요. 가지·파일 변경은 git 커밋과 /refactor:approve 푸시 로 합니다."
 # 0.3.5 F16: gh api 조각($1)이 읽기가 아닌 요청인가(0 = 쓰기). gh 공식 문서: 방식을 주지 않으면 GET, 필드(-f·-F·--field·--raw-field)가 있으면 POST ·
@@ -1830,6 +1852,12 @@ MSG_GHW2="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력
 #   방식이 없으면 필드나 --input 이 있을 때 쓰기. 짧은 옵션 묶음은 gh api 의 켜기 옵션 -i 하나뿐이라 -iX·-if 까지 본다
 gha_write() {
   local s=$1 m any=0 re_m="[[:space:]][\"']?(-i*x[[:space:]]*=?|--method([[:space:]]+|=))[\"']?([^[:space:]\"';&|)]*)"
+  # 0.3.7 G2: -H/--header 의 X-HTTP-Method-Override 값이 GET 이 아니면(빈 값·변수 포함) 쓰기 — 방식 옵션이 GET 이어도
+  while [[ $s =~ $RE_HMO ]]; do
+    m=${BASH_REMATCH[4]}; s=${s#*"${BASH_REMATCH[0]}"}
+    case "$m" in [Gg][Ee][Tt]) ;; *) return 0 ;; esac
+  done
+  s=$1
   while [[ $s =~ $re_m ]]; do
     any=1; m=${BASH_REMATCH[3]}; s=${s#*"${BASH_REMATCH[0]}"}
     case "$m" in [Gg][Ee][Tt]) ;; *) return 0 ;; esac
@@ -1907,7 +1935,9 @@ hv_deploy() {
   local t=$1 r=${2:-$1} remote_db=0
   # 0.3.4 F4: 하위명령 낱말 뒤 경계 = 영문·숫자가 아닌 글자 또는 끝 — 글자가 이어지는 낱말(upgrade·deployments·reloadLogs)만 풀리고
   #   :·-·=·, 가 붙은 꼴(wrangler secret:put · railway up:x)은 막힌다. vercel aliases 는 alias 와 같이
-  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
+  #   0.3.7 G1: heroku rollback·releases:rollback·pg:reset · netlify rollback·sites:delete(같은 경계 — heroku releases·releases:info·restart 는 통과)
+  #   보완(검사 A#7): heroku apps:destroy(netlify sites:delete 와 같은 성격 — apps:info 는 통과)
+  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|netlify[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
   local re_pkg_deploy="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?([a-z0-9_-]+:)?(deploy|release|publish|ship)([[:space:]:]|$)"
   if has "$t" "$re_deploy" || has "$t" "$re_pkg_deploy"; then
     # 0.3.4 §10-5: PR 합치기(gh pr merge)가 걸렸을 때만 입력창 명령을 안내한다(합치기는 승인 스크립트가 검사 뒤 직접 한다)
@@ -1930,6 +1960,14 @@ hv_deploy() {
     mn=$mseg; while [[ $mn == *"$d2"* ]]; do mn=${mn//"$d2"/$d1}; done
     if has "$mn" "pulls/[^/[:space:]]*/merge([^A-Za-z0-9_]|$)|/merges([^A-Za-z0-9_]|$)|mergepullrequest|enablepullrequestautomerge|mergebranch|enqueuepullrequest|updateref|createcommitonbranch|deleteref"; then
       block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요. 합쳐졌는지 보려면 gh pr view <번호> --json state,mergedAt 를 쓰세요."
+    fi
+    # 0.3.7 G3: 저장소 설정 쓰기 — 저장소 뿌리(repos/<주인>/<저장소> 뒤가 ? · 공백 · 따옴표 · 끝: 기본 가지·이름·보관·공개 여부) ·
+    #   가지 이름 바꾸기(/branches/<가지>/rename) · 가지 보호(/branches/<가지>/protection(/…)) · 강제 동기화(/merge-upstream). 읽기(GET)는 통과
+    #   보완(검사 C#4·A#7): 이웃 꼴 — 저장소 규칙 묶음(/rulesets(/<번호>) — 지금 GitHub 가 권하는 가지 보호) · 소유권 넘기기(/transfer) ·
+    #   번호로 부르는 저장소 뿌리(repositories/<번호>)
+    if has "$mn" "[[:space:]][\"']?/?repos/[^/[:space:]\"']+/[^/[:space:]\"'?]+/?([?\"'[:space:])]|$)|[[:space:]][\"']?/?repositories/[0-9]+/?([?\"'[:space:])]|$)|/branches/[^[:space:]\"']+/(rename|protection)([/?\"'[:space:])]|$)|/merge-upstream([?\"'[:space:])]|$)|/rulesets(/[0-9]+)?/?([?\"'[:space:])]|$)|/transfer([?\"'[:space:])]|$)" \
+      && gha_write "$mn"; then
+      block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
     if has "$mn" "/git/refs([/\"'[:space:]?)]|$)|/contents([/\"'[:space:]?)]|$)" && gha_write "$mn"; then
       block "$MSG_GHW" "$MSG_GHW2"
@@ -2729,10 +2767,15 @@ ps_getenv_sens() {
   return 1
 }
 # 읽기 전용 단계: 인터프리터 코드가 프로젝트 안(docs/refactor 밖) 파일에 쓰는가(쓰는 경로를 알 수 없으면 쓰는 것으로 본다)
+#   0.3.7 G6: 단순 따옴표를 벗기기 전 사본 lr0 도(다를 때만 — 히어독 본문의 open('src/x.py','w'))
 interp_writes_proj() {
-  has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
-  has "$lr" "open[(][^)]*['\"][wax+>]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate|mkdir)|[.]unlink|rmtree|os[.](remove|rename|replace|makedirs|mkdir)|shutil[.](move|copy)|set-content|out-file|add-content" || return 1
-  local rest=$lr re_lit="[\"']([^\"'[:space:]]*[/.][^\"'[:space:]]*)[\"']" lit any=0
+  iwp_one "$lr" && return 0
+  [ -n "${lr0:-}" ] && [ "$lr0" != "$lr" ] && iwp_one "$lr0"
+}
+iwp_one() {
+  has "$1" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
+  has "$1" "open[(][^)]*['\"][wax+>]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate|mkdir)|[.]unlink|rmtree|os[.](remove|rename|replace|makedirs|mkdir)|shutil[.](move|copy)|set-content|out-file|add-content" || return 1
+  local rest=$1 re_lit="[\"']([^\"'[:space:]]*[/.][^\"'[:space:]]*)[\"']" lit any=0
   while [[ $rest =~ $re_lit ]]; do
     lit=${BASH_REMATCH[1]}; rest=${rest#*"${BASH_REMATCH[0]}"}
     case "$lit" in *'$'*|*'{'*|*'%'*) continue ;; esac
@@ -3363,6 +3406,8 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   if [ -n "$lxs" ]; then lrs=$LRS; mk_lq "$lrs"; lqs=$LQ; fi
 
   # lq·lx 를 만든 뒤에는 나머지 판정용 lr 도 단순 따옴표 인자를 벗긴다('node' -e … · cat '.env' 도 같은 명령으로)
+  #   0.3.7 G6: 벗기기 전 사본 lr0 — 히어독 본문의 open('…','w') 는 벗기면 open(…,w) 가 되어 쓰기 낱말 판정을 비껴간다(interp_writes 가 둘 다 본다)
+  lr0=$lr
   unquote_simple "$lr"; lr=$UQ
   # 판정용 변형(mk_variant: $'…' 풀기·단어 가운데 빈 변수·{a,b} 펼치기·역슬래시 풀기)을 원형 뒤에 덧붙여 같이 본다
   # (git re\set · git re${x}set · cat .e$'\x6e'v · --from{-hook,}). 원형은 그대로(윈도우 경로 C:\… 판정). popd = cd 기준 폴더 되돌리기
@@ -3392,7 +3437,8 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ -n "$hv" ] && hv_human "$hv" "$hv"
   [ -n "$hvz" ] && hv_human "$hvz" "$hvz"
   # 0.3.5: 합치기 스크립트 판정을 먼저 — 승인 이름 정규식(run.sh 뒤 24글자 안의 turn·guard…)이 경로 글자(예: /tmp/guardtest-…)에 걸려 안내 문구가 바뀌지 않게(둘 다 막음)
-  [ "$MOK" != 1 ] && interp_approve "$lr" 'refactor-merge' && merge_block
+  #   0.3.7 G5: 승인 스크립트 낱말(refactor-approve)도 보이면 합치기 안내 대신 아래 승인 문구로(허락이 살아 있을 때 합치기 명령을 다시 권하지 않게)
+  [ "$MOK" != 1 ] && ! has "$lr" 'refactor-approve' && interp_approve "$lr" 'refactor-merge' && merge_block
   interp_approve "$lr" && block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"
   if writes_to '(docs/refactor/)?\.allow-[a-z-]+|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/' || interp_writes '\.allow-|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/'; then
     block "허용 파일(.allow-*)·승인 기록(APPROVALS.log)·.turn 은 사람과 플러그인만 만들고 지웁니다." "$MSG_HUMAN"

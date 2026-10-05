@@ -564,13 +564,13 @@ rl_abl_hit() {
 # 보호된 파일(커밋된 기준선·마이그레이션) 중 커밋 안 된 변경 목록: "<상태 두 글자> <경로>\t<내용 지문>" 줄들
 #   -z 로 받아 한글·공백 파일 이름도 따옴표·\ 이스케이프 없이 그대로 쓴다(이름 바꾸기는 새 경로만)
 rl_protected_dirty() {
-  local proj=$1 rdir=$2 ent xy path old keep h specs=() abl=NONE ablp="" ablo="" abld="" pfx="" rp dl rest dids did subj
+  local proj=$1 rdir=$2 ent xy path old keep h specs=() abl=NONE ablp="" ablo="" abld="" pfx="" pfxd=0 rp dl rest dids did subj lgd=0 lgs="" lga="" lgl lgx lgr lgh since lgc=()
   command -v git >/dev/null 2>&1 || return 0
   # 기준선 허용 파일: 공백만(ALL)이면 기준선을 통째로 빼고, 단계 ID 가 적혀 있으면 그 중 승인된 카드(완료 포함)에 적힌 파일만 뺀다(0.3.2)
   #   (허용 파일이 남아 있는 동안 — 같은 턴에 카드 파일을 고치고 완료 표시를 해도 헛경보하지 않게. turn.sh 가 지우면 원래대로)
   #   단, 완료 카드에만 속한 경로는 그 카드가 이미 커밋됐으면 빼지 않는다(0.3.5 #1 — 이어서 실행 중 뒤 단계가 앞 단계의 커밋된 기준선을
-  #   다시 바꾸면 알림). 커밋됨 = 그 경로를 적은 완료 카드 전부에 제목이 "refactor: <ID> " 로 시작하는 커밋이 있음(7-execute 의 커밋 메시지 규칙)
-  #   그리고 그 경로를 마지막으로 바꾼 커밋의 제목이 그 카드 중 하나의 것(아래 ①·②)
+  #   다시 바꾸면 알림). 커밋됨 = 그 경로를 적은 완료 카드 전부에 이번 묶음 안에서 제목이 "refactor: <ID> " 로 시작하는 커밋이 있음
+  #   (7-execute 의 커밋 메시지 규칙 · 이번 묶음 = 아래 0.3.7 #6)
   #   git 은 저장소 루트 기준 경로를 내므로, 프로젝트가 저장소 하위 폴더면 그 접두를 떼고 카드 경로(프로젝트 기준)와 맞춘다
   if [ -f "$rdir/.allow-baseline-edit" ]; then
     abl=$(rl_allow_baseline "$rdir" split)
@@ -581,7 +581,7 @@ rl_protected_dirty() {
       dl=${rest%%"$RL_NL"*}; rest=${rest#*"$RL_NL"}
       case "$dl" in O"$RL_TAB"*) ablo="$ablo${dl#O"$RL_TAB"}$RL_NL" ;; D"$RL_TAB"*) abld="$abld${dl#D"$RL_TAB"}$RL_NL" ;; esac
     done
-    [ -n "$ablo$abld" ] && pfx=$(git -C "$proj" rev-parse --show-prefix 2>/dev/null)
+    [ -n "$ablo$abld" ] && { pfx=$(git -C "$proj" rev-parse --show-prefix 2>/dev/null); pfxd=1; }
   fi
   [ "$abl" = ALL ] || specs+=('*baseline/*')
   [ -f "$rdir/.allow-migration-edit" ] || specs+=('*supabase/migrations/*' '*prisma/migrations/*' '*alembic/versions/*' '*db/migrate/*' '*database/migrations/*' 'migrations/*' '*/migrations/*' 'drizzle/*.sql' 'drizzle/meta/*')
@@ -612,31 +612,71 @@ rl_protected_dirty() {
             dl=${rest%%"$RL_NL"*}; rest=${rest#*"$RL_NL"}
             [ "${dl#*"$RL_TAB"}" = "$rp" ] && dids="$dids ${dl%%"$RL_TAB"*}"
           done
-          # 완료 카드에만 속한 경로일 때만 git 을 더 부른다(평소 비용 0 · 완료 카드 ID 마다 1회 + 경로 1회): 둘 다 맞을 때만 남기고(알림),
-          #   아니면 뺀다(조용).
-          #   ① 그 경로를 가진 완료 카드 **전부**가 자기 커밋(제목이 "refactor: <ID> " 로 시작 — 경로 무관)을 가짐(0.3.5 보완 F3 — 같은 기준선을
-          #      적은 뒤 카드가 완료 표시 ~ 커밋 사이면 조용)
-          #   ② 그 경로를 마지막으로 바꾼 커밋의 제목이 그 완료 카드 중 하나의 "refactor: <ID> " 로 시작(0.3.5 #1 1차 조건 — 재검사 A2·C2 🟠:
-          #      ① 만으로는 기록 전체를 보므로 되돌린 옛 커밋·지난 묶음의 같은 ID 커밋이 있으면 커밋 전에도 알렸다)
-          #   한계: 앞 단계 커밋이 이 파일을 안 건드렸으면 ② 가 맞지 않아 조용(1차와 같음)
+          # 완료 카드에만 속한 경로일 때만 git 을 더 부른다(평소 비용 0 · 완료 카드 ID 마다 1회): 그 경로를 가진 완료 카드 **전부**가
+          #   이번 묶음 안에 자기 커밋(제목이 "refactor: <ID> " 로 시작 — 경로 무관)을 가졌으면 남기고(알림), 아니면 뺀다(조용 — 0.3.5 보완 F3:
+          #   같은 기준선을 적은 뒤 카드가 완료 표시 ~ 커밋 사이면 조용).
+          #   이번 묶음 = 승인 기록의 마지막 "새 가지 | … @<sha>" 줄이 있으면 <sha>..HEAD, 그 카드의 마지막 "승인 | <ID>" 줄 시각이 있으면 그 뒤
+          #   (0.3.7 #6 — 기록 전체를 보면 지난 묶음·되돌린 실행의 같은 ID 커밋 때문에 커밋 전에도 헛알림이 났다). 기록 시각은 KST(rl_now)라
+          #   git 에는 +0900 을 붙여 넘긴다(git 은 시간대가 없는 시각을 그 PC 의 TZ 로 읽는다 — CI·다른 시간대 PC). 둘 다 없으면 기록 전체.
+          #   0.3.5 의 ②(그 경로를 마지막으로 바꾼 커밋의 제목)는 뺐다(0.3.7 #7) — 앞 단계 커밋이 안 건드린 기준선이 완료 뒤 바뀌어도 알린다.
+          #   git 호출은 완료 카드 ID 마다 log 1회(카드 커밋과 revert 를 함께 읽음)
           if [ -n "$dids" ]; then
+            if [ "$lgd" = 0 ]; then   # 승인 기록은 한 번만 읽는다(git 호출 0)
+              lgd=1
+              if [ -f "$rdir/APPROVALS.log" ]; then
+                while IFS= read -r lgl || [ -n "$lgl" ]; do
+                  lgl=${lgl%$'\r'}
+                  case "${lgl:0:16}" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]" "[0-9][0-9]:[0-9][0-9]) ;; *) continue ;; esac
+                  lgx=${lgl:16}
+                  case "$lgx" in
+                    " KST | 승인 | "*) lgx=${lgx#" KST | 승인 | "}; lga="$lga${lgx%%" | "*}$RL_TAB${lgl:0:16}$RL_NL" ;;
+                    " KST | 새 가지 | "*)
+                      lgx=${lgx#" KST | 새 가지 | "}; lgx=${lgx%%" | "*}; lgx=${lgx##*@}; lgs=""
+                      case "$lgx" in *[!0-9a-f]*) ;; ????*) lgs=$lgx ;; esac ;;
+                  esac
+                done < "$rdir/APPROVALS.log"
+              fi
+            fi
             keep=1
             for did in $dids; do
-              subj=$(git --no-replace-objects -c core.fsmonitor=false -c log.showSignature=false -c log.follow=false -c grep.patternType=basic -C "$proj" log -1 --format=%H --grep="^refactor: $did " 2>/dev/null)
+              since=""; rest=$lga
+              while [ -n "$rest" ]; do
+                dl=${rest%%"$RL_NL"*}; rest=${rest#*"$RL_NL"}
+                [ "${dl%%"$RL_TAB"*}" = "$did" ] && since=${dl#*"$RL_TAB"}
+              done
+              # 같은 호출로 그 범위의 revert 도 읽는다: 본문에 "This reverts commit <해시>" 가 있으면 그 카드 커밋은 되돌려짐 = 커밋 안 됨
+              #   (0.3.7 — README 의 되돌리는 길 "git revert → 다시 실행" 에서 완료 표시 ~ 커밋 사이 헛알림이 나지 않게).
+              #   한계: 되돌린 것을 다시 되돌리면(Reapply) 그 카드 커밋은 여전히 되돌려진 것으로 보여 다음 커밋까지 알림이 늦을 수 있다
+              #   범위를 넣은 git log 가 실패하면(새 가지 줄의 sha 가 저장소에 없음·모호 — 보완 A#4) 범위 없이 다시 부른다(놓치는 쪽 → 알리는 쪽)
+              lgc=(git --no-replace-objects -c core.fsmonitor=false -c log.showSignature=false -c log.follow=false -c grep.patternType=basic -C "$proj" log --format='%H%x01%s%x01%b%x02' --grep="^refactor: $did " --grep='^This reverts commit ' ${since:+"--since=$since +0900"})
+              lgx=$("${lgc[@]}" ${lgs:+"$lgs..HEAD"} 2>/dev/null) || { [ -n "$lgs" ] && lgx=$("${lgc[@]}" 2>/dev/null); }
+              subj=""; lgr=" "; lgh=""
+              while [ -n "$lgx" ]; do
+                lgl=${lgx%%$'\x02'*}
+                case "$lgx" in *$'\x02'*) lgx=${lgx#*$'\x02'} ;; *) lgx="" ;; esac
+                lgl=${lgl#"$RL_NL"}
+                case "$lgl" in *$'\x01'*$'\x01'*) ;; *) continue ;; esac
+                dl=${lgl#*$'\x01'}
+                case "${dl%%$'\x01'*}" in "refactor: $did "*) lgh="$lgh ${lgl%%$'\x01'*}" ;; esac
+                dl=${dl#*$'\x01'}
+                while :; do
+                  case "$dl" in *"This reverts commit "*) dl=${dl#*"This reverts commit "}; lgr="$lgr${dl:0:40} " ;; *) break ;; esac
+                done
+              done
+              for dl in $lgh; do case "$lgr" in *" $dl "*) ;; *) subj=$dl; break ;; esac; done
               [ -n "$subj" ] || { keep=0; break; }
             done
-            if [ "$keep" = 1 ]; then
-              keep=0
-              subj=$(git --no-replace-objects -c core.fsmonitor=false -c log.showSignature=false -c log.follow=false -c grep.patternType=basic -C "$proj" log -1 --format=%s -- ":(top,literal)$path" 2>/dev/null)
-              for did in $dids; do case "$subj" in "refactor: $did "*) keep=1 ;; esac; done
-            fi
           fi
         fi
       fi
     fi
     if [ ! -f "$rdir/.allow-migration-edit" ] && [[ $path =~ $re_mig ]]; then keep=1; fi
     [ "$keep" = 1 ] || continue
-    if [ -f "$proj/$path" ]; then h=$(git -C "$proj" hash-object -- "$path" 2>/dev/null); else h=gone; fi
+    # 지문은 프로젝트 기준 경로로(0.3.7 #8 — git status 는 저장소 루트 기준이라 하위 폴더 프로젝트에서 늘 gone 이었다). 접두는 목록에 남는 줄이
+    #   처음 나올 때 한 번만 구한다(목록이 비면 git 호출 0 추가). 출력 칸의 경로는 그대로 저장소 기준(턴 시작 스냅숏과 같은 꼴)
+    [ "$pfxd" = 1 ] || { pfx=$(git -C "$proj" rev-parse --show-prefix 2>/dev/null); pfxd=1; }
+    rp=${path#"$pfx"}
+    if [ -f "$proj/$rp" ]; then h=$(git -C "$proj" hash-object -- "$rp" 2>/dev/null); else h=gone; fi
     printf '%s %s\t%s\n' "$xy" "$path" "${h:-?}"
   done < <(git -C "$proj" -c core.quotePath=false status --porcelain -z --untracked-files=no -- "${specs[@]}" 2>/dev/null)
 }
