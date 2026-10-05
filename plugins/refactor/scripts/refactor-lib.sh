@@ -564,7 +564,7 @@ rl_abl_hit() {
 # 보호된 파일(커밋된 기준선·마이그레이션) 중 커밋 안 된 변경 목록: "<상태 두 글자> <경로>\t<내용 지문>" 줄들
 #   -z 로 받아 한글·공백 파일 이름도 따옴표·\ 이스케이프 없이 그대로 쓴다(이름 바꾸기는 새 경로만)
 rl_protected_dirty() {
-  local proj=$1 rdir=$2 ent xy path old keep h specs=() abl=NONE ablp="" ablo="" abld="" pfx="" pfxd=0 rp dl rest dids did subj lgd=0 lgs="" lga="" lgl lgx lgr lgh since
+  local proj=$1 rdir=$2 ent xy path old keep h specs=() abl=NONE ablp="" ablo="" abld="" pfx="" pfxd=0 rp dl rest dids did subj lgd=0 lgs="" lga="" lgl lgx lgr lgh since lgc=()
   command -v git >/dev/null 2>&1 || return 0
   # 기준선 허용 파일: 공백만(ALL)이면 기준선을 통째로 빼고, 단계 ID 가 적혀 있으면 그 중 승인된 카드(완료 포함)에 적힌 파일만 뺀다(0.3.2)
   #   (허용 파일이 남아 있는 동안 — 같은 턴에 카드 파일을 고치고 완료 표시를 해도 헛경보하지 않게. turn.sh 가 지우면 원래대로)
@@ -647,7 +647,9 @@ rl_protected_dirty() {
               # 같은 호출로 그 범위의 revert 도 읽는다: 본문에 "This reverts commit <해시>" 가 있으면 그 카드 커밋은 되돌려짐 = 커밋 안 됨
               #   (0.3.7 — README 의 되돌리는 길 "git revert → 다시 실행" 에서 완료 표시 ~ 커밋 사이 헛알림이 나지 않게).
               #   한계: 되돌린 것을 다시 되돌리면(Reapply) 그 카드 커밋은 여전히 되돌려진 것으로 보여 다음 커밋까지 알림이 늦을 수 있다
-              lgx=$(git --no-replace-objects -c core.fsmonitor=false -c log.showSignature=false -c log.follow=false -c grep.patternType=basic -C "$proj" log --format='%H%x01%s%x01%b%x02' --grep="^refactor: $did " --grep='^This reverts commit ' ${since:+"--since=$since +0900"} ${lgs:+"$lgs..HEAD"} 2>/dev/null)
+              #   범위를 넣은 git log 가 실패하면(새 가지 줄의 sha 가 저장소에 없음·모호 — 보완 A#4) 범위 없이 다시 부른다(놓치는 쪽 → 알리는 쪽)
+              lgc=(git --no-replace-objects -c core.fsmonitor=false -c log.showSignature=false -c log.follow=false -c grep.patternType=basic -C "$proj" log --format='%H%x01%s%x01%b%x02' --grep="^refactor: $did " --grep='^This reverts commit ' ${since:+"--since=$since +0900"})
+              lgx=$("${lgc[@]}" ${lgs:+"$lgs..HEAD"} 2>/dev/null) || { [ -n "$lgs" ] && lgx=$("${lgc[@]}" 2>/dev/null); }
               subj=""; lgr=" "; lgh=""
               while [ -n "$lgx" ]; do
                 lgl=${lgx%%$'\x02'*}

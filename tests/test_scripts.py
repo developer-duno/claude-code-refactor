@@ -2276,6 +2276,27 @@ def check_baseline_committed_035(check):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    # 0.3.7 보완 F14(검사 A#4): 승인 기록의 "새 가지 | … @<sha>" 의 sha 가 저장소에 없거나(다른 복제·gc) 짧아서 못 찾으면 범위를 넣은 git log 가 실패한다 —
+    #   조용히 넘기지 않고 범위 없이 다시 불러, 커밋된 앞 단계 기준선을 다시 바꾸면 알린다(놓치는 쪽 → 알리는 쪽)
+    for name, sha in (("저장소에 없는 sha deadbee", "deadbee"), ("못 찾는 짧은 sha 0000", "0000")):
+        d = mk("P1-1 P1-2")
+        try:
+            logp = d / "docs/refactor/APPROVALS.log"
+            logp.write_bytes(logp.read_bytes() + f"2026-10-05 09:00 KST | 새 가지 | feat/next <- origin/main@{sha} | - | 사용자가 /refactor:approve 로 실행\n".encode("utf-8"))
+            _lib033(d, 'rl_log_seal "$R"')
+            hook("turn", d, {"session_id": "s1", "prompt": "/refactor:go"})
+            lf(d / M, "P1-1 이 고침\n")
+            _done033(d, "P1-1")
+            _git034(d, "add", "--", M)
+            _git034(d, "commit", "-qm", "refactor: P1-1 금액 계산")
+            r_commit = pc(d)
+            lf(d / M, "다음 단계가 셸로 바꿈\n")
+            r_last = pc(d)
+            check(f"0.3.7 보완 F14 새 가지 줄 {name} → 범위 없이 다시 찾음: 커밋 뒤 조용 · 그 기준선을 다시 바꾸면 알림",
+                  r_commit[0] == 0 and r_last[0] == 2 and M in r_last[1], f"{r_commit} {r_last}")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     # git 호출 수: 완료 카드에만 속한 경로가 변경 목록에 없으면 git log 를 부르지 않는다 · 있으면 완료 카드 ID 마다 1회(커밋 전이면 거기서 멈춤)
     d = mk("P1-1 P1-2")
     try:
@@ -3325,11 +3346,18 @@ def check_merge_grant_035(check):
     made = []
     fgs = []
     TAIL = "합치기 허락을 만들지 않았습니다"
+    # 0.3.7 보완 F5: H10 은 입력 감시를 켠 허락(대화 기록 경로가 있는 파일) 꼴 기준 — 가짜 대화 기록 파일
+    tpj = pathlib.Path(tempfile.mkdtemp(prefix="tp035-")) / "t.jsonl"
+    made.append(str(tpj.parent))
+    tpj.write_bytes(b"{}\n")
 
-    def ap(d, args, sid="s1", from_hook=True, path=None):
+    def ap(d, args, sid="s1", from_hook=True, path=None, tp=None):
         fg = _fake035(made)
         fgs.append(fg)
-        out, _ = _ap034(d, args, from_hook=from_hook, extra_env={"REFACTOR_TURN_SID": sid},
+        ee = {"REFACTOR_TURN_SID": sid}
+        if tp is not None:
+            ee["REFACTOR_TRANSCRIPT_PATH"] = str(tp)
+        out, _ = _ap034(d, args, from_hook=from_hook, extra_env=ee,
                         path=path if path is not None else str(fg) + os.pathsep + env()["PATH"])
         return out
 
@@ -3344,7 +3372,7 @@ def check_merge_grant_035(check):
         _gf035(d, sid).unlink(missing_ok=True)
         hoid = g(d, "rev-parse", "HEAD")
         n0 = _log033(d).count("\n")
-        out = ap(d, args, sid=sid)
+        out = ap(d, args, sid=sid, tp=tpj)
         raw = _gf035(d, sid).read_bytes() if _gf035(d, sid).exists() else b""
         ln = raw.decode("utf-8").split("\n")
         ok = (b"\r" not in raw and len(ln) == 4 and ln[3] == "" and ln[0] == f"merge {br} {pr} {mth} {hoid}" and ln[1].isdigit()
@@ -3961,13 +3989,14 @@ def check_merge_script_035(check):
         fresh()
         case("R1 느린 조회 · 확인 조회가 도는 중 → 창 규칙(창 밖) → 3 · 조회 2", d, F(view_delay=3, view_seq=[dict(), dict(statusCheckRollup=PEND)]),
              "⏳ PR #68 의 자동 검사가 아직 도는 중입니다(build)", 3, True, n=(2, 0, 0), tail="again", extra_env=SLOW)
-        # 0.3.7 D2: 창 확인 면제는 한 호출에 한 번뿐 — 초록 → 도는 중 → 초록(창 10초 · 간격 1초 · 조회 3초): 둘째 조회(≈7초)는 창 안이라 기다리고,
-        #   셋째 조회(≈11초)에서 다시 처음 본 초록이지만 면제를 이미 썼고 창 밖이라 합치지 않고 3. 면제를 매번 주면 넷째 조회 뒤 합쳐 버린다
+        # 0.3.7 D2: 창 확인 면제는 한 호출에 한 번뿐 — 초록 → 도는 중 → 초록(창 15초 · 간격 1초 · 조회 4초): 둘째 조회(≈9초 — +1 = 10 < 15)는 창 안이라 기다리고,
+        #   셋째 조회(≈14초 — +1 = 15)에서 다시 처음 본 초록이지만 면제를 이미 썼고 창 밖이라 합치지 않고 3. 면제를 매번 주면 넷째 조회 뒤 합쳐 버린다.
+        #   보완 F7(검사 C#7): 기동·조회가 느려도 갈리게 둘째 조회 뒤 여유 5초(창 10·조회 3 은 여유 2초였다). 셋째 조회 쪽은 느릴수록 더 창 밖이라 여유가 필요 없다
         fresh()
-        case("D2 면제 한 번: 초록 → 도는 중 → 초록(창 10초 · 간격 1초 · 조회 3초) → 3 '한 번 더 확인하려고' · 조회 3", d,
-             F(view_delay=3, view_seq=[dict(), dict(statusCheckRollup=PEND), dict(), dict()]),
+        case("D2 면제 한 번: 초록 → 도는 중 → 초록(창 15초 · 간격 1초 · 조회 4초) → 3 '한 번 더 확인하려고' · 조회 3", d,
+             F(view_delay=4, view_seq=[dict(), dict(statusCheckRollup=PEND), dict(), dict()]),
              "⏳ 자동 검사가 모두 초록입니다 — 한 번 더 확인하려고", 3, True, n=(3, 0, 0), tail="again",
-             extra_env={"REFACTOR_MERGE_WINDOW": "10", "REFACTOR_MERGE_INTERVAL": "1", "REFACTOR_MERGE_VIEW_LIMIT": "5"})
+             extra_env={"REFACTOR_MERGE_WINDOW": "15", "REFACTOR_MERGE_INTERVAL": "1", "REFACTOR_MERGE_VIEW_LIMIT": "7"})
         fresh()
         case("F2 2회차에 검사 실패 → 거절", d, F(view_seq=[dict(statusCheckRollup=[L, T]), dict(statusCheckRollup=[L, CR("test", co="FAILURE")])]),
              "⛔ PR #68 의 자동 검사 실패(test)", 1, False, n=(2, 0, 0), tail="ref")
@@ -4058,10 +4087,16 @@ def check_merge_script_035(check):
             shutil.rmtree(m, ignore_errors=True)
 
 
-_STOP037 = "⛔ 사용자 입력이 있어 허락이 끝났습니다 — 합치지 않았습니다. 다시 합치려면 /refactor:approve 합치기 를 다시 입력하세요."
+_STOP037 = "⛔ 새 입력이 들어와 허락이 끝났습니다(사용자 입력 또는 자동 입력) — 합치지 않았습니다. 다시 합치려면 /refactor:approve 합치기 를 다시 입력하세요."
+# 30분 경고 두 꼴(0.3.7 보완 F5): 입력 감시를 켠 허락(경로 파일 만듦) / 못 켠 허락(0.3.6 문구 그대로)
+_WARN037_ON = ("   ⚠️ 허락한 뒤 최대 30분 사이에는 사람이 보고 있지 않아도 조건이 맞으면 합쳐지고 운영 배포가 시작될 수 있습니다 — 멈추려면 아무 말이나 입력하세요 — "
+               "입력하면 몇 초 안에 허락이 끝납니다(대화 기록을 못 볼 때는 지금 도는 확인 한 번이 끝난 뒤, 최대 약 2분 뒤). Claude 가 실행 중이면 Esc 로도 멈춥니다.")
+_WARN037_OFF = ("   ⚠️ 허락한 뒤 최대 30분 사이에는 사람이 보고 있지 않아도 조건이 맞으면 합쳐지고 운영 배포가 시작될 수 있습니다 — 멈추려면 아무 말이나 입력하세요 — "
+                "Claude 가 실행 중이면 먼저 Esc 를 누르세요(Esc 없이 입력만 하면 지금 도는 확인 한 번이 끝난 뒤, 최대 약 2분 뒤에 허락이 끝납니다).")
 # 대화 기록(jsonl) 줄 꼴 — 이 PC 의 실제 파일에서 본 그대로(2026-10-05): 사람이 친 줄 = enqueue 에 content 칸 없음 · 알림 줄 = content 가 < 로 시작
-_HUMAN037 = b'{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-05T01:47:16.100Z","sessionId":"s1"}\n'
-_NOTIF037 = (b'{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-05T01:57:51.630Z","sessionId":"s1","content":"<task-notification>\\n<task-id>b1</task-id>\\n</task-notification>"}\n'
+#   보완 G2: 사람 줄의 시각은 허락 시각(경로 파일 3번째 줄 = 시험을 돌리는 지금)보다 늘 뒤여야 하므로 먼 미래 날짜(꼴은 실제 그대로)
+_HUMAN037 = b'{"type":"queue-operation","operation":"enqueue","timestamp":"2099-12-31T23:59:59.100Z","sessionId":"s1"}\n'
+_NOTIF037 = (b'{"type":"queue-operation","operation":"enqueue","timestamp":"2099-12-31T23:59:59.200Z","sessionId":"s1","content":"<task-notification>\\n<task-id>b1</task-id>\\n</task-notification>"}\n'
              b'{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-05T01:57:52.000Z","sessionId":"s1","content":"<system-reminder>x</system-reminder>"}\n'
              b'{"type":"queue-operation","operation":"remove","timestamp":"2026-10-05T01:57:53.000Z","sessionId":"s1","content":"<task-notification>\\n<task-id>b1</task-id>\\n</task-notification>"}\n'
              b'{"type":"queue-operation","operation":"remove","timestamp":"2026-10-05T01:57:54.000Z","sessionId":"s1"}\n'
@@ -4101,16 +4136,29 @@ def check_merge_watch_037(check):
             check(f"0.3.7 K4 {name}", ok, f"rc={r} 호출={k} 허락={_gf035(d).exists()} 경로 파일={tpf.exists()} {secs:.1f}초\n{out}")
             return out, secs
 
-        # ⓕ 승인 스크립트: 경로가 있는 파일이면 .turn-mergetp.s1 한 줄 · 허락 파일은 정확히 3줄 그대로
+        # ⓕ 승인 스크립트: 경로가 있는 파일이면 .turn-mergetp.s1 = 경로 + 허락하는 순간의 크기(보완 F1) + 허락 시각 UTC 초(보완 G1) · 허락 파일은 정확히 3줄 그대로
+        def tp3(path, size):
+            """경로 파일이 정확히 세 줄(경로 · 크기 · UTC 초 YYYY-MM-DDTHH:MM:SS — 지금 UTC 와 ±5초)인가"""
+            import datetime
+            if not tpf.exists():
+                return False
+            ls = tpf.read_bytes().split(b"\n")
+            if len(ls) != 4 or ls[3] != b"" or ls[0] != str(path).encode("utf-8") or ls[1] != str(size).encode() \
+                    or not re.fullmatch(rb"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", ls[2]):
+                return False
+            t = datetime.datetime.strptime(ls[2].decode(), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+            return abs((datetime.datetime.now(datetime.timezone.utc) - t).total_seconds()) < 5
         out = grant()
         ln = _gf035(d).read_text(encoding="utf-8").split("\n") if _gf035(d).exists() else []
-        check("0.3.7 K4 ⓕ approve: 대화 기록 경로가 파일이면 .turn-mergetp.s1 = 그 경로 한 줄",
-              tpf.exists() and tpf.read_bytes() == (str(jl) + "\n").encode("utf-8"), out)
+        check("0.3.7 K4 ⓕ approve: 대화 기록 경로가 파일이면 .turn-mergetp.s1 = 그 경로 · 그 순간 바이트 수 · 허락 시각(UTC 초) 세 줄",
+              tp3(jl, jl.stat().st_size) and jl.stat().st_size > 0, out + repr(tpf.read_bytes() if tpf.exists() else None))
+        check("0.3.7 보완 F5 approve: 감시를 켠 허락의 30분 경고 = '몇 초 안에' 꼴", _WARN037_ON + "\n" in out and _WARN037_OFF not in out, out)
         check("0.3.7 K4 ⓕ approve: 허락 파일은 정확히 3줄 그대로(H8)", len(ln) == 4 and ln[3] == "" and ln[0].startswith("merge feat/x 68 rebase "), repr(ln))
-        grant(None)
+        out = grant(None)
         check("0.3.7 K4 ⓕ approve: 경로 빈 값 → 경로 파일 안 만듦(지난 것도 지움) · 허락은 만듦", not tpf.exists() and _gf035(d).exists())
-        grant(tdir / "없음.jsonl")
-        check("0.3.7 K4 ⓕ approve: 없는 파일 경로 → 경로 파일 안 만듦", not tpf.exists() and _gf035(d).exists())
+        check("0.3.7 보완 F5 approve: 감시를 못 켠 허락의 30분 경고 = 0.3.6 꼴(Esc 먼저 · 최대 약 2분)", _WARN037_OFF + "\n" in out and _WARN037_ON not in out, out)
+        out = grant(tdir / "없음.jsonl")
+        check("0.3.7 K4 ⓕ approve: 없는 파일 경로 → 경로 파일 안 만듦 · 경고는 0.3.6 꼴", not tpf.exists() and _gf035(d).exists() and _WARN037_OFF + "\n" in out, out)
         grant(tdir)
         check("0.3.7 K4 ⓕ approve: 폴더 경로 → 경로 파일 안 만듦", not tpf.exists() and _gf035(d).exists())
 
@@ -4123,7 +4171,7 @@ def check_merge_watch_037(check):
         run("ⓑ 알림 enqueue·remove·user 줄만 → 합침(0) · 입력 감시 켬", F(tp_add=("view", 1, _NOTIF037)), 0, (2, 1, 1), False,
             first="✅ 합쳤습니다: PR #68 (feat/x → main, rebase)", need=("입력 감시: 켬",))
         # 사람 줄의 다른 꼴: content 가 < 로 시작하지 않음 · 줄 끝이 아직 안 옴(조각) → 안전 쪽(멈춤)
-        for nm, b in (("content 가 < 로 시작 안 함", b'{"type":"queue-operation","operation":"enqueue","timestamp":"t","sessionId":"s1","content":"stop"}\n'),
+        for nm, b in (("content 가 < 로 시작 안 함", b'{"type":"queue-operation","operation":"enqueue","timestamp":"2099-12-31T23:59:59.300Z","sessionId":"s1","content":"stop"}\n'),
                       ("줄 끝 안 온 사람 줄 조각", _HUMAN037.rstrip(b"\n")),
                       ("content 앞에서 잘린 알림 줄 조각(안전 쪽)", b'{"type":"queue-operation","operation":"enqueue","timestamp":"t","sessionId":"s1"')):
             grant()
@@ -4139,6 +4187,68 @@ def check_merge_watch_037(check):
         out, _ = run("ⓒ 경로 파일의 경로가 없는 파일 → 합침 · 입력 감시: 꺼짐", F(), 0, (2, 1, 1), False, need=("입력 감시: 꺼짐(대화 기록 경로 없음)",))
         check("0.3.7 K4 ⓒ 결과 끝 줄 = 입력 감시 · 첫 줄 규칙 그대로(✅)", out.rstrip("\n").split("\n")[-1] == "입력 감시: 꺼짐(대화 기록 경로 없음)"
               and out.startswith("✅ "), out)
+        # 보완 F1·F11(검사 C#1·A#1): 기준 크기는 허락할 때의 크기 — 허락 뒤 첫 실행 전·되풀이(3) 사이에 친 말도 다음 실행이 잡는다
+        grant()
+        with open(jl, "ab") as f:
+            f.write(_HUMAN037)
+        run("ⓗ 허락 뒤·첫 실행 전에 사람 줄 → 첫 조회 전에 멈춤 · gh 호출 0", F(), 1, (0, 0, 0), False, first=_STOP037)
+        grant()
+        IP = [{"__typename": "CheckRun", "name": "t", "status": "IN_PROGRESS", "conclusion": None}]
+        run("ⓘ 1차: 검사 도는 중 → 3(허락·경로 파일 그대로)", F(statusCheckRollup=IP), 3, (1, 0, 0), True, extra=_MG_W0)
+        with open(jl, "ab") as f:
+            f.write(_HUMAN037)
+        run("ⓘ 2차: 되풀이 사이(1차 rc=3 뒤)에 친 사람 줄 → 초록이어도 첫 조회 전에 멈춤", F(), 1, (0, 0, 0), False, first=_STOP037)
+        # 2번째 줄이 없거나 숫자가 아니거나 지금 크기보다 크면 → 이 실행의 시작 크기(옛 꼴 · 실행 전 줄은 안 봄, 실행 중 줄은 봄)
+        for nm, l2 in (("없음(경로 한 줄 — 옛 꼴)", None), ("숫자 아님", "abc"), ("음수 꼴", "-5"), ("지금 크기보다 큼", "99999999")):
+            grant()
+            tpf.write_bytes((f"{jl}\n" + ("" if l2 is None else l2 + "\n")).encode("utf-8"))
+            with open(jl, "ab") as f:
+                f.write(_HUMAN037)
+            run(f"ⓙ 2번째 줄 {nm} → 시작 크기: 실행 전 사람 줄은 안 봄(합침)", F(), 0, (2, 1, 1), False, need=("입력 감시: 켬",))
+            grant()
+            tpf.write_bytes((f"{jl}\n" + ("" if l2 is None else l2 + "\n")).encode("utf-8"))
+            run(f"ⓙ 2번째 줄 {nm} → 시작 크기: 조회 중 사람 줄은 봄(멈춤)", F(tp_add=("view", 1, _HUMAN037)), 1, (1, 0, 0), False, first=_STOP037)
+        # 보완 G1·G2(재검사 A2 #1): 3번째 줄 = 허락 시각(UTC 초) — 크기 뒤에 늦게 쓰인 허락 입력 자신의 줄(그 초 또는 그 전)은 사람 입력으로 보지 않는다.
+        #   시각은 경로 파일에 고정해 넣는다(실제 시계가 흐른 초에 기대지 않음): 허락 시각 = T0, 사람 줄 시각 = T0 의 같은 초·앞 초·다음 초
+        T0 = "2026-10-05T03:12:45"
+        tsl = lambda ts: b'{"type":"queue-operation","operation":"enqueue","timestamp":"' + ts.encode() + b'","sessionId":"s1"}\n'
+
+        def grant_t(l3=T0):
+            grant()
+            sz = jl.stat().st_size
+            tpf.write_bytes((f"{jl}\n{sz}\n" + ("" if l3 is None else l3 + "\n")).encode("utf-8"))
+            return sz
+        for nm, ts in (("같은 초(허락 입력 자신)", T0 + ".900Z"), ("앞 초", "2026-10-05T03:12:44.100Z")):
+            grant_t()
+            with open(jl, "ab") as f:
+                f.write(tsl(ts))
+            run(f"G2 ⓐ 허락 시각 {nm}의 사람 꼴 줄이 크기 뒤에 늦게 쓰임 → 사람 입력 아님(합침)", F(), 0, (2, 1, 1), False, need=("입력 감시: 켬",))
+        grant_t()
+        run("G2 ⓑ 허락 뒤 다른 초(다음 초)의 사람 줄 → 멈춤", F(tp_add=("view", 1, tsl("2026-10-05T03:12:46.000Z"))), 1, (1, 0, 0), False, first=_STOP037)
+        grant_t()
+        with open(jl, "ab") as f:
+            f.write(tsl(T0 + ".100Z") + tsl("2026-10-05T03:13:00.000Z"))
+        run("G2 ⓑ 허락 입력 줄 + 그 뒤 다른 초 사람 줄 → 첫 조회 전에 멈춤", F(), 1, (0, 0, 0), False, first=_STOP037)
+        for nm, l3 in (("없음", None), ("꼴이 다름(밀리초까지)", T0 + ".000Z"), ("꼴이 다름(날짜만)", "2026-10-05"), ("숫자 아님", "abc")):
+            grant_t(l3)
+            with open(jl, "ab") as f:
+                f.write(tsl("2026-10-05T03:12:44.100Z"))
+            run(f"G2 ⓒ 3번째 줄 {nm} → 크기만으로: 크기 뒤 앞 초 사람 줄도 멈춤", F(), 1, (0, 0, 0), False, first=_STOP037)
+        # 재검사 A3 #1·#2: 알림 거름은 시각이 아니라 내용으로도 걸려야 한다(3번째 줄 없음) · 3번째 줄이 미래 시각이면 크기만으로(사람 줄을 영영 못 보는 길 차단)
+        grant_t(None)
+        run("G2 ⓑ 3번째 줄 없음 + 알림 줄만 → 내용 거름으로 합침", F(tp_add=("view", 1, _NOTIF037)), 0, (2, 1, 1), False, need=("입력 감시: 켬",))
+        grant_t("9999-12-31T00:00:00")
+        with open(jl, "ab") as f:
+            f.write(tsl("2026-10-05T03:12:44.100Z"))
+        run("G2 ⓒ 3번째 줄이 미래 시각 → 크기만으로: 크기 뒤 사람 줄 멈춤", F(), 1, (0, 0, 0), False, first=_STOP037)
+        for nm, b in (("시각 칸 없음", b'{"type":"queue-operation","operation":"enqueue","sessionId":"s1"}\n'),
+                      ("시각 값이 꼴이 다름", tsl("t")),
+                      ("시각 값이 잘림", tsl("2026-10-05T03:1"))):
+            grant_t()
+            run(f"G2 ⓓ {nm}인 사람 줄 → 사람 입력으로(멈춤)", F(tp_add=("view", 1, b)), 1, (1, 0, 0), False, first=_STOP037)
+        # 보완 F12(검사 A#2): 비교 앞 감시 — 마지막(두 번째 초록) 조회 중 사람 줄 → 비교 호출 0
+        grant()
+        run("ⓚ 두 번째 초록 조회 중 사람 줄 → 비교 앞에서 멈춤 · 비교 0 · 합치기 0", F(tp_add=("view", 2, _HUMAN037)), 1, (2, 0, 0), False, first=_STOP037)
         # ⓓ 합치기 직전: 비교 호출 때 사람 줄 → 1 · 합치기 0
         grant()
         run("ⓓ 비교 중 사람 입력 줄 → 합치기 직전에 멈춤 · 합치기 0", F(tp_add=("compare", 1, _HUMAN037)), 1, (2, 1, 0), False, first=_STOP037)
@@ -4147,7 +4257,8 @@ def check_merge_watch_037(check):
         _, secs = run("ⓖ 간격(10초) 도중 사람 입력 → 다음 조회 없이 멈춤", F(statusCheckRollup=[{"__typename": "CheckRun", "name": "t", "status": "IN_PROGRESS", "conclusion": None}],
                                                                       tp_add=("view", 1, _HUMAN037, 1)), 1, (1, 0, 0), False,
                       first=_STOP037, extra={"REFACTOR_MERGE_INTERVAL": "10"})
-        check("0.3.7 K4 ⓖ 간격을 1초씩 쉬며 매초 봄(10초를 다 기다리지 않음)", secs < 8, f"{secs:.1f}초")
+        # 보완 F7(검사 C#7): 판정 여유를 넓힘 — 매초 안 보면 간격 10초(상한 — 더 크면 무시돼 10)를 다 자야 해 늘 10초를 넘고, 매초 보면 2~3초
+        check("0.3.7 K4 ⓖ 간격을 1초씩 쉬며 매초 봄(10초를 다 기다리지 않음)", secs < 10, f"{secs:.1f}초")
         # 허락이 이미 바뀌었으면(사람이 새로 허락) 새 허락은 지우지 않는다(S17 F9 와 같게)
         grant()
         out, r, _ = _mg035(d, fg=F(tp_add=("view", 1, _HUMAN037), view_regrant=1), extra_env={"FAKE_GH_TP": str(jl)})
@@ -4159,8 +4270,8 @@ def check_merge_watch_037(check):
         _gf035(d).unlink(missing_ok=True)
         tpf.unlink(missing_ok=True)
         so, se, rc, _ = hook("turn", d, {"session_id": "s1", "transcript_path": str(jl), "prompt": "/refactor:approve 합치기 68 rebase"}, extra_env=pe)
-        check("0.3.7 K4 ⓕ 입력 훅이 훅 입력의 transcript_path 를 넘김 → 경로 파일 = 그 경로",
-              rc == 0 and tpf.exists() and tpf.read_bytes() == (str(jl) + "\n").encode("utf-8") and _gf035(d).exists(), so + se)
+        check("0.3.7 K4 ⓕ 입력 훅이 훅 입력의 transcript_path 를 넘김 → 경로 파일 = 그 경로 · 크기 · 허락 시각 세 줄",
+              rc == 0 and tp3(jl, jl.stat().st_size) and _gf035(d).exists(), so + se)
         hook("turn", d, {"session_id": "s1", "transcript_path": str(jl), "prompt": "<task-notification>\n<task-id>x</task-id>\n</task-notification>"})
         check("0.3.7 K4 ⓔ 알림 입력 → 경로 파일 그대로", tpf.exists() and _gf035(d).exists())
         hook("turn", d, {"session_id": "s2", "transcript_path": str(jl), "prompt": "안녕"})
@@ -4174,13 +4285,16 @@ def check_merge_watch_037(check):
         bs.mkdir()
         (bs / "x.jsonl").write_bytes(b"\n")
         so, se, rc, _ = hook("turn", d, {"session_id": "s1", "transcript_path": str(bs / "x.jsonl"), "prompt": "/refactor:approve 합치기 68 rebase"}, extra_env=pe)
-        check("0.3.7 K4 ⓕ 공백 든 경로도 그대로 넘김", tpf.exists() and tpf.read_bytes() == (str(bs / "x.jsonl") + "\n").encode("utf-8"), so + se)
+        check("0.3.7 K4 ⓕ 공백 든 경로도 그대로 넘김", tp3(bs / "x.jsonl", 1), so + se)
         check("0.3.7 K4 입력 훅·승인 스크립트는 gh 를 부르지 않음", _calls035(fg) == [], "\n".join(_calls035(fg)))
-        # B9: approve SKILL 7 되풀이 규칙 — "새 말이 오면 멈춘다" 바로 뒤에 "⛔ 사용자 입력이 있어 … 로 끝나면 다시 실행하지 않는다"
+        # B9: approve SKILL 7 되풀이 규칙 — "새 말이 오면 멈춘다" 바로 뒤에 "⛔ 새 입력이 들어와 … 로 시작하면 다시 실행하지 않는다"(보완 F6·F13 — 첫 줄 규칙 · 자동 입력)
         ap = (ROOT / "plugins/refactor/skills/approve/SKILL.md").read_text(encoding="utf-8")
-        check("0.3.7 K4 approve SKILL 7: '⛔ 사용자 입력이 있어 …' 로 끝나면 다시 실행하지 않음(되풀이 멈춤 문장 바로 뒤)",
-              "다시 합치려면 사용자가 `/refactor:approve 합치기` 를 다시). 스크립트가 `⛔ 사용자 입력이 있어 허락이 끝났습니다` 로 끝나면 다시 실행하지 않는다"
-              "(사용자가 친 말에 먼저 답한다)." in ap, "")
+        check("0.3.7 K4 approve SKILL 7: '⛔ 새 입력이 들어와 …' 로 시작하면 다시 실행하지 않음(되풀이 멈춤 문장 바로 뒤) · 옛 '사용자 입력이 있어' 없음",
+              "다시 합치려면 사용자가 `/refactor:approve 합치기` 를 다시). 스크립트가 `⛔ 새 입력이 들어와 허락이 끝났습니다` 로 시작하면 다시 실행하지 않는다"
+              "(새로 들어온 말에 먼저 답한다)." in ap and "사용자 입력이 있어" not in ap and _STOP037.startswith("⛔ 새 입력이 들어와 허락이 끝났습니다"), "")
+        check("0.3.7 보완 F5 approve SKILL 7: 결과 끝 줄 '입력 감시: 꺼짐' 이면 Esc 먼저 안내(30분 경고 바로 다음 줄)",
+              "Claude 가 실행 중이면 Esc 로도 멈춥니다.`\n   - 합치기 결과 끝 줄이 `입력 감시: 꺼짐…` 이면" in ap
+              and "\"멈추려면 Claude 가 실행 중일 때 먼저 Esc 를 누르세요(입력만 하면 최대 약 2분 뒤에 허락이 끝납니다)\"라고 전한다." in ap, "")
     finally:
         shutil.rmtree(d, ignore_errors=True)
         for m in made:
@@ -4595,9 +4709,31 @@ def check_docs_035(check):
     need13 = ["**합치기는 허락만, 합치는 것은 그 차례의 Claude**", "**PR 쪽과 내 커밋이 다를 때 안내 넷**",
               "**이미 커밋된 앞 단계 기준선을 다시 바꾸면 알림**", "`gh api`로 PR 합치기(`pulls/<번호>/merge`·GraphQL 합치기", "파이썬·노드·perl 로 플러그인 폴더의 파일을 쓰는 꼴",
               "초록은 **10초 간격 두 번 연속**", "가지 참조 쓰기(`/git/refs`), 파일 직접 커밋(`/contents/`), `gh alias set|import`",
-              "**CI 두 시험을 동시에**", "**합친 뒤 배포가 깨졌을 때 갈 길**", "**알려진 한계**", "`/refactor:go 다시`"]
+              "**CI 두 시험을 동시에**", "**합친 뒤 배포가 깨졌을 때 갈 길**", "**알려진 한계**", "`/refactor:go 다시`",
+              "`heroku rollback`·`netlify rollback`은 안전장치 규칙에 없습니다"]
     check("0.3.5 D3 README §13: 0.3.5 절이 0.3.4 절 앞 · 합치기 새 흐름·#21·#1·X1·X2·CI·#20·알려진 한계",
           ch != "" and all(n in ch for n in need13), str([n for n in need13 if n not in ch]))
+    # 0.3.7 보완 F9(검사 C#9): §13 0.3.5 절은 판 기록 — 0.3.7 에 생긴 한계(Reapply)를 넣지 않고 0.3.6 판 원문 그대로. 지금의 한계는 §6-4
+    check("0.3.7 보완 F9 README §13 0.3.5 '알려진 한계' = 0.3.6 판 원문(Reapply 없음 · '마지막으로 바꾼 커밋' 문장 있음)",
+          "Reapply" not in ch and "그 단계 커밋이 기준선 파일을 건드리지 않았으면(그 파일을 마지막으로 바꾼 커밋이 그 단계 것이 아니면) 뒤에 그 파일을 바꿔도 알리지 않습니다." in ch, "")
+    # 0.3.7 보완 F8(검사 C#2·#3·A#3): §6-4 에 합치기 입력 감시의 한계 · 기준선 알림의 한계 · 히어독 헛막힘 둘 — §13 0.3.7 의 [§6-4] 링크 약속을 채움
+    lw = next((l for l in lim.splitlines() if l.startswith("- **합치기 중 입력 감시의 한계**")), "")
+    need64 = ["비동기", "공식 훅 문서", "도구 호출", "직접 확인하지 못했습니다", "`<` 로 시작하는 글을 붙여 넣으면", "자동 입력", "사람 입력으로 보고 멈출 수 있습니다",
+              "허락보다 먼저 친 입력", "`입력 감시: 꺼짐`", "0.3.6 과 같습니다",
+              "허락 시각(초) 이후에 적힌 줄만 봅니다", "허락한 그 초 안에 친 입력은 0.3.6 과 같이"]   # 보완 G3(재검사 A2 #1)
+    check("0.3.7 보완 F8·G3 README §6-4: 합치기 중 입력 감시의 한계(비동기·도구 호출 중 미관측·`<` 붙여넣기·자동 입력·허락 전 입력·허락 시각 초·꺼짐)",
+          lw != "" and all(n in lw for n in need64), str([n for n in need64 if n not in lw]))
+    lb = next((l for l in lim.splitlines() if l.startswith("- **기준선 알림의 한계**")), "")
+    check("0.3.7 보완 F9 README §6-4: 기준선 알림의 한계(다른 제목 커밋·Reapply·`/refactor:go 다시`·지난 묶음 완료 카드)",
+          all(n in lb for n in ("다른 제목으로 커밋", "Reapply", "`/refactor:go 다시`", "지난 묶음에서 완료·커밋된 카드")), lb)
+    lh = next((l for l in lim.splitlines() if l.startswith("- **히어독 헛막힘 둘**")), "")
+    check("0.3.7 보완 F8 README §6-4: 히어독 헛막힘 둘(안전 실행기 절대경로 → 플러그인 문구 · 읽기 전용 단계 `/tmp` 이어 쓰기 → 프로젝트 쓰기)",
+          all(n in lh for n in ("안전 실행기를 절대경로로", "플러그인 폴더 문구", "읽기 전용 단계", "open('/tmp/x','w').write(…)", "프로젝트 쓰기 문구", "나눠 쓰면 통과")), lh)
+    i37 = rd.find("### 0.3.7 (")
+    ch7 = rd[i37:rd.find("### 0.3.6 (", i37)] if i37 >= 0 else ""
+    check("0.3.7 보완 F8 README §13 0.3.7: 히어독 헛막힘 [§6-4] 링크가 가리키는 항목이 §6-4 에 있음 · 맨 위 '틈을 거의 없앴습니다(대부분 몇 초 안에'",
+          "[§6-4](#6-4-한계)" in ch7 and lh != "" and "틈을 거의 없앴습니다(대부분 몇 초 안에 — 한계는 [§6-4](#6-4-한계))" in rd
+          and "틈을 없앴습니다" not in rd, "")
 
     # D4 플러그인 README · 7-execute ⑩
     check("0.3.5 D4 플러그인 README: 'PR 합치기 허락(`합치기`)'", "PR 합치기 허락(`합치기`)" in pr, "")

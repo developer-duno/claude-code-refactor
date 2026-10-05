@@ -12,7 +12,7 @@
 # 허락 소모: "다시 실행(3)" 말고는 어떤 결과든 허락 파일을 지운다. 합치기 호출은 허락을 먼저 지운 뒤에 한다(인자가 틀린 실행 S0·마무리 뒤 S1·
 #   되풀이 사이 사람이 새로 만든 허락(F9)은 그대로 둠)
 # 입력 감시(0.3.7, S2b): 허락과 함께 적힌 대화 기록 파일에 사람 입력 줄이 새로 생기면 조회 앞·간격의 매초·비교 앞·합치기 직전에 알아채고
-#   허락을 지운 뒤 1(⛔ 사용자 입력이 있어 …). 경로가 없으면 감시 꺼짐(0.3.6 과 같음). 결과 끝 줄 "입력 감시: 켬/꺼짐"
+#   허락을 지운 뒤 1(⛔ 새 입력이 들어와 … — 자동 입력도 사람 입력으로 볼 수 있다). 경로가 없으면 감시 꺼짐(0.3.6 과 같음). 결과 끝 줄 "입력 감시: 켬/꺼짐"
 # 승인 기록(APPROVALS.log)·봉인(approved/)·턴 스냅숏(.turn-dirty.*)은 건드리지 않는다(턴 중에 기록이 바뀌면 post-check 가 알린다 — 기록은 허락할 때 한 줄뿐)
 # gh 호출은 셋뿐: pr view(조회) · api compare(기본 가지에 새 커밋?) · pr merge <N> --<방식> --match-head-commit <PR 머리>.
 #   --admin·--auto·--delete-branch 는 어떤 입력으로도 붙지 않는다. gh 로그인 정보(토큰)는 읽거나 넘기지 않는다(gh 기본 로그인 그대로)
@@ -62,7 +62,7 @@ US=$RL_US
 
 dir="$proj/docs/refactor"
 mf="$dir/.turn-merge.$sid"
-tpf="$dir/.turn-mergetp.$sid"   # 0.3.7: 합치기 허락과 함께 승인 스크립트가 만든 대화 기록 경로(1줄) — 없으면 입력 감시 꺼짐
+tpf="$dir/.turn-mergetp.$sid"   # 0.3.7: 합치기 허락과 함께 승인 스크립트가 만든 대화 기록 경로·크기·허락 시각 세 줄 — 없으면 입력 감시 꺼짐
 
 # 줄이기 전용 한도: $1 = 환경 변수 값, $2 = 기본값, $3 = 가장 작은 값 → LIMV
 lim() {
@@ -119,22 +119,47 @@ case "$g3" in 'bash "'*' refactor-merge '*) ;; *) no "$NO_GRANT" ;; esac
 
 # ── S2b 입력 감시(0.3.7 — 2분 틈): 허락과 함께 적힌 대화 기록 파일(훅 입력의 transcript_path)을 지켜본다 ──
 #   턴 도중 친 사람 말은 돌던 명령이 끝나 전달될 때에야 입력 훅이 허락을 지운다(0.3.6 실측) → 이 스크립트가 도는 동안의 입력은
-#   대화 기록에 곧바로 쓰이는 줄로 알아챈다: 지금 크기 > 시작 크기면 늘어난 부분에서 "type":"queue-operation" · "operation":"enqueue" 가 든 줄 중
+#   대화 기록에 곧바로 쓰이는 줄로 알아챈다: 지금 크기 > 기준 크기면 늘어난 부분에서 "type":"queue-operation" · "operation":"enqueue" 가 든 줄 중
 #   "content" 칸이 없거나 그 값이 < 로 시작하지 않는 줄(사람이 친 것 — 작업 완료 알림 등은 content 가 <task-notification … 처럼 < 로 시작) 이 있으면 멈춘다.
 #   grep·tail·wc 만(파이썬 없음 · bash 3.2). 줄이 반쯤 쓰인 순간에 본 조각도 같은 거름망 — 알림이 잘려 사람 줄로 보이면 합치지 않는 쪽(안전 쪽)으로 틀린다.
 #   경로가 없거나 읽을 수 없으면 감시 꺼짐(0.3.6 과 같은 동작). 결과 블록 끝에 "입력 감시: 켬/꺼짐" 한 줄
-TP=""; TP0=0; FSZ=0
+#   기준 크기(TP0) = 경로 파일 2번째 줄(허락할 때 승인 스크립트가 잰 크기 — 0.3.7 보완 F1: 실행마다 시작 크기를 다시 재면 허락 뒤·되풀이(3) 사이
+#   Claude 가 글을 쓰는 동안 친 말이 다음 실행의 시작 크기 안에 들어가 안 보였다). 숫자가 아니거나 지금 크기보다 크면 이 실행의 시작 크기
+#   허락 시각(TPT) = 경로 파일 3번째 줄(UTC 초 YYYY-MM-DDTHH:MM:SS — 보완 G2, 재검사 A2 #1): 있으면 크기 뒤 후보 줄 중 "timestamp" 앞 19자가
+#   이 초보다 뒤인 줄만 사람 입력으로 본다(허락을 친 입력 자신의 줄이 비동기로 늦게 크기 뒤에 쓰여도 제외 · 같은 초도 제외).
+#   후보 줄에 시각 칸이 없거나 꼴이 다르면 사람 입력으로(안전 쪽). 3번째 줄이 없거나 꼴이 다르면 크기만으로
+TP=""; TP0=0; FSZ=0; tpb=""; TPT=""
 fsize() { local s; s=$(wc -c < "$1" 2>/dev/null) || return 1; s=${s//[!0-9]/}; [ -n "$s" ] || return 1; FSZ=$((10#$s)); }
+re_ts='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
 if [ -f "$tpf" ]; then
-  IFS= read -r TP < "$tpf" || :
-  TP=${TP%$'\r'}
+  { IFS= read -r TP; IFS= read -r tpb; IFS= read -r TPT; } < "$tpf" || :
+  TP=${TP%$'\r'}; tpb=${tpb%$'\r'}; TPT=${TPT%$'\r'}
+  [[ $TPT =~ $re_ts ]] && TPT=${TPT//[!0-9]/} || TPT=""
+  # 재검사 A3 #2: 허락 시각이 지금(UTC)보다 뒤면 그 시각까지의 사람 줄을 영영 못 본다 → 크기만으로(2번째 줄의 "지금 크기 이하" 상한과 짝)
+  if [ -n "$TPT" ]; then nowu=$(date -u +%Y%m%d%H%M%S 2>/dev/null); case "$nowu" in ""|*[!0-9]*) ;; *) [ "$TPT" -gt "$nowu" ] && TPT="" ;; esac; fi
   { [ -n "$TP" ] && [ -f "$TP" ] && [ -r "$TP" ] && fsize "$TP"; } && TP0=$FSZ || TP=""
+  if [ -n "$TP" ]; then
+    case "$tpb" in ""|*[!0-9]*) ;; *) [ "${#tpb}" -le 15 ] && [ $((10#$tpb)) -le "$TP0" ] && TP0=$((10#$tpb)) ;; esac
+  fi
 fi
 if [ -n "$TP" ]; then WLINE="입력 감시: 켬"; else WLINE="입력 감시: 꺼짐(대화 기록 경로 없음)"; fi
 trap 'say "$WLINE"' EXIT
 human_typed() {
   [ -n "$TP" ] && fsize "$TP" && [ "$FSZ" -gt "$TP0" ] || return 1
-  tail -c "$((FSZ - TP0))" "$TP" 2>/dev/null | grep '"type":"queue-operation"' | grep '"operation":"enqueue"' | grep -v '"content":"<' | grep -q .
+  if [ -z "$TPT" ]; then
+    tail -c +"$((TP0 + 1))" "$TP" 2>/dev/null | grep '"type":"queue-operation"' | grep '"operation":"enqueue"' | grep -v '"content":"<' | grep -q .
+    return
+  fi
+  # 후보 줄마다 "timestamp":"…" 값의 앞 19자 → 꼴이 맞으면 숫자만 남겨 허락 시각(숫자 14자리)과 크기 비교(로캘과 무관) · 그 밖은 사람 입력
+  tail -c +"$((TP0 + 1))" "$TP" 2>/dev/null | grep '"type":"queue-operation"' | grep '"operation":"enqueue"' | grep -v '"content":"<' | {
+    while IFS= read -r x || [ -n "$x" ]; do
+      case "$x" in *'"timestamp":"'*) x=${x#*\"timestamp\":\"}; x=${x:0:19} ;; *) exit 0 ;; esac
+      [[ $x =~ $re_ts ]] || exit 0
+      x=${x//[!0-9]/}
+      [ $((10#$x)) -gt $((10#$TPT)) ] && exit 0
+    done
+    exit 1
+  }
 }
 # 사람 입력이 보이면: 허락이 이 실행이 읽은 것 그대로일 때만 허락·경로 파일을 지우고(바뀌었으면 사람이 새로 만든 것 — S17 과 같게 둔다) 거절
 watch_input() {
@@ -144,7 +169,7 @@ watch_input() {
     { IFS= read -r r1; IFS= read -r r2; } < "$mf"
     [ "${r1%$'\r'}" = "$g1" ] && [ "${r2%$'\r'}" = "$g2" ] && drop
   fi
-  say "⛔ 사용자 입력이 있어 허락이 끝났습니다 — 합치지 않았습니다. 다시 합치려면 /refactor:approve 합치기 를 다시 입력하세요."
+  say "⛔ 새 입력이 들어와 허락이 끝났습니다(사용자 입력 또는 자동 입력) — 합치지 않았습니다. 다시 합치려면 /refactor:approve 합치기 를 다시 입력하세요."
   exit 1
 }
 

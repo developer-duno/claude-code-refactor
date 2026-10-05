@@ -4889,6 +4889,15 @@ def check_gh_api_write_035(res):
               "gh api -X DELETE repos/o/r/branches/main/protection/required_status_checks", "gh api -X PATCH repos/o/r/branches/main/protection/required_pull_request_reviews -F x=1",
               "gh api -X POST repos/o/r/merge-upstream -f branch=main", "gh api repos/o/r/merge-upstream -f branch=main"]
         _cases_034(res, proj, "G3 저장소 설정 쓰기 차단", [(B, bash(c)) for c in rs], need=WRS)
+        # 보완 F3·F15(검사 C#4·A#7): 이웃 꼴 — 저장소 규칙 묶음(rulesets) 쓰기·지우기 · 소유권 넘기기(transfer) · 번호로 부르는 저장소 뿌리(repositories/<번호>)
+        rs2 = ["gh api -X DELETE repos/o/r/rulesets/123", "gh api -X POST repos/o/r/rulesets -f name=x", "gh api -X PUT repos/o/r/rulesets/1",
+               "gh api repos/o/r/rulesets -f name=x -f enforcement=active", "gh api --method PUT 'repos/{owner}/{repo}/rulesets/7' --input r.json",
+               "gh api -X POST repos/o/r/transfer -f new_owner=x", "gh api repos/o/r/transfer -f new_owner=x",
+               "gh api -X PATCH repositories/123 -f name=x", "gh api -X DELETE repositories/123", "gh api -X PATCH /repositories/123 -f default_branch=x"]
+        _cases_034(res, proj, "G3 이웃 꼴(rulesets·transfer·repositories/<번호>) 차단", [(B, bash(c)) for c in rs2], need=WRS)
+        _cases_034(res, proj, "G3 이웃 꼴 읽기는 통과", [(OK, bash(c)) for c in [
+            "gh api repos/o/r/rulesets", "gh api repos/o/r/rulesets/123", "gh api -X GET repos/o/r/rulesets -f includes_parents=true",
+            "gh api repositories/123", "gh api repositories/123 --jq .full_name"]])
         _cases_034(res, proj, "G3 PowerShell", [(B, ps(c)) for c in rs[:2] + rs[22:23]], need=WRS)
         _cases_034(res, proj, "G3 읽기·다른 곳은 통과", [(OK, bash(c)) for c in [
             "gh api repos/o/r", "gh api repos/o/r --jq .default_branch", "gh api -X GET repos/o/r -f per_page=1", "gh api repos/o/r/branches/main",
@@ -4936,7 +4945,13 @@ def check_guard_037(res):
             "gh repo edit --description x", "gh repo edit --homepage x", "gh repo edit --add-topic a", "gh repo edit --remove-topic a",
             "gh repo edit o/r --add-topic a,b --description 'x y'", "gh repo view --json defaultBranchRef", "gh repo view o/r --json visibility",
             "gh repo sync", "gh repo sync o/r --branch main", "gh repo list", "gh repo unarchive --help", "gh repo renamed",
-            'git commit -m "docs: gh repo rename 막기"']])
+            'git commit -m "docs: gh repo rename 막기"',
+            # 보완 F4(검사 C#13): 저장소 설정이지만 기본 가지·이름·공개 여부·보호가 아닌 것과 PR 제목 고치기는 통과
+            "gh repo edit --enable-issues", "gh repo edit --enable-auto-merge", "gh api -X PATCH repos/o/r/pulls/1 -f title=x"]])
+        # 보완 F15(검사 A#7): heroku apps:destroy 차단(netlify sites:delete 와 같은 성격) · apps:info 는 통과
+        _cases_034(res, proj, "F15 heroku apps:destroy 차단", [(B, bash(c)) for c in ["heroku apps:destroy", "heroku apps:destroy -a x --confirm x"]],
+                   need="리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다.")
+        _cases_034(res, proj, "F15 heroku apps:info 는 통과", [(OK, bash(c)) for c in ["heroku apps:info", "heroku apps:info -a x", "heroku apps"]])
         # G6: 기준선·마이그레이션 히어독(-c 꼴과 같게)
         bl = [f"python3 - <<'EOF'\nopen('{P}/tests/baseline/money.test.ts','w').write('x')\nEOF",
               "python3 - <<'EOF'\nopen('tests/baseline/money.test.ts','a').write('x')\nEOF",

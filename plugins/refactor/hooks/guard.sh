@@ -1936,7 +1936,8 @@ hv_deploy() {
   # 0.3.4 F4: 하위명령 낱말 뒤 경계 = 영문·숫자가 아닌 글자 또는 끝 — 글자가 이어지는 낱말(upgrade·deployments·reloadLogs)만 풀리고
   #   :·-·=·, 가 붙은 꼴(wrangler secret:put · railway up:x)은 막힌다. vercel aliases 는 alias 와 같이
   #   0.3.7 G1: heroku rollback·releases:rollback·pg:reset · netlify rollback·sites:delete(같은 경계 — heroku releases·releases:info·restart 는 통과)
-  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset)([^A-Za-z0-9]|$)|netlify[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
+  #   보완(검사 A#7): heroku apps:destroy(netlify sites:delete 와 같은 성격 — apps:info 는 통과)
+  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|netlify[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
   local re_pkg_deploy="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?([a-z0-9_-]+:)?(deploy|release|publish|ship)([[:space:]:]|$)"
   if has "$t" "$re_deploy" || has "$t" "$re_pkg_deploy"; then
     # 0.3.4 §10-5: PR 합치기(gh pr merge)가 걸렸을 때만 입력창 명령을 안내한다(합치기는 승인 스크립트가 검사 뒤 직접 한다)
@@ -1962,7 +1963,9 @@ hv_deploy() {
     fi
     # 0.3.7 G3: 저장소 설정 쓰기 — 저장소 뿌리(repos/<주인>/<저장소> 뒤가 ? · 공백 · 따옴표 · 끝: 기본 가지·이름·보관·공개 여부) ·
     #   가지 이름 바꾸기(/branches/<가지>/rename) · 가지 보호(/branches/<가지>/protection(/…)) · 강제 동기화(/merge-upstream). 읽기(GET)는 통과
-    if has "$mn" "[[:space:]][\"']?/?repos/[^/[:space:]\"']+/[^/[:space:]\"'?]+/?([?\"'[:space:])]|$)|/branches/[^[:space:]\"']+/(rename|protection)([/?\"'[:space:])]|$)|/merge-upstream([?\"'[:space:])]|$)" \
+    #   보완(검사 C#4·A#7): 이웃 꼴 — 저장소 규칙 묶음(/rulesets(/<번호>) — 지금 GitHub 가 권하는 가지 보호) · 소유권 넘기기(/transfer) ·
+    #   번호로 부르는 저장소 뿌리(repositories/<번호>)
+    if has "$mn" "[[:space:]][\"']?/?repos/[^/[:space:]\"']+/[^/[:space:]\"'?]+/?([?\"'[:space:])]|$)|[[:space:]][\"']?/?repositories/[0-9]+/?([?\"'[:space:])]|$)|/branches/[^[:space:]\"']+/(rename|protection)([/?\"'[:space:])]|$)|/merge-upstream([?\"'[:space:])]|$)|/rulesets(/[0-9]+)?/?([?\"'[:space:])]|$)|/transfer([?\"'[:space:])]|$)" \
       && gha_write "$mn"; then
       block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
