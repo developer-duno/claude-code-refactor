@@ -11,6 +11,8 @@
 #   (2·124·127 은 쓰지 않는다 — run.sh 가 문제 기록에 남기는 코드다)
 # 허락 소모: "다시 실행(3)" 말고는 어떤 결과든 허락 파일을 지운다. 합치기 호출은 허락을 먼저 지운 뒤에 한다(인자가 틀린 실행 S0·마무리 뒤 S1·
 #   되풀이 사이 사람이 새로 만든 허락(F9)은 그대로 둠)
+# 입력 감시(0.3.7, S2b): 허락과 함께 적힌 대화 기록 파일에 사람 입력 줄이 새로 생기면 조회 앞·간격의 매초·비교 앞·합치기 직전에 알아채고
+#   허락을 지운 뒤 1(⛔ 사용자 입력이 있어 …). 경로가 없으면 감시 꺼짐(0.3.6 과 같음). 결과 끝 줄 "입력 감시: 켬/꺼짐"
 # 승인 기록(APPROVALS.log)·봉인(approved/)·턴 스냅숏(.turn-dirty.*)은 건드리지 않는다(턴 중에 기록이 바뀌면 post-check 가 알린다 — 기록은 허락할 때 한 줄뿐)
 # gh 호출은 셋뿐: pr view(조회) · api compare(기본 가지에 새 커밋?) · pr merge <N> --<방식> --match-head-commit <PR 머리>.
 #   --admin·--auto·--delete-branch 는 어떤 입력으로도 붙지 않는다. gh 로그인 정보(토큰)는 읽거나 넘기지 않는다(gh 기본 로그인 그대로)
@@ -60,6 +62,7 @@ US=$RL_US
 
 dir="$proj/docs/refactor"
 mf="$dir/.turn-merge.$sid"
+tpf="$dir/.turn-mergetp.$sid"   # 0.3.7: 합치기 허락과 함께 승인 스크립트가 만든 대화 기록 경로(1줄) — 없으면 입력 감시 꺼짐
 
 # 줄이기 전용 한도: $1 = 환경 변수 값, $2 = 기본값, $3 = 가장 작은 값 → LIMV
 lim() {
@@ -79,7 +82,7 @@ lim "${REFACTOR_MERGE_FETCH_BUDGET:-}" 95 0; FB=$LIMV
 lim "${REFACTOR_MERGE_NOCHECK_GRACE:-}" 120 0; GR=$LIMV
 
 MG_AUTH="   권한·저장소를 찾지 못함 오류라면: gh 로그인 계정이 이 저장소에 쓰기 권한이 있는지 사람이 확인해 주세요(gh auth status) — 다른 계정이면 사람이 터미널에서 바꾼 뒤 다시 /refactor:approve 합치기"
-drop() { [ -e "$mf" ] && rm -f "$mf"; return 0; }
+drop() { [ -e "$mf" ] && rm -f "$mf"; [ -e "$tpf" ] && rm -f "$tpf"; return 0; }
 # 거절(허락을 지우고 1)
 no() { drop; say "$1"; [ -n "${2:-}" ] && say "$2"; say "   (합치지 않았습니다 — 허락은 끝났습니다. 다시 하려면 사용자가 /refactor:approve 합치기)"; exit 1; }
 # 다시 실행(허락 유지 · 3) — 남은 분은 허락을 만든 시각으로 잰다
@@ -113,6 +116,37 @@ age=$(( $(date +%s) - gt ))
 { [ "$age" -ge 0 ] && [ "$age" -le 1800 ]; } || no "$NO_GRANT"
 case "$g3" in 'bash "'*' refactor-merge '*) ;; *) no "$NO_GRANT" ;; esac
 [ "$gpr" = "-" ] && gpr=""
+
+# ── S2b 입력 감시(0.3.7 — 2분 틈): 허락과 함께 적힌 대화 기록 파일(훅 입력의 transcript_path)을 지켜본다 ──
+#   턴 도중 친 사람 말은 돌던 명령이 끝나 전달될 때에야 입력 훅이 허락을 지운다(0.3.6 실측) → 이 스크립트가 도는 동안의 입력은
+#   대화 기록에 곧바로 쓰이는 줄로 알아챈다: 지금 크기 > 시작 크기면 늘어난 부분에서 "type":"queue-operation" · "operation":"enqueue" 가 든 줄 중
+#   "content" 칸이 없거나 그 값이 < 로 시작하지 않는 줄(사람이 친 것 — 작업 완료 알림 등은 content 가 <task-notification … 처럼 < 로 시작) 이 있으면 멈춘다.
+#   grep·tail·wc 만(파이썬 없음 · bash 3.2). 줄이 반쯤 쓰인 순간에 본 조각도 같은 거름망 — 알림이 잘려 사람 줄로 보이면 합치지 않는 쪽(안전 쪽)으로 틀린다.
+#   경로가 없거나 읽을 수 없으면 감시 꺼짐(0.3.6 과 같은 동작). 결과 블록 끝에 "입력 감시: 켬/꺼짐" 한 줄
+TP=""; TP0=0; FSZ=0
+fsize() { local s; s=$(wc -c < "$1" 2>/dev/null) || return 1; s=${s//[!0-9]/}; [ -n "$s" ] || return 1; FSZ=$((10#$s)); }
+if [ -f "$tpf" ]; then
+  IFS= read -r TP < "$tpf" || :
+  TP=${TP%$'\r'}
+  { [ -n "$TP" ] && [ -f "$TP" ] && [ -r "$TP" ] && fsize "$TP"; } && TP0=$FSZ || TP=""
+fi
+if [ -n "$TP" ]; then WLINE="입력 감시: 켬"; else WLINE="입력 감시: 꺼짐(대화 기록 경로 없음)"; fi
+trap 'say "$WLINE"' EXIT
+human_typed() {
+  [ -n "$TP" ] && fsize "$TP" && [ "$FSZ" -gt "$TP0" ] || return 1
+  tail -c "$((FSZ - TP0))" "$TP" 2>/dev/null | grep '"type":"queue-operation"' | grep '"operation":"enqueue"' | grep -v '"content":"<' | grep -q .
+}
+# 사람 입력이 보이면: 허락이 이 실행이 읽은 것 그대로일 때만 허락·경로 파일을 지우고(바뀌었으면 사람이 새로 만든 것 — S17 과 같게 둔다) 거절
+watch_input() {
+  local r1="" r2=""
+  human_typed || return 0
+  if [ -f "$mf" ]; then
+    { IFS= read -r r1; IFS= read -r r2; } < "$mf"
+    [ "${r1%$'\r'}" = "$g1" ] && [ "${r2%$'\r'}" = "$g2" ] && drop
+  fi
+  say "⛔ 사용자 입력이 있어 허락이 끝났습니다 — 합치지 않았습니다. 다시 합치려면 /refactor:approve 합치기 를 다시 입력하세요."
+  exit 1
+}
 
 # ── S3 승인 기록 봉인 ───────────────────────────────────────────────────────
 rl_log_intact "$dir" || no "⛔ 승인 기록이 봉인과 다릅니다 — /refactor:approve 확인 먼저"
@@ -148,7 +182,7 @@ command -v gh >/dev/null 2>&1 || no "❓ gh(GitHub CLI)를 찾지 못했습니�
 
 mtmp=$(mktemp -d 2>/dev/null) || mtmp=$(mktemp -d -t rlmerge 2>/dev/null) || mtmp=""
 [ -n "$mtmp" ] || again "⚠️ 임시 폴더를 만들지 못했습니다"
-trap 'rm -rf "$mtmp"' EXIT
+trap 'rm -rf "$mtmp"; say "$WLINE"' EXIT
 # gh 의 첫 오류 줄(200자까지) → GE. 제어 문자는 ? 로(결과에 터미널 제어 글자가 그대로 실리지 않게)
 gh_err() {
   local x
@@ -166,6 +200,7 @@ JQV='([.number, .state, .isDraft, .isCrossRepository, .baseRefName, .headRefName
 # ── 조회 → 확인(되풀이: 검사 도는 중·계산 중·처음 본 초록이면 창 안에서 다시) ───────────────────────────────
 cf_have=0; cf_set=""; cf_oid=""; cf_free=1
 while :; do
+  watch_input
   set -- pr view
   [ -n "$gpr" ] && set -- "$@" "$gpr"
   (cd "$proj" && rl_bounded "$QL" gh "$@" --json number,state,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,statusCheckRollup --jq "$JQV") >"$mtmp/o" 2>"$mtmp/e"; prc=$?
@@ -273,10 +308,13 @@ EOF
   else
     [ $((SECONDS - t0 + IVL)) -lt "$WIN" ] || again "$wait_msg"
   fi
-  [ "$IVL" -gt 0 ] && sleep "$IVL"
+  # 간격은 1초씩 쉬며 매초 입력 감시(0.3.7)
+  iw=0
+  while [ "$iw" -lt "$IVL" ]; do sleep 1; watch_input; iw=$((iw + 1)); done
 done
 
 # ── S15·S16 기본 가지에 PR 이 모르는 새 커밋이 들어왔나(GitHub 쪽 기준 — 로컬 참조는 옛 것일 수 있다) ──
+watch_input
 (cd "$proj" && rl_bounded "$CL" gh api "repos/{owner}/{repo}/compare/$bname...$poid" --jq .behind_by) >"$mtmp/o" 2>"$mtmp/e"; crc=$?
 cb=$(< "$mtmp/o")
 if [ "$crc" != 0 ] || ! [[ $cb =~ ^[0-9]+$ ]]; then
@@ -299,6 +337,8 @@ if [ ! -f "$mf" ] || [ "$r1" != "$g1" ] || [ "$r2" != "$g2" ]; then
   fi
   exit 1
 fi
+# 0.3.7: 합치기 바로 전에 한 번 더 입력 감시(비교하는 동안 친 말도 여기서 걸린다)
+watch_input
 drop
 if [ -e "$mf" ]; then
   say "⚠️ 합치기 허락 파일을 지우지 못해 합치지 않았습니다 — 사람이 확인해 주세요: $mf"
