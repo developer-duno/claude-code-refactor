@@ -5070,7 +5070,7 @@ def check_auto_files_040(res):
     proj = make_project(phase="EXECUTE")
     try:
         P = proj.as_posix()
-        for n in (".turn-auto.B1", ".turn-merged.B1", ".turn-auto.B12"):
+        for n in (".turn-auto.B1", ".turn-merged.B1", ".turn-auto.B12", ".turn-nextok.B1"):   # 0.4.0 WN: 합친 뒤 사람 입력 표시도 같은 보호
             f = "docs/refactor/" + n
             _cases_034(res, proj, f"G1 ① 파일 도구 {n}", [(B, ("Write", {"file_path": f, "content": "B1\n1\nt\n"})),
                                                        (B, ("Edit", {"file_path": f"{P}/{f}", "old_string": "a", "new_string": "b"})),
@@ -5104,20 +5104,20 @@ def check_auto_files_040(res):
         res["total"] += 1
         if not gi.is_file() or ".turn*" not in gi.read_text(encoding="utf-8").splitlines():
             res["fails"].append(("0.4.0 G1 ⑨ turn.sh 의 .gitignore 에 .turn*", "있음", "없음", "", "", ""))
-        for n in (".turn-auto.B1", ".turn-merged.B3"):
+        for n in (".turn-auto.B1", ".turn-merged.B3", ".turn-nextok.B2"):
             lf(proj / "docs/refactor" / n, "B1\n1\nt\n")
             r = subprocess.run(["git", "-C", str(proj), "check-ignore", "-q", "docs/refactor/" + n], capture_output=True)
             res["total"] += 1
             if r.returncode != 0:
                 res["fails"].append(("0.4.0 G1 ⑨ git 이 무시함 " + n, 0, r.returncode, "", "", ""))
         old = time.time() - 2 * 86400
-        for n in (".turn-auto.B1", ".turn-merged.B3"):
+        for n in (".turn-auto.B1", ".turn-merged.B3", ".turn-nextok.B2"):
             os.utime(proj / "docs/refactor" / n, (old, old))
         sw = proj / "docs/refactor/.turn-sweep"
         if sw.exists():
             sw.unlink()
         turn(proj, "t", "안녕")
-        for n in (".turn-auto.B1", ".turn-merged.B3"):
+        for n in (".turn-auto.B1", ".turn-merged.B3", ".turn-nextok.B2"):
             res["total"] += 1
             if (proj / "docs/refactor" / n).exists():
                 res["fails"].append(("0.4.0 G1 ⑩ 하루 지난 " + n + " 정리", "지움", "남음", "", "", ""))

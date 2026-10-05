@@ -1052,6 +1052,7 @@ def main():
     check_auto_flow_040(check)
     check_auto_stage_fail_040(check)
     check_auto_fix_040(check)
+    check_auto_newbranch_040(check)
     check_auto_docs_040(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
@@ -5681,6 +5682,9 @@ def check_auto_flow_040(check):
         check("0.4.0 A7 기록 마지막 줄 = | 합치기 | 허락 refactor/x PR(지금 가지) (squash) @… | - | 자동 B1 으로 실행(1줄) · 합치기 허락 파일 지워짐",
               lg[-1].endswith(f"| 합치기 | 허락 refactor/x PR(지금 가지) (squash) @{head[:7]} | - | 자동 B1 으로 실행")
               and sum(1 for x in lg if "| 합치기 |" in x) == 1 and not (rd / ".turn-merge.s1").exists(), lg[-1])
+        nx = (rd / ".turn-nextok.B1").read_text(encoding="utf-8").split("\n") if (rd / ".turn-nextok.B1").exists() else []
+        check("0.4.0 N4 merge(자동 배포) → 사람 입력 표시 .turn-nextok.B1(① B1 ② 시각 ③ s1)",
+              len(nx) >= 3 and nx[0] == "B1" and re.fullmatch(r"\d{9,12}", nx[1]) and nx[2] == "s1", str(nx))
         rc0, se = _pc040(d)
         check("0.4.0 A10 merge 뒤(.turn-auto 없음 · 유효한 .turn-merged) → post-check 조용", rc0 == 0 and "승인 기록" not in se, se)
         # deploy-wait: 판 표지 그대로면 ⏳ 3, 가짜 vercel 이 그 커밋의 READY 배포를 보이고 판 표지가 바뀌면 0
@@ -5842,6 +5846,7 @@ def check_auto_stage_fail_040(check):
         m6 = (d6 / "docs/refactor/.turn-merged.B1").read_text(encoding="utf-8").split("\n")
         check("0.4.0 A7 merge-only → 0 · '배포는 사람이 → 끝나면 Claude 에게 검증 부탁' · .turn-merged ⑪ merge-only · 합친 커밋 모름 '-'",
               rc == 0 and "배포는 사람이 → 끝나면 Claude 에게 검증 부탁" in out and m6[10] == "merge-only" and m6[3] == "-", out + str(m6))
+        check("0.4.0 N4 merge-only 합치기 → 사람 입력 표시(.turn-nextok.B1)를 쓰지 않음", not (d6 / "docs/refactor/.turn-nextok.B1").exists(), "")
         # merge.sh: 자동 꼴 마지막 줄인데 자동 허락이 없으면 ⛔ (사람이 합치기 허락 파일만 흉내 낸 꼴)
         d7, fg7 = ready()
         h7 = _git034(d7, "rev-parse", "HEAD")
@@ -6294,6 +6299,165 @@ def check_auto_fix_040(check):
         site.close()
         for m_ in made:
             shutil.rmtree(m_, ignore_errors=True)
+
+
+def check_auto_newbranch_040(check):
+    """0.4.0 WN(사장님 결정 3): 자동 모드 verify 성공 끝에 다음 묶음의 새 가지도 스크립트가 — N1 lib rl_new_branch(사람 길과 같은 확인 · 기록 끝 칸만
+    '자동 B<n> 으로 실행') · N2 만들지 않는 경우(merge-only · 합친 뒤 사람 입력 = .turn-nextok 없음/세션 다름/만료 · fetch 실패 · 남은 묶음 0 ·
+    승인 기록 다름 · 기본 가지에 안 들어감 · 검증 실패) · N3 post-check 자동 꼴 새 가지 줄 · N4 입력 훅이 표시를 지움.
+    한 저장소에서 차례로: 맨 저장소 main 을 작업 가지 커밋으로 옮겨 GitHub 에서 합친 꼴(로컬 origin/main 은 옛것 — verify 의 fetch 가 받아 옴)."""
+    made = []
+    site = _Site040()
+    g = _git034
+    try:
+        _site_old040(site)
+        site.set("/version.txt", "build-new-2\n")
+        noplay = _bin040(made, npx="exit 1")
+        d, bare = _mkauto040(made, site.url)
+        rd = d / "docs/refactor"
+        fg = _fake035(made)
+        _ready040(d, fg)
+        for cid in ("P0-1", "P1-2"):   # 묶음 없는 카드도 끝냄 → 다음 = B2(P2-1)
+            _done033(d, cid)
+        g(d, "add", "--", "docs"); g(d, "commit", "-qm", "refactor: P0-1 안전망")
+        g(d, "push", "-q", "origin", "refactor/x")
+        head = g(d, "rev-parse", "HEAD")
+        setmain = lambda sha: subprocess.run(["git", "--git-dir", str(bare), "update-ref", "refs/heads/main", sha], check=True, capture_output=True)
+        setmain(head)
+        nxf = rd / ".turn-nextok.B1"
+        _pc040(d)   # _go040 때 남은 한 번짜리 알림(허용 파일 지움)을 여기서 받아 둔다
+
+        def nx(sid="s1", ago=0, b="B1"):
+            lf(nxf, f"{b}\n{int(time.time()) - ago}\n{sid}\n")
+
+        def verify(mode="auto", host="vercel", plant=True, **kw):
+            _mf040(d, site.url, deployed="build-new-2", mode=mode, host=host)
+            if plant:
+                nx(**kw)
+            return _auto040(d, "verify", [fg, noplay])
+
+        W_IN = "ℹ️ 합친 뒤 입력이 있어 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지"
+        lg0 = _log033(d)
+
+        def same(out, rc, want, title, nx_gone=True, rc_want=0):
+            check(f"0.4.0 N2 {title} → 새 가지 안 만듦 · 종료 {rc_want} · 가지·기록 그대로" + (" · 표시 지움" if nx_gone else " · 표시 그대로"),
+                  rc == rc_want and want in out and g(d, "symbolic-ref", "--short", "HEAD") == "refactor/x" and _log033(d) == lg0
+                  and nxf.exists() != nx_gone and "🌿" not in out, out)
+
+        out, rc = verify(plant=False)
+        same(out, rc, W_IN, "표시 없음(합친 뒤 사람 입력)")
+        check("0.4.0 N2 표시 없음 → 검증 결과 첫 줄 그대로 · 다음 줄은 사람이 새 가지",
+              out.startswith("✅ 라이브 검증 통과(B1)") and out.rstrip().endswith("다음: 보고 → 다음 묶음은 사람이 /refactor:approve 새 가지"), out)
+        out, rc = verify(sid="other")
+        same(out, rc, W_IN, "표시 세션 다름")
+        out, rc = verify(ago=7300)
+        same(out, rc, W_IN, "표시가 7300초 전(2시간 넘음)")
+        out, rc = verify(b="B2")
+        same(out, rc, W_IN, "표시 ① 이 다른 묶음")
+        lf(rd / ".turn-nextok.B1", "")
+        out, rc = verify(plant=False)
+        same(out, rc, W_IN, "표시가 빈 파일")
+        out, rc = verify(mode="merge-only", host="-")
+        same(out, rc, "ℹ️ 배포 방식이 '수동'(합치기까지만)이라 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지", "merge-only(표시가 있어도)")
+        # 검증 실패 → 표시·가지·기록 그대로(지금처럼 같은 가지에서 고침)
+        site.set("/shop", "nope", code=404)
+        out, rc = verify()
+        same(out, rc, "⛔ 라이브 검증 실패(B1)", "검증 실패", nx_gone=False, rc_want=1)
+        site.set("/shop", "<html><body>상품 목록 새 판</body></html>")
+        # fetch 실패(origin 주소 없음) → 안내 + 까닭 · 0
+        g(d, "remote", "set-url", "origin", str(d.parent / "no-such-040.git"))
+        out, rc = verify()
+        same(out, rc, "ℹ️ 최신 내용을 받아 오지 못해 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지", "fetch 실패")
+        check("0.4.0 N2 fetch 실패 → 까닭 한 줄", "   (까닭: " in out, out)
+        g(d, "remote", "set-url", "origin", str(bare))
+        # 남은 카드 0(마지막 묶음 B2 도 끝남 — 계획서만 고침) → 마무리 안내
+        pp = rd / "REFACTOR_PLAN.md"
+        plan0 = pp.read_bytes()
+        _done033(d, "P2-1")
+        out, rc = verify()
+        same(out, rc, "✅ 남은 묶음이 없습니다 — 다 끝났으면 /refactor:approve 마무리", "남은 카드 0")
+        pp.write_bytes(plan0)
+        # 기본 가지에 안 들어감(맨 저장소 main = 한 커밋 앞 — 승인 기록은 같음) → 사람 길과 같은 ⛔ + 사람 길 안내
+        setmain(g(d, "rev-parse", "HEAD~1"))
+        out, rc = verify()
+        same(out, rc, "⛔ 지금 가지(refactor/x)의 내용이 아직 origin/main 에 다 들어 있지 않습니다", "지금 가지가 기본 가지에 안 들어감")
+        check("0.4.0 N2 판정 실패 → 사람 길 안내 한 줄", "(새 가지는 사람이 — 위 까닭을 푼 뒤 /refactor:approve 새 가지)" in out, out)
+        # 승인 기록 다름(기본 가지 쪽 기록에 줄이 더 있음) → ⛔
+        g(d, "checkout", "-q", "-b", "tmp040")
+        lf(rd / "APPROVALS.log", lg0 + "2026-10-05 12:00 KST | 메모 | x | - | 다른 손\n")
+        g(d, "add", "--", "docs"); g(d, "commit", "-qm", "x")
+        g(d, "push", "-q", "origin", "tmp040:main")
+        g(d, "checkout", "-q", "refactor/x")
+        out, rc = verify()
+        same(out, rc, "⛔ 기본 가지(origin/main)의 승인 기록이 지금 가지와 다릅니다 — 새 가지를 만들지 않았습니다", "승인 기록 다름")
+        # 성공: main = 작업 가지 커밋(GitHub 에서 합침)
+        setmain(head)
+        site.reqs.clear()
+        out, rc = verify()
+        cur = g(d, "symbolic-ref", "--short", "HEAD")
+        lt = _log033(d)
+        ok_name = re.fullmatch(r"refactor/\d{4}-\d{2}-\d{2}-B2", cur) is not None
+        check("0.4.0 N2 성공 → 0 · 검증 첫 줄 그대로 · 새 가지 refactor/<날짜>-B2 = origin/main(합친 커밋) · 🌿 줄 · 다음: B2 자동",
+              rc == 0 and out.startswith("✅ 라이브 검증 통과(B1)") and ok_name and g(d, "rev-parse", "HEAD") == head
+              and f"🌿 새 작업 가지: {cur} (origin/main {head[:7]} 에서 · 지난 가지 refactor/x 은 그대로 남아 있음)" in out
+              and out.rstrip().endswith("다음: /refactor:approve B2 자동 → /refactor:go"), out)
+        check("0.4.0 N1 성공 기록 줄 = | 새 가지 | <이름> <- origin/main@<7자> | - | 자동 B1 으로 실행 · 봉인 그대로 · 지난 가지 남음 · 표시 지움",
+              lt.endswith(f" KST | 새 가지 | {cur} <- origin/main@{head[:7]} | - | 자동 B1 으로 실행\n") and lt.count("| 새 가지 |") == 1
+              and _lib033(d, 'rl_log_intact "$R" && echo yes')[0] == "yes\n" and g(d, "rev-parse", "refs/heads/refactor/x") == head and not nxf.exists(), lt[-300:])
+        ef = rd / ".turn-autoend.B1"
+        rc0, se = _pc040(d)
+        check("0.4.0 N3 성공 끝(끝 표시 + 봉인 그대로 + 자동 꼴 새 가지 줄) → post-check 조용", rc0 == 0 and "승인 기록" not in se and ef.exists(), se)
+        lg1 = (rd / "APPROVALS.log").read_bytes()
+        seal1 = (rd / "approved/.log-sum").read_bytes()
+
+        def put(line, seal):
+            with open(rd / "APPROVALS.log", "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(line + "\n")
+            if seal:
+                _lib033(d, 'rl_log_seal "$R"')
+            r = _pc040(d)
+            (rd / "APPROVALS.log").write_bytes(lg1)
+            (rd / "approved/.log-sum").write_bytes(seal1)
+            return r
+
+        rc1, se1 = put(f"2026-10-05 12:00 KST | 새 가지 | refactor/y <- origin/main@{head[:7]} | - | 자동 B1 으로 실행", False)
+        check("0.4.0 N3 사람이 손으로 쓴 자동 꼴 새 가지 줄(봉인 안 함 · 끝 표시 있음) → post-check 알림", rc1 == 2 and "승인 기록" in se1, se1)
+        rc2, se2 = put(f"2026-10-05 12:00 KST | 새 가지 | refactor/y <- origin/main@{head[:7]} | - | 사용자가 /refactor:approve 로 실행", True)
+        check("0.4.0 N3 반대: 사람 꼴(사용자가 …) 새 가지 줄은 봉인·끝 표시가 있어도 → 알림", rc2 == 2 and "승인 기록" in se2, se2)
+        rc3, se3 = put(f"2026-10-05 12:00 KST | 새 가지 | refactor/y <- origin/main@{head[:7]} | - | 자동 B2 으로 실행", True)
+        check("0.4.0 N3 끝 표시와 다른 묶음(자동 B2) 새 가지 줄 → 알림", rc3 == 2 and "승인 기록" in se3, se3)
+        rc4, se4 = _pc040(d)
+        check("0.4.0 N3 되돌린 뒤 다시 조용(시험 준비 확인)", rc4 == 0, se4)
+        # 끝 표시가 없으면(다음 사람 입력이 지움) 봉인된 자동 꼴 줄도 알림 · 입력 훅이 표시(.turn-nextok)를 지움
+        nx()
+        _go040(d, prompt="<task-notification>\n<task-id>x</task-id>\n</task-notification>")
+        check("0.4.0 N4 반대: 알림 입력(task-notification)은 사람 입력이 아님 → 표시 그대로", nxf.exists(), "")
+        _go040(d, prompt="/refactor:go")
+        check("0.4.0 N4 사람 입력(인자 없는 /refactor:go 도) → 입력 훅이 표시 지움 · 끝 표시도 지움", not nxf.exists() and not ef.exists(), "")
+        nx()
+        _go040(d, prompt="고마워 다음은?")
+        check("0.4.0 N4 사람 입력(일반 문장) → 표시 지움", not nxf.exists(), "")
+        rc5, se5 = put(f"2026-10-05 12:00 KST | 새 가지 | refactor/y <- origin/main@{head[:7]} | - | 자동 B1 으로 실행", True)
+        check("0.4.0 N3 끝 표시 없음(사람 입력 뒤) → 봉인된 자동 꼴 새 가지 줄도 알림", rc5 == 2 and "승인 기록" in se5, se5)
+        # N5 문서: 7-execute 「8. 자동 마감」 · approve SKILL · README §6-5(흐름 · 네 경우 · 한계 ⑤) · §13 0.4.0 한 줄
+        ex = (ROOT / "plugins/refactor/skills/go/phases/7-execute.md").read_text(encoding="utf-8")
+        ap = (ROOT / "plugins/refactor/skills/approve/SKILL.md").read_text(encoding="utf-8")
+        rdm = (ROOT / "README.md").read_text(encoding="utf-8")
+        a6 = rdm.find("\n### 6-5. 자동 모드\n")
+        s65 = rdm[a6:rdm.find("\n---", a6)] if a6 >= 0 else ""
+        a13 = rdm.find("\n### 0.4.0 ")
+        s13 = rdm[a13:rdm.find("\n### 0.3.7 ", a13)] if a13 >= 0 else ""
+        need = [(ex, "**새 가지(verify 통과 뒤)**"), (ex, "`.turn-nextok.*`"), (ex, "`ℹ️ 합친 뒤 입력이 있어 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지`"),
+                (ex, "`✅ 남은 묶음이 없습니다 — 다 끝났으면 /refactor:approve 마무리`"), (ex, "`다음: /refactor:approve B2 자동 → /refactor:go`"),
+                (ap, "그때는 `/refactor:approve 새 가지` 를 치지 않아도 된다"), (s65, "**만들지 않는 네 경우**"), (s65, "→ 다음 묶음의 새 작업 가지 → 보고"),
+                (s65, "합친 뒤 새 가지는 자동 모드가 만들지만"), (s13, "→ 다음 묶음의 새 작업 가지(다음 묶음 승인은 사람"), (s13, "`.turn-nextok.*`")]
+        check("0.4.0 N5 문서(7-execute 8 · approve SKILL · README §6-5 흐름·네 경우·한계 ⑤ · §13)", all(n in t for t, n in need),
+              str([n for t, n in need if n not in t]))
+    finally:
+        site.close()
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
 
 
 if __name__ == "__main__":

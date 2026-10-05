@@ -498,6 +498,151 @@ RLCH
   return 2
 }
 
+# 다음 묶음(0.4.0 — 새 가지 이름 · 자동 모드 verify 의 "남은 묶음"): $1 계획서 $2 승인 기록
+#   → RL_NBC(안 끝난·보류 아닌 카드 ID 들 — 같은 ID 카드 하나·승인 칸 있는 카드만) · RL_NBB(실행 대기의 실행 순서 첫 줄의 묶음 — 실행 대기가 없으면
+#   RL_NBC 로 짐작 · 첫 줄이 묶음 없는 카드거나 계획서가 없으면 "-"). 승인 스크립트의 cur_bundle 과 같은 계산(STATE 의 current_bundle 은 지난 승인 때 값이라 쓰지 않는다)
+rl_next_bundle() {
+  local kind_ n_ id t box done_ cnt k r h hv st nbr="" u=""
+  RL_NBB="-"; RL_NBC=""
+  [ -f "$1" ] || return 0
+  while IFS="$RL_US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
+    [ "$kind_" = CARD ] && [ "$done_" != 1 ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ] || continue
+    [ "$st" = approved ] && nbr="$nbr $id"
+    [ "$st" != held ] && RL_NBC="$RL_NBC $id"
+  done <<RLNB
+$(rl_cards "$1" "$2")
+RLNB
+  RL_NBC=${RL_NBC# }
+  if [ -n "$nbr" ]; then u=$(rl_ready_units "$1" "$nbr")
+  elif [ -n "$RL_NBC" ]; then u=$(rl_ready_units "$1" "$RL_NBC")
+  fi
+  u=${u%%"$RL_NL"*}; u=${u%%"$RL_US"*}
+  [ -n "$u" ] && RL_NBB=$u
+  return 0
+}
+
+# 새 작업 가지(0.3.4 /refactor:approve 새 가지 — 0.4.0 부터 자동 모드 verify 도 함께 쓴다): origin/<기본 가지>(로컬 참조 — 받아 오기는 부르는 쪽)에서
+#   새 가지를 만들어 옮긴다 — 지금 위치의 내용이 기본 가지에 다 들어 있을 때만. 커밋 안 된 변경은 막지 않는다(새 위치와 부딪히면 git 이 스스로 거절)
+#   $1 프로젝트 폴더 $2 붙인 이름(사람 길만 — 빈 값이면 refactor/<날짜>[-B<n>], 겹치면 -2 …) $3 기록 줄 끝 칸(사람 = "사용자가 /refactor:approve 로 실행" ·
+#   자동 = "자동 B<n> 으로 실행") $4 기록 시각(rl_now 꼴 — 비우면 지금) · 날짜는 RL_TODAY(없으면 오늘)
+#   → RL_NBOUT(보여 줄 글 — 줄마다 줄바꿈) · RL_NB(새 가지 이름). 반환 0 = 옮기고 기록 "| 새 가지 | <이름> <- origin/<기본>@<7자> | - | <$3>" + 봉인 ·
+#   1 = 만들지 않음(아무것도 안 바뀜) · 2 = 옮겼지만 확인(가지·STATE·봉인)이 맞지 않음(기록을 남기지 않음)
+rl_nbs() { RL_NBOUT="$RL_NBOUT$*$RL_NL"; }
+rl_new_branch() {
+  local proj=$1 nbname=${2:-} tail=$3 now=${4:-} rdir="$1/docs/refactor" today=${RL_TODAY:-} gp x bname boid bsh ob obs nb nbu ubn c lo up p j mrc nb0 have i sw src e1 cur dn dshow oldw
+  local G=(git --no-replace-objects -c core.fsmonitor=false -c merge.renormalize=false -C "$1")
+  local log="$rdir/APPROVALS.log" state="$rdir/STATE.md" no=" — 새 가지를 만들지 않았습니다(아무것도 바꾸지 않았습니다)."
+  RL_NBOUT=""; RL_NB=""
+  [ -n "$today" ] || today=$(rl_today)
+  command -v git >/dev/null 2>&1 || { rl_nbs "❓ git 을 찾지 못했습니다$no"; return 1; }
+  gp=$("${G[@]}" rev-parse --git-path MERGE_HEAD --git-path rebase-merge --git-path rebase-apply --git-path CHERRY_PICK_HEAD \
+       --git-path REVERT_HEAD --git-path BISECT_LOG 2>/dev/null) || { rl_nbs "❓ 이 폴더는 git 저장소가 아니라(또는 git 이 저장소 설정을 읽지 못해) 새 가지를 만들 수 없습니다: $proj$no"; return 1; }
+  while IFS= read -r x; do
+    [ -n "$x" ] || continue
+    case "$x" in /*|[A-Za-z]:*) ;; *) x="$proj/$x" ;; esac
+    [ -e "$x" ] && { rl_nbs "❓ 진행 중인 git 작업(합치기·rebase·cherry-pick·revert·bisect)이 있습니다 — 진행 중인 git 작업을 먼저 끝내세요$no"; return 1; }
+  done <<RLNB
+$gp
+RLNB
+  rl_origin_base "$proj" || { rl_nbs "❓ origin 의 기본 가지를 찾지 못했습니다(origin/HEAD·origin/main·origin/master 참조 없음)$no"; return 1; }
+  bname=$RL_BNAME; boid=$RL_BOID; bsh=${boid:0:7}
+  "${G[@]}" cat-file -e "$boid:./docs/refactor/STATE.md" 2>/dev/null \
+    || { rl_nbs "⛔ 기본 가지(origin/$bname)에 리팩토링 기록이 없습니다(옮기면 안전장치가 꺼짐)$no"; return 1; }
+  "${G[@]}" diff --quiet --no-ext-diff HEAD "$boid" -- docs/refactor/APPROVALS.log docs/refactor/approved 2>/dev/null \
+    || { rl_nbs "⛔ 기본 가지(origin/$bname)의 승인 기록이 지금 가지와 다릅니다$no"; return 1; }
+  ob=$("${G[@]}" symbolic-ref -q --short HEAD 2>/dev/null)
+  obs=${ob:-떨어진 HEAD}
+  # 붙인 이름은 판정 전에 본다(판정 불가 문구의 터미널 명령에 그 이름을 쓰므로)
+  nb=""
+  if [ -n "$nbname" ]; then
+    nb=$nbname
+    if ! [[ $nb =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || ! "${G[@]}" check-ref-format --branch "$nb" >/dev/null 2>&1; then
+      rl_nbs "❓ 가지 이름($nb)을 쓸 수 없습니다(영문·숫자·._/- 만, 첫 글자는 영문·숫자·_, git 가지 이름 규칙)$no"; return 1
+    fi
+    # 0.3.4 보완 F6: 참조 이름 꼴·기본 가지 이름은 거절 — 영문 대소문자는 가리지 않는다(맥·Windows 는 파일 이름 대소문자를
+    #   가리지 않아 main 이 있으면 git 이 Main 을 같은 이름으로 보고 실패한다 — 어느 OS 든 같은 안내로 미리 거절). 대문자로(외부 명령 없이 — 영문 소문자만)
+    lo=abcdefghijklmnopqrstuvwxyz; up=ABCDEFGHIJKLMNOPQRSTUVWXYZ
+    for x in nb bname; do
+      ubn=""; c=${!x}
+      for ((j = 0; j < ${#c}; j++)); do
+        i=${c:j:1}
+        case "$i" in [a-z]) p=${lo%%"$i"*}; i=${up:${#p}:1} ;; esac
+        ubn=$ubn$i
+      done
+      if [ "$x" = nb ]; then nbu=$ubn; fi
+    done
+    case "$nbu" in
+      REFS/*|ORIGIN/*|HEAD|MAIN|MASTER|"$ubn")
+        rl_nbs "❓ 가지 이름($nb)을 쓸 수 없습니다(refs/·origin/ 으로 시작하는 이름과 HEAD·main·master·기본 가지 이름 $bname 은 새 작업 가지 이름으로 쓰지 않습니다)$no"; return 1 ;;
+    esac
+  fi
+  rl_merged_into "$proj" "$boid"; mrc=$?
+  if [ "$mrc" = 1 ]; then
+    rl_nbs "⛔ 지금 가지($obs)의 내용이 아직 origin/$bname 에 다 들어 있지 않습니다 — PR 이 아직 안 합쳐졌거나, 합친 뒤 최신 내용을 안 받아 온 상태입니다. Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요."
+    rl_nbs "   (새 가지를 만들지 않았습니다 — 아무것도 바꾸지 않았습니다.)"
+    return 1
+  elif [ "$mrc" != 0 ]; then
+    # 판정 불가(0.3.4 보완 F3): 까닭 + 사람이 터미널에서 만드는 길
+    rl_nbs "❓ 지금 가지($obs)의 내용이 origin/$bname 에 다 들어 있는지 판정하지 못했습니다: ${RL_MERGED_WHY:-까닭 모름}."
+    # 사람이 터미널에 붙여 넣을 명령에는 글자 검사를 지난 이름만 싣는다(origin/HEAD 가 가리키는 이름은 git 이 $·;·괄호를 허용 — 재검사 R)
+    if [[ $bname =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]]; then
+      rl_nbs "   Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요. 받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서: git switch -c ${nb:-refactor/$today} origin/$bname"
+    else
+      rl_nbs "   Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요. 받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서 새 작업 가지를 만들어 주세요(기본 가지 이름에 영문·숫자·._/- 밖의 글자가 있어 명령을 적지 않았습니다)."
+    fi
+    rl_nbs "   (새 가지를 만들지 않았습니다 — 아무것도 바꾸지 않았습니다.)"
+    return 1
+  fi
+  if [ -z "$nb" ]; then
+    # 0.4.0 묶음 하나 = 작업 가지 하나: 다음에 실행할 묶음이 있으면 이름 끝에 그 묶음 ID(refactor/<날짜>-B2 · 겹치면 -2 …) — rl_next_bundle.
+    #   묶음 칸이 없는 계획서면 예전 이름 그대로
+    rl_next_bundle "$rdir/REFACTOR_PLAN.md" "$log"
+    nb0="refactor/$today"
+    [[ $RL_NBB =~ ^B[0-9]+$ ]] && nb0="$nb0-$RL_NBB"
+    have=$("${G[@]}" for-each-ref --format='%(refname)' "refs/heads/$nb0*" "refs/remotes/origin/$nb0*" 2>/dev/null)
+    have="$RL_NL$have$RL_NL"
+    nb=$nb0; i=1
+    while case "$have" in *"${RL_NL}refs/heads/$nb$RL_NL"*|*"${RL_NL}refs/remotes/origin/$nb$RL_NL"*) true ;; *) false ;; esac; do
+      i=$((i + 1))
+      [ "$i" -gt 99 ] && { rl_nbs "❓ 오늘 날짜의 가지 이름($nb0 ~ $nb0-99)이 모두 쓰이고 있습니다 — 이름을 붙여 다시: /refactor:approve 새 가지 <이름>$no"; return 1; }
+      nb="$nb0-$i"
+    done
+  fi
+  sw=$("${G[@]}" switch --no-track -c "$nb" "$boid" 2>&1); src=$?
+  if [ "$src" != 0 ]; then
+    e1=""
+    while IFS= read -r x; do [ -n "${x//[[:space:]]/}" ] && { e1=$x; break; }; done <<RLNB
+$sw
+RLNB
+    rl_nbs "⛔ git 이 새 가지로 옮기지 못했습니다: ${e1:-(오류 문구 없음)}"
+    rl_nbs "   아무것도 바뀌지 않았습니다(지금 가지 $obs 그대로)."
+    return 1
+  fi
+  RL_NB=$nb
+  cur=$("${G[@]}" symbolic-ref -q --short HEAD 2>/dev/null)
+  if [ "$cur" != "$nb" ] || [ ! -f "$state" ] || ! rl_log_intact "$rdir"; then
+    rl_nbs "⚠️ 새 가지로 옮겼지만 확인이 맞지 않습니다(지금 가지: ${cur:-없음} · STATE.md $([ -f "$state" ] && echo 있음 || echo 없음) · 승인 기록 봉인 $(rl_log_intact "$rdir" && echo 일치 || echo 다름)) — 기록에 줄을 남기지 않았습니다. git status 로 확인해 주세요."
+    return 2
+  fi
+  # 따라온 커밋 안 된 변경(새 기록 줄을 쓰기 전에 센다)
+  dn=0; dshow=""
+  while IFS= read -r x; do
+    [ -n "$x" ] || continue
+    dn=$((dn + 1)); [ "$dn" -le 5 ] && dshow="$dshow, ${x:3}"
+  done <<RLNB
+$("${G[@]}" -c core.quotePath=false status --porcelain -- . 2>/dev/null)
+RLNB
+  printf '%s KST | 새 가지 | %s <- origin/%s@%s | - | %s\n' "${now:-$(rl_now)}" "$nb" "$bname" "$bsh" "$tail" >> "$log"
+  rl_log_seal "$rdir"
+  if [ -n "$ob" ]; then oldw="지난 가지 $ob 은 그대로 남아 있음"; else oldw="지난 위치(떨어진 HEAD)는 커밋으로 남아 있음"; fi
+  rl_nbs "🌿 새 작업 가지: $nb (origin/$bname $bsh 에서 · $oldw)"
+  if [ "$dn" -gt 0 ]; then
+    dshow=${dshow#, }; [ "$dn" -gt 5 ] && dshow="$dshow …"
+    rl_nbs "   커밋 안 된 변경 ${dn}개가 그대로 따라왔습니다: $dshow"
+  fi
+  return 0
+}
+
 # 시간 한도 안에서 명령 실행(0.3.4 — 합치기의 gh 호출): $1 = 초, 나머지 = 명령. 종료 코드는 명령의 것, 한도에 걸렸으면 124
 #   bash 만으로(외부 timeout·perl 에 기대지 않는다 — 맥에는 timeout 이 없고, gh(Go)는 perl alarm 의 SIGALRM 을 무시하며,
 #   Windows 는 System32 의 다른 timeout.exe 가 먼저 잡힐 수 있다). bash 3.2 에서도 돈다(bash 4.3 의 '아무 하나 끝나기를 기다리기' 옵션은 안 씀)

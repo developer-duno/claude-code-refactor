@@ -18,6 +18,8 @@
 #   0.4.0 보완: 허락은 봉인된 기록의 "| 자동 | B<n> | - | <시각> <가지> <방식>" 줄과 같아야 하고, push·merge 는 preflight 때 커밋(.turn-autopre ③)일 때만.
 # 기록: 푸시·합치기 허락 줄만 승인 기록에 "| - | 자동 B1 으로 실행" 꼴로 더하고 봉인한다(셸 명령 뒤 점검은 이 꼴만 더해졌으면 알리지 않는다 — §2-3).
 # 되돌리기·배포·자동 되돌리기는 하지 않는다(검증 실패면 멈추고 사람에게 되돌리는 길을 알린다).
+# 0.4.0 새 가지: verify 가 통과하면 다음 묶음의 작업 가지를 만든다(git fetch origin 뒤 lib rl_new_branch — 사람 /refactor:approve 새 가지 와 같은 확인 ·
+#   기록 끝 칸만 "자동 B<n> 으로 실행"). merge-only · 합친 뒤 사람 입력(.turn-nextok 없음) · 받아 오기 실패 · 남은 묶음 0 이면 만들지 않고 안내만(종료 코드 0 그대로).
 #
 # 시험용 줄이기 전용 환경 변수(정수 · 기본값보다 크거나 정수가 아니면 무시):
 #   REFACTOR_AUTO_INTERVAL(10) · REFACTOR_AUTO_WINDOW(60 — deploy-wait 한 호출의 상한 · 한 바퀴 최악 시간까지 넣어 다음 바퀴를 시작할지 정함) · REFACTOR_AUTO_DEPLOY_LIMIT(1800, 1 이상) · REFACTOR_AUTO_HTTP_LIMIT(8, 1 이상) ·
@@ -60,6 +62,7 @@ PF="$dir/.turn-autopre.$B"    # preflight 가 적은 것(1줄 = 시각 · 2줄 =
 MF="$dir/.turn-merged.$B"     # 합친 뒤 허락(merge 단계가 만듦 — deploy-wait·verify)
 EF="$dir/.turn-autoend.$B"    # 끝 표시(자동 모드가 끝날 때 남김 — ① B ② 끝난 시각 ③ 세션 ④ 가지 ⑤ 방식). 셸 명령 뒤 점검이 이 차례의 자동 줄을 알리지 않게만 쓴다
                               #   (자동 단계의 허락 근거가 아니다 — 이 스크립트·합치기 스크립트는 읽지 않음). 입력 훅이 다음 사람 입력에 지운다
+NX="$dir/.turn-nextok.$B"     # 합친 뒤 사람 입력 없음 표시(merge 가 씀 — ① B ② 시각 ③ 세션). 입력 훅이 사람 입력마다 지운다 · verify 성공 끝에 새 가지를 만들 근거
 
 lim() {
   LIMV=$2
@@ -497,6 +500,11 @@ EOF
       if ! { printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$B" "$(date +%s)" "$sid" "$msha" "$(rl_now)" "$AURL" "$AHOST" "$AMARK" "$ASCR" "$old" "$AMODE" "$ABR" > "$MF.tmp.$$" && mv -f "$MF.tmp.$$" "$MF"; } 2>/dev/null; then
         rm -f "$MF.tmp.$$"
       fi
+      # 0.4.0 사람 입력 표시(.turn-nextok.<B> — ① B ② 시각 ③ 세션): 합친 뒤 사람 입력이 없었는지 verify 가 새 가지를 만들기 전에 본다
+      #   (입력 훅이 사람 입력마다 지움 · verify 가 끝에 지움). merge-only 는 사람이 "검증해" 라고 입력해야 verify 가 돌므로 쓰지 않는다
+      if [ "$AMODE" != merge-only ] && [ -f "$MF" ]; then
+        { printf '%s\n%s\n%s\n' "$B" "$(date +%s)" "$sid" > "$NX.tmp.$$" && mv -f "$NX.tmp.$$" "$NX"; } 2>/dev/null || rm -f "$NX.tmp.$$"
+      fi
       end_auto
       say "✅ 합쳤습니다(자동 $B) — 합친 커밋 ${msha:0:12}"
       [ -n "$MNOTE" ] && say "$MNOTE"
@@ -710,7 +718,47 @@ PWJS
   if [ -z "$fails" ]; then
     say "✅ 라이브 검증 통과($B): 운영 주소 200$([ -n "$MMARK" ] && printf ' · 판 표지 %s' "$MV") · 확인할 화면 ${sn}개 GET 통과"
     say "   $pw"
-    say "다음: 보고 → 다음 묶음은 사람이 /refactor:approve 새 가지"
+    # 0.4.0 새 가지(사장님 결정 3 — 자동 모드 성공 뒤 다음 묶음의 작업 가지까지 · 다음 묶음 승인은 사람): 검증 결과·종료 코드(0)는 그대로이고
+    #   새 가지는 덧붙이는 일. 만들지 않는 네 경우 = merge-only(사람이 "검증해" 라고 입력해야 verify 가 돎) · 합친 뒤 사람 입력(.turn-nextok 없음·다름) ·
+    #   받아 오기(fetch) 실패 · 남은 묶음 0 — 그리고 lib rl_new_branch 의 판정 실패(사람 길과 같은 확인). 표시 파일은 여기서 지운다
+    nxw="다음: 보고 → 다음 묶음은 사람이 /refactor:approve 새 가지"
+    nxok=0
+    if [ -f "$NX" ]; then read_lines "$NX"; [ "${L[0]:-}" = "$B" ] && [ "${L[2]:-}" = "$sid" ] && age_ok "${L[1]:-}" 7200 && nxok=1; fi
+    rm -f "$NX"
+    if [ "$MMODE" = merge-only ]; then
+      say "ℹ️ 배포 방식이 '수동'(합치기까지만)이라 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지"
+    elif [ "$nxok" != 1 ]; then
+      say "ℹ️ 합친 뒤 입력이 있어 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지"
+    else
+      # 받아 오기: 이 호출의 남은 시간 안(Bash 도구 한도 120초 — 화면 열기에 시간을 썼으면 짧아짐) · 올리기 한도(PL) 까지
+      fl=$((108 - (SECONDS - t0))); [ "$fl" -gt "$PL" ] && fl=$PL
+      fe=""
+      if [ "$fl" -lt 5 ]; then frc=1; fe="검증에 시간을 다 써서 받아 오기를 하지 않음"
+      else rl_bounded "$fl" "${G[@]}" fetch -q origin >/dev/null 2>"$TD/fe"; frc=$?; [ "$frc" = 124 ] && fe="${fl}초 안에 끝나지 않음"
+      fi
+      if [ "$frc" != 0 ]; then
+        [ -n "$fe" ] || { while IFS= read -r x; do [ -n "${x//[[:space:]]/}" ] && { fe=$(clean "$x" 200); break; }; done < "$TD/fe"; }
+        say "ℹ️ 최신 내용을 받아 오지 못해 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지"
+        say "   (까닭: ${fe:-git fetch 종료 $frc})"
+      else
+        rl_next_bundle "$dir/REFACTOR_PLAN.md" "$log"
+        if [ -z "$RL_NBC" ]; then
+          say "✅ 남은 묶음이 없습니다 — 다 끝났으면 /refactor:approve 마무리"
+          nxw="다음: 보고"
+        else
+          RL_TODAY=$(rl_today)
+          rl_new_branch "$proj" "" "자동 $B 으로 실행"; nrc=$?
+          printf '%s' "$RL_NBOUT"
+          case "$nrc" in
+            0) if [[ $RL_NBB =~ ^B[0-9]+$ ]]; then nxw="다음: /refactor:approve $RL_NBB 자동 → /refactor:go"
+               else nxw="다음: /refactor:approve 로 다음 단계를 승인 → /refactor:go"; fi ;;
+            1) say "   (새 가지는 사람이 — 위 까닭을 푼 뒤 /refactor:approve 새 가지)" ;;
+            *) nxw="다음: 보고 → 사람이 git status 로 지금 가지를 확인" ;;
+          esac
+        fi
+      fi
+    fi
+    say "$nxw"
     exit 0
   fi
   say "⛔ 라이브 검증 실패($B) — 합친 것은 그대로입니다(자동 되돌리기 없음):$fails"
