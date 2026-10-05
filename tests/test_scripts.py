@@ -5937,7 +5937,7 @@ def check_auto_stage_fail_040(check):
         nd = _calls040(pwb, "node")
         nenv = (pwb / "node.env").read_text(encoding="utf-8") if (pwb / "node.env").exists() else ""
         check("0.4.0 보안 검사: 화면 열기 node 에 진짜 환경 변수(비밀값)를 넘기지 않음 · NODE_PATH 는 프로젝트 node_modules 만 · .npmrc 안 읽음",
-              nenv != "" and "s3cr3t-040" not in nenv and "evil-node-path" not in nenv and "npm_config_userconfig=/dev/null" in nenv
+              nenv != "" and "s3cr3t-040" not in nenv and "evil-node-path" not in nenv and "npm_config_userconfig=" in nenv and "npm_config_userconfig=/dev/null" not in nenv
               and f"NODE_PATH={dw}/node_modules" in nenv, nenv[:800])
         check("0.4.0 A9 playwright 있음 → 화면 열기 2/2 · node 에 주소·스크린샷 폴더 · verify/.gitignore '*'",
               rc == 0 and "화면 열기: 2/2 통과 · 스크린샷 docs/refactor/verify/B1/" in out and len(nd) == 1 and site.url in nd[0]
@@ -5954,6 +5954,17 @@ def check_auto_stage_fail_040(check):
         check("0.4.0 A9 화면 열기 스크립트: 같은 출처 비GET 요청 route abort · 콘솔 오류 · 스크린샷",
               "o === origin && q.method() !== 'GET' && q.method() !== 'HEAD'" in pwjs and "r.abort()" in pwjs and "page.screenshot" in pwjs
               and "npx --no-install playwright --version" in pwjs and 'env -i "${PWENV[@]}"' in pwjs, "")
+        # 재검사 A3: 그 최소 환경으로 진짜 npm 이 설정을 읽고 뜨는지(같은 파일을 두 설정에 주면 npm 이 바로 멈춘다) — npm 이 없는 PC 는 건너뜀
+        if shutil.which("npx"):
+            tdn = pathlib.Path(tempfile.mkdtemp(prefix="npmrc-")); made.append(str(tdn))
+            (tdn / "u").write_text(""); (tdn / "g").write_text("")
+            rn = subprocess.run(["env", "-i", "PATH=" + os.environ.get("PATH", ""), "HOME=" + str(tdn), "npm_config_userconfig=" + str(tdn / "u"),
+                                 "npm_config_globalconfig=" + str(tdn / "g"), "npm_config_update_notifier=false", "npx", "--version"],
+                                capture_output=True, cwd=str(tdn), timeout=60)
+            check("0.4.0 A9 화면 열기 최소 환경(서로 다른 빈 npm 설정 파일)으로 진짜 npx 가 뜸", rn.returncode == 0, rn.stderr.decode("utf-8", "replace")[:300])
+            rd_ = subprocess.run(["env", "-i", "PATH=" + os.environ.get("PATH", ""), "HOME=" + str(tdn), "npm_config_userconfig=/dev/null",
+                                  "npm_config_globalconfig=/dev/null", "npx", "--version"], capture_output=True, cwd=str(tdn), timeout=60)
+            check("0.4.0 A9 (대조) 같은 파일을 두 설정에 주면 npx 가 멈춤 — 위 고침이 필요한 까닭", rd_.returncode != 0, rd_.stderr.decode("utf-8", "replace")[:300])
         # A10 post-check: 자동 꼴 + 사람 꼴 섞임 → 알림 · 앞 줄 고침 → 알림
         dp, fgp = ready()
         rp = dp / "docs/refactor"

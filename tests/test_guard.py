@@ -5395,6 +5395,11 @@ def check_fg_040(res):
         _cases_034(res, proj, "A3 gh -R 넓은 값 · 읽기는 통과", [(OK, bash(c)) for c in [
             r"gh -R o\/r pr view 1", "gh -R {o/r,} pr list", "gh -R o/'r' pr view 1", 'gh -R o/r -R "$R" run list']])
         _cases_034(res, proj, "A3 claude --from-pr 이어서", [(B, bash(c)) for c in ["claude -p --from-pr 5", "claude --from-pr=5 -p < f"]])
+        # 보안 검사(10-05): 따옴표 속 '>' · "<" 를 리다이렉트로 보고 뒤 옵션을 건너뛰던 꼴 · 리다이렉트 뒤 자리에 온 옵션 꼴도 판정
+        _cases_034(res, proj, "보안 claude 따옴표 리다이렉트 글자", [(B, bash(c)) for c in [
+            "claude -p '>' --resume x", 'claude -p ">" -r x', 'claude -p "<" --continue', "claude -p '>>' --from-pr 5", "claude -p > --resume x"]])
+        _cases_034(res, proj, "보안 claude 진짜 리다이렉트는 통과", [(OK, bash(c)) for c in [
+            'claude -p "질문" > out.txt', "claude -p hi 2>/dev/null", 'claude -p "요약" < notes.md']])
         _cases_034(res, proj, "FG2 H2 gh -R 알 수 없는 값 · 읽기는 통과", [(OK, bash(c)) for c in [
             'gh -R "$R" pr view 1', 'gh -R "$R" pr list', "gh -R ${R} run list", "gh -Ro/r pr view 1"]])
         _cases_034(res, proj, "FG F1 gh -R 앞 · 읽기는 통과", [(OK, bash(c)) for c in [

@@ -636,7 +636,9 @@ verify)
   pw="화면 열기: 없음(playwright 없음 — GET 만 확인)"
   # 보안 검사(10-05): 프로젝트의 playwright 는 안전 실행기 밖에서 돈다 — 진짜 환경 변수(비밀값)를 넘기지 않게 환경을 비우고 꼭 필요한 것만 넘긴다
   #   (PATH·HOME·언어·임시 폴더 · 브라우저 위치 · Windows 실행에 필요한 것) · 프로젝트·사용자 .npmrc 는 읽지 않는다
-  PWENV=(PATH="$PATH" HOME="${HOME:-$TD}" LANG=C.UTF-8 TMPDIR="$TD" npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm_config_update_notifier=false)
+  #   (사용자·전체 npm 설정은 서로 다른 빈 파일로 — 같은 파일(/dev/null)을 둘에 주면 npm 이 "double-loading config" 로 바로 멈춘다 · 재검사 A3)
+  : > "$TD/npmrc-u" 2>/dev/null; : > "$TD/npmrc-g" 2>/dev/null
+  PWENV=(PATH="$PATH" HOME="${HOME:-$TD}" LANG=C.UTF-8 TMPDIR="$TD" npm_config_userconfig="$TD/npmrc-u" npm_config_globalconfig="$TD/npmrc-g" npm_config_update_notifier=false)
   for v_ in PLAYWRIGHT_BROWSERS_PATH SYSTEMROOT SystemRoot LOCALAPPDATA USERPROFILE APPDATA COMSPEC ComSpec; do [ -n "${!v_:-}" ] && PWENV+=("$v_=${!v_}"); done
   if [ -s "$TD/list" ] && (cd "$proj" && rl_bounded 20 env -i "${PWENV[@]}" npx --no-install playwright --version) >/dev/null 2>&1; then
     left=$(( 100 - (SECONDS - t0) ))

@@ -2178,13 +2178,15 @@ claude_resume_print() {
 }
 # claude 낱말 뒤 글($1)에 출력 모드(-p·--print)와 이어서(--resume·-r·--continue·-c)가 둘 다 있는가 — 풀 수 없는 낱말($ 가 남음)은 둘 다로 본다
 crp_words() {
-  local seg=$1 w pr=0 rs=0 sk=0 re_q="\"[^\"]*[[:space:]][^\"]*\"|'[^']*[[:space:]][^']*'"
+  local seg=$1 w raw pr=0 rs=0 sk=0 re_q="\"[^\"]*[[:space:]][^\"]*\"|'[^']*[[:space:]][^']*'"
   while [[ $seg =~ $re_q ]]; do seg=${seg/"${BASH_REMATCH[0]}"/ Q }; done
   set -f
   for w in $seg; do
-    w=${w//\"/}; w=${w//\'/}
-    if [ "$sk" = 1 ]; then sk=0; continue; fi
-    case "$w" in '<'|'<<'|'<<<'|*'>'|*'>|') sk=1; continue ;; '<'*|*'>'*) continue ;; esac   # 리다이렉트 대상(> "$OUT")은 옵션이 아니다
+    raw=$w; w=${w//\"/}; w=${w//\'/}
+    # 리다이렉트 대상(> "$OUT")은 옵션이 아니다 — 단 보안 검사(10-05): 리다이렉트인지는 따옴표를 벗기기 **전** 낱말로 본다('>' · ">" 는 글이다) ·
+    #   건너뛸 자리에 - 로 시작하는 낱말이 오면 건너뛰지 않고 판정한다(막는 쪽)
+    if [ "$sk" = 1 ]; then sk=0; case "$w" in -*) ;; *) continue ;; esac; fi
+    case "$raw" in *\"*|*\'*) ;; *) case "$w" in '<'|'<<'|'<<<'|*'>'|*'>|') sk=1; continue ;; '<'*|*'>'*) continue ;; esac ;; esac
     case "$w" in
       *'$'*) pr=1; rs=1 ;;
       --print|--print=*) pr=1 ;;
