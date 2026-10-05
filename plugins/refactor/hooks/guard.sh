@@ -3872,15 +3872,19 @@ merge_block() {
 #   합친 뒤 자동 모드 스크립트가 만든 .turn-merged.B<n>(deploy-wait·verify). guard 는 여기까지만 본다 — 파일 이름 꼴(B+숫자) · 2줄 = 만든 시각(초)이고
 #   0~7200초 안 · 3줄 = 이 세션 ID(글자 그대로). 가지·카드·go= 대조는 스크립트가 한다. $1 = 파일 앞머리(.turn-auto. / .turn-merged.) · 하나라도 유효하면 0.
 #   refactor-auto 낱말이 보이는 명령에서만 부른다(date 1회 — 평소 도구 호출엔 비용 0)
+#   0.4.1 R3(검사 C#7): $2 = 명령의 묶음(B<n>)이 있으면 그 묶음 파일만 본다 — 이름이 글자 그대로 $1$2(대소문자 가림 — 대소문자를 안 가리는
+#   파일 시스템에서도 실제 이름으로 비교) · 1줄 = $2. 없으면(막을 때 안내 고르기) 지금처럼 하나라도 유효하면 0
 auto_grant() {
   hascs "$sid" '^[A-Za-z0-9_-]{1,128}$' || return 1
-  local f l1 l2 l3 now="" re="^${1//./[.]}B[0-9]{1,6}\$"
+  local f l1 l2 l3 now="" re="^${1//./[.]}B[0-9]{1,6}\$" ab=${2:-}
   for f in "$rdir/$1"B*; do
     [ -f "$f" ] || continue
     hascs "${f##*/}" "$re" || continue
+    [ -z "$ab" ] || [ "${f##*/}" = "$1$ab" ] || continue
     l1=""; l2=""; l3=""
     { IFS= read -r l1; IFS= read -r l2; IFS= read -r l3; } < "$f" 2>/dev/null
-    l2=${l2%$'\r'}; l3=${l3%$'\r'}
+    l1=${l1%$'\r'}; l2=${l2%$'\r'}; l3=${l3%$'\r'}
+    [ -z "$ab" ] || [ "$l1" = "$ab" ] || continue
     hascs "$l2" '^[0-9]{1,12}$' || continue
     [ "$l3" = "$sid" ] || continue
     [ -n "$now" ] || now=$(date +%s 2>/dev/null)
@@ -3906,10 +3910,11 @@ auto_ok() {
   case "$r" in *"$BS"*) return 1 ;; esac
   # 보완(검사 A#5): 인자는 정확히 셋 — <프로젝트 폴더> <B 번호> <세션 ID>(7-execute 「8. 자동 마감」·입력 훅이 알려 주는 꼴). 프로젝트 폴더는 . .. 를 정리하면
   #   이 대화 프로젝트($proj — "$CLAUDE_PROJECT_DIR" 도 됨) · 세션 ID 는 훅 입력의 session_id 와 글자 그대로 같을 때만(합치기 0.3.5 처럼 꼴 고정)
-  local pa sa
-  re="^bash +(${qa}|${ua}) +refactor-auto +(preflight|push|pr|merge|deploy-wait|verify) +(${pd}|${qa}|${ua}) +B[0-9]{1,6} +([A-Za-z0-9_-]{1,128})( +2>&1)?\$"
+  #   0.4.1 R3(검사 C#7): B 번호도 뽑아 그 묶음의 허락 파일과만 대조한다(같은 세션의 다른 묶음 허락은 근거가 아님 — 두 창이 각자 자동 모드일 때)
+  local pa sa ba
+  re="^bash +(${qa}|${ua}) +refactor-auto +(preflight|push|pr|merge|deploy-wait|verify) +(${pd}|${qa}|${ua}) +(B[0-9]{1,6}) +([A-Za-z0-9_-]{1,128})( +2>&1)?\$"
   hascs "$r" "$re" || return 1
-  p=${BASH_REMATCH[1]}; st=${BASH_REMATCH[2]}; pa=${BASH_REMATCH[3]}; sa=${BASH_REMATCH[4]}
+  p=${BASH_REMATCH[1]}; st=${BASH_REMATCH[2]}; pa=${BASH_REMATCH[3]}; ba=${BASH_REMATCH[4]}; sa=${BASH_REMATCH[5]}
   [ "$sa" = "$sid" ] || return 1
   p=${p#\"}; p=${p%\"}
   case "$p" in "~"*) return 1 ;; esac
@@ -3923,7 +3928,7 @@ auto_ok() {
        [ "$pa" = "$NP" ] || return 1 ;;
   esac
   case "$st" in deploy-wait|verify) kind=.turn-merged. ;; *) kind=.turn-auto. ;; esac
-  auto_grant "$kind"
+  auto_grant "$kind" "$ba"
 }
 MSG_AUTO_EXEC="자동 모드 스크립트는 /refactor:approve B<n> 자동 으로 켠 묶음에서만 돕니다."
 MSG_AUTO_NO="사용자에게 /refactor:approve B<n> 자동 을 입력해 달라고 하세요(승인 뒤 2시간 안 · 인자 없는 /refactor:go 한 차례 안에서만). 그 밖에는 푸시·합치기를 사용자가 /refactor:approve 푸시 · /refactor:approve 합치기 로 합니다."
