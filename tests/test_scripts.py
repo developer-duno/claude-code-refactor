@@ -5655,19 +5655,19 @@ def check_auto_flow_040(check):
         rc0, se = _pc040(d)
         check("0.4.0 A10 push 뒤(자동 꼴 줄만 더해짐 + 유효한 .turn-auto) → post-check 조용", rc0 == 0 and "승인 기록" not in se, se)
         # pr: 열린 PR 없음 → gh pr create(--base main --head refactor/x --title "B1 결제 안전" --body-file)
-        (fg / "create.out").write_text("https://github.com/o/r/pull/7\n")
+        (fg / "create.out").write_text("https://github.com/o/r/pull/7\n", newline="")
         out, rc = _auto040(d, "pr", [fg, noplay])
         cr = [c for c in _calls035(fg) if c.startswith("pr create")]
         check("0.4.0 A6 pr: 열린 PR 없음 → gh pr create 1번(--base main --head refactor/x --title 'B1 결제 안전' --body-file) → 0 · #7",
               rc == 0 and "PR 을 만들었습니다: #7" in out and len(cr) == 1 and "--base main --head refactor/x --title B1 결제 안전 --body-file" in cr[0], out + str(cr))
-        (fg / "list.out").write_text("7 false main\n")
+        (fg / "list.out").write_text("7 false main\n", newline="")
         out, rc = _auto040(d, "pr", [fg, noplay])
         check("0.4.0 A6 pr: 열린 PR 있음 → 재사용(만들지 않음)", rc == 0 and "열린 PR #7 을 씁니다" in out
               and len([c for c in _calls035(fg) if c.startswith("pr create")]) == 1, out)
         # merge: 합치기 스크립트(초록 두 번 · 비교 · 합침) + 합친 커밋 줄
         head = _git034(d, "rev-parse", "HEAD")
         fm = _fake035(made, head=head, headRefName="refactor/x")
-        (fm / "mc.out").write_text(_SHA040 + "\n")
+        (fm / "mc.out").write_text(_SHA040 + "\n", newline="")
         out, rc = _auto040(d, "merge", [fm, noplay])
         mf = rd / ".turn-merged.B1"
         m = mf.read_text(encoding="utf-8").split("\n") if mf.exists() else []
@@ -5687,14 +5687,14 @@ def check_auto_flow_040(check):
         vc = _bin040(made, vercel=f'case "$*" in *"githubCommitSha={_SHA040}"*"--prod"*"--status READY"*) [ -f "$d/ready" ] && echo "  https://app-x1.vercel.app  Ready  Production" ;; esac; exit 0')
         out, rc = _auto040(d, "deploy-wait", [fm, noplay, vc])
         check("0.4.0 A8 deploy-wait: 아직(판 표지 그대로 · vercel READY 없음) → 3 · ⏳", rc == 3 and out.startswith("⏳ 배포가 아직 끝나지 않았습니다"), out)
-        (vc / "ready").write_text("1")
+        (vc / "ready").write_text("1", newline="")
         out, rc = _auto040(d, "deploy-wait", [fm, noplay, vc])
         check("0.4.0 A8 deploy-wait: vercel READY 인데 판 표지 그대로(CDN 옛 판) → 3 · 판 표지 그대로", rc == 3 and "판 표지 그대로" in out, out)
         (vc / "ready").unlink()
         site.set("/version.txt", "build-new-2\n")
         out, rc = _auto040(d, "deploy-wait", [fm, noplay, vc])
         check("0.4.0 A8 deploy-wait: 판 표지만 바뀌고 vercel READY 없음 → 3(둘 다 봐야 함)", rc == 3, out)
-        (vc / "ready").write_text("1")
+        (vc / "ready").write_text("1", newline="")
         out, rc = _auto040(d, "deploy-wait", [fm, noplay, vc])
         m = mf.read_text(encoding="utf-8").split("\n") if mf.exists() else []
         check("0.4.0 A8 deploy-wait: vercel ls -m githubCommitSha=<합친 커밋> --prod --status READY + 판 표지 옛→새 → 0 · deployed= 줄",
@@ -5811,7 +5811,7 @@ def check_auto_stage_fail_040(check):
         # A6 포크 PR
         d4, fg4 = ready()
         _auto040(d4, "preflight", [fg4, noplay])
-        (fg4 / "list.out").write_text("9 true main\n")
+        (fg4 / "list.out").write_text("9 true main\n", newline="")
         out, rc = _auto040(d4, "pr", [fg4, noplay])
         check("0.4.0 A6 열린 PR 이 포크 → 1 · ⛔", rc == 1 and "포크의 PR" in out and _af040(d4) is None, out)
         # A7 다시(3) → 허락 재사용(기록 1줄) · 거절(1) → 자동 끝 · 다시 부르면 허락 없음(만들지 않음)
@@ -5868,21 +5868,21 @@ def check_auto_stage_fail_040(check):
         out, rc = _auto040(dw, "deploy-wait", [fgw, noplay, rail])
         check("0.4.0 A8 cloudflare · 판 표지 그대로 → 3 ⏳(판 표지 그대로)", rc == 3 and "판 표지 그대로" in out, out)
         gd = _fake035(made)
-        (gd / "deploy.out").write_text("55 production 2026-10-05T01:00:00Z\n")
-        (gd / "dstat.out").write_text("success\n")
-        (gd / "denv.out").write_text(f"{_SHA040} 2026-10-05T01:00:00Z\n")
+        (gd / "deploy.out").write_text("55 production 2026-10-05T01:00:00Z\n", newline="")
+        (gd / "dstat.out").write_text("success\n", newline="")
+        (gd / "denv.out").write_text(f"{_SHA040} 2026-10-05T01:00:00Z\n", newline="")
         _mf040(dw, site.url, host="github")
         out, rc = _auto040(dw, "deploy-wait", [gd, noplay])
         cl = _calls035(gd)
         check("0.4.0 A8 github: deployments?sha=<합친 커밋> → statuses success + 같은 환경 최신 = 이 커밋 → 0",
               rc == 0 and any(f"deployments?sha={_SHA040}" in c for c in cl) and any("/deployments/55/statuses" in c for c in cl)
               and any("deployments?environment=production" in c for c in cl), out + str(cl))
-        (gd / "denv.out").write_text(f"{'cd' * 20} 2026-10-05T02:00:00Z\n")
+        (gd / "denv.out").write_text(f"{'cd' * 20} 2026-10-05T02:00:00Z\n", newline="")
         _mf040(dw, site.url, host="github")
         out, rc = _auto040(dw, "deploy-wait", [gd, noplay])
         check("0.4.0 A8 github: 같은 환경에 더 새 커밋 배포 → 1 · ⚠ 다른 배포가 덮음 · 허락 지움",
               rc == 1 and out.startswith("⚠️ 다른 배포가 덮었습니다") and not (rw / ".turn-merged.B1").exists(), out)
-        (gd / "dstat.out").write_text("failure\n")
+        (gd / "dstat.out").write_text("failure\n", newline="")
         _mf040(dw, site.url, host="github")
         out, rc = _auto040(dw, "deploy-wait", [gd, noplay])
         check("0.4.0 A8 github: 배포 상태 failure → 1 · ⛔ 배포가 실패 · 되돌리는 길(사람)", rc == 1 and "배포가 실패했습니다" in out and "되돌리기는 사람이" in out, out)
@@ -5931,22 +5931,22 @@ def check_auto_stage_fail_040(check):
         check("0.4.0 A9 merge-only 는 deploy-wait 없이 verify(판 표지 옛 값과 다름) → 0", rc == 0, out)
         # playwright 있음(가짜 npx 0 + 가짜 node 가 화면마다 결과 줄) → 화면 열기 2/2 · 스크린샷 폴더 .gitignore · 콘솔 오류 → ⛔
         pwb = _bin040(made, npx="exit 0", node='env > "$d/node.env"; cat "$d/node.out"')
-        (pwb / "node.out").write_text("PAGE\t/\t200\tyes\t0\t\nPAGE\t/shop\t200\tyes\t0\t\n")
+        (pwb / "node.out").write_text("PAGE\t/\t200\tyes\t0\t\nPAGE\t/shop\t200\tyes\t0\t\n", newline="")
         _mf040(dw, site.url, deployed="build-new-2")
         out, rc = _auto040(dw, "verify", [fgw, pwb], extra={"REFACTOR_FAKE_SECRET": "s3cr3t-040", "NODE_PATH": "/tmp/evil-node-path"})
         nd = _calls040(pwb, "node")
         nenv = (pwb / "node.env").read_text(encoding="utf-8") if (pwb / "node.env").exists() else ""
         check("0.4.0 보안 검사: 화면 열기 node 에 진짜 환경 변수(비밀값)를 넘기지 않음 · NODE_PATH 는 프로젝트 node_modules 만 · .npmrc 안 읽음",
               nenv != "" and "s3cr3t-040" not in nenv and "evil-node-path" not in nenv and "npm_config_userconfig=" in nenv and "npm_config_userconfig=/dev/null" not in nenv
-              and f"NODE_PATH={dw}/node_modules" in nenv, nenv[:800])
+              and (f"NODE_PATH={dw}/node_modules" in nenv or f"NODE_PATH={dw.as_posix()}/node_modules" in nenv), nenv[:800])
         check("0.4.0 A9 playwright 있음 → 화면 열기 2/2 · node 에 주소·스크린샷 폴더 · verify/.gitignore '*'",
               rc == 0 and "화면 열기: 2/2 통과 · 스크린샷 docs/refactor/verify/B1/" in out and len(nd) == 1 and site.url in nd[0]
               and "docs/refactor/verify/B1" in nd[0] and (rw / "verify/.gitignore").read_text(encoding="utf-8") == "*\n", out + str(nd))
-        (pwb / "node.out").write_text("PAGE\t/\t200\tyes\t1\tTypeError x\nPAGE\t/shop\t200\tyes\t0\t\n")
+        (pwb / "node.out").write_text("PAGE\t/\t200\tyes\t1\tTypeError x\nPAGE\t/shop\t200\tyes\t0\t\n", newline="")
         _mf040(dw, site.url, deployed="build-new-2")
         out, rc = _auto040(dw, "verify", [fgw, pwb])
         check("0.4.0 A9 화면 열기 콘솔 오류 1 → 1 · ⛔ 라이브 검증 실패(콘솔 오류 1개)", rc == 1 and "콘솔 오류 1개 (TypeError x)" in out, out)
-        (pwb / "node.out").write_text("NOPW\tCannot find module 'playwright'\n")
+        (pwb / "node.out").write_text("NOPW\tCannot find module 'playwright'\n", newline="")
         _mf040(dw, site.url, deployed="build-new-2")
         out, rc = _auto040(dw, "verify", [fgw, pwb])
         check("0.4.0 A9 playwright 모듈을 못 불러옴 → GET 만(화면 열기: 못 함) · 0", rc == 0 and "화면 열기: 못 함(Cannot find module" in out, out)
@@ -5958,12 +5958,11 @@ def check_auto_stage_fail_040(check):
         if shutil.which("npx"):
             tdn = pathlib.Path(tempfile.mkdtemp(prefix="npmrc-")); made.append(str(tdn))
             (tdn / "u").write_text(""); (tdn / "g").write_text("")
-            rn = subprocess.run(["env", "-i", "PATH=" + os.environ.get("PATH", ""), "HOME=" + str(tdn), "npm_config_userconfig=" + str(tdn / "u"),
-                                 "npm_config_globalconfig=" + str(tdn / "g"), "npm_config_update_notifier=false", "npx", "--version"],
-                                capture_output=True, cwd=str(tdn), timeout=60)
+            # 제품처럼 bash 안에서 env -i(PATH 는 bash 의 것 — 윈도에서 파이썬의 C:\…;… PATH 를 Git env 에 주면 npx 를 못 찾는다)
+            npx_sh = 'env -i PATH="$PATH" HOME="$1" npm_config_userconfig="$1/u" npm_config_globalconfig="$1/$2" npm_config_update_notifier=false npx --version'
+            rn = subprocess.run([BASH, "-c", npx_sh, "_", tdn.as_posix(), "g"], capture_output=True, cwd=str(tdn), timeout=60)
             check("0.4.0 A9 화면 열기 최소 환경(서로 다른 빈 npm 설정 파일)으로 진짜 npx 가 뜸", rn.returncode == 0, rn.stderr.decode("utf-8", "replace")[:300])
-            rd_ = subprocess.run(["env", "-i", "PATH=" + os.environ.get("PATH", ""), "HOME=" + str(tdn), "npm_config_userconfig=/dev/null",
-                                  "npm_config_globalconfig=/dev/null", "npx", "--version"], capture_output=True, cwd=str(tdn), timeout=60)
+            rd_ = subprocess.run([BASH, "-c", npx_sh, "_", tdn.as_posix(), "u"], capture_output=True, cwd=str(tdn), timeout=60)
             check("0.4.0 A9 (대조) 같은 파일을 두 설정에 주면 npx 가 멈춤 — 위 고침이 필요한 까닭", rd_.returncode != 0, rd_.stderr.decode("utf-8", "replace")[:300])
         # A10 post-check: 자동 꼴 + 사람 꼴 섞임 → 알림 · 앞 줄 고침 → 알림
         dp, fgp = ready()
@@ -6157,7 +6156,7 @@ def check_auto_fix_040(check):
         _auto040(d5, "preflight", [fg5, noplay])
         site.set("/version.txt", "build-mid-1\n")   # preflight 뒤 앞선 배포가 끝나 표지가 바뀜
         fm5 = _fake035(made, head=g(d5, "rev-parse", "HEAD"), headRefName="refactor/x")
-        (fm5 / "mc.out").write_text(_SHA040 + "\n")
+        (fm5 / "mc.out").write_text(_SHA040 + "\n", newline="")
         out, rc = _auto040(d5, "merge", [fm5, noplay])
         m5 = (d5 / "docs/refactor/.turn-merged.B1").read_text(encoding="utf-8").split("\n") if (d5 / "docs/refactor/.turn-merged.B1").exists() else []
         check("0.4.0 보완 A5 merge 첫 호출: 판 표지를 다시 읽어 .turn-merged ⑩ = 합치기 직전 값(build-mid-1)", rc == 0 and len(m5) > 9 and m5[9] == "build-mid-1", out + str(m5))
