@@ -1430,6 +1430,14 @@ hv_human() {
     if has "$1" 'refactor-merge' && approve_exec "$1" refactor-merge; then merge_block; fi
     glob_protected_exec "$1" "refactor-merge.sh refactor-merge" && merge_block
   fi
+  # 0.4.0 G2: 자동 모드 스크립트(refactor-auto)를 실행하는 꼴(승인 스크립트와 같은 판정 · 글로브 이름 · 새 Claude 세션에 넘기기) —
+  #   유효한 자동 허락(.turn-auto/.turn-merged)이 있고 정해진 꼴 그대로(AOK)일 때만 건너뛴다
+  if [ "${AOK:-0}" != 1 ]; then
+    nested_claude_approve "$2" 'refactor-auto' && auto_block
+    if has "$1" "(^|[^[:alnum:]._/-])claude([.](exe|cmd))?([^[:alnum:]_.-]|$)" && has "$1" 'refactor-auto'; then auto_block; fi
+    if has "$1" 'refactor-auto' && approve_exec "$1" refactor-auto; then auto_block; fi
+    glob_protected_exec "$1" "refactor-auto.sh refactor-auto" && auto_block
+  fi
   if has "$1" "run\\.sh[\"']?[[:space:]]+[\"']?(turn|guard|post-check|session-start)([\"'[:space:];&|)]|$)" \
     || has "$1" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|exec)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
     || has "$1" "(^|[;&|({\`])[[:space:]]*(sudo[[:space:]]+)?\\.[[:space:]]+[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
@@ -1929,6 +1937,29 @@ hv_db() {
   fi
   return 0
 }
+# 0.4.0 G5(#11): netlify api <메서드> 가 읽기(get…·list…)가 아닌가 → 0. 메서드 = api 뒤 첫 낱말 중 옵션이 아닌 것(값을 받는 옵션
+#   --data·-d·--auth·--filter·--http-proxy·--http-proxy-certificate-filename 은 값까지 건너뜀). 그 밖(create…·update…·delete…·restore…·rollback…·
+#   cancel…·lock…·unlock…·모르는 이름·변수)은 쓰기로 본다. 메서드가 없으면(목록 --list·도움말·# 주석 뒤) 아니다. npx netlify-cli@x api … 도 같게
+netlify_api_write() {
+  local rest=$1 seg i m w=() re="${S}netlify(-cli)?(@[^[:space:];&|]*)?[[:space:]]+api([[:space:]][^;&|]*)?"
+  while [[ $rest =~ $re ]]; do
+    seg=${BASH_REMATCH[0]}; rest=${rest#*"$seg"}
+    seg=${BASH_REMATCH[4]}; seg=${seg//\"/ }; seg=${seg//\'/ }
+    set -f; w=($seg); set +f
+    m=""; i=0
+    while [ "$i" -lt "${#w[@]}" ]; do
+      case "${w[$i]}" in
+        --data|-d|--auth|--filter|--http-proxy|--http-proxy-certificate-filename) i=$((i + 2)) ;;
+        -*) i=$((i + 1)) ;;
+        *) m=${w[$i]}; break ;;
+      esac
+    done
+    case "$m" in ""|"#"*) continue ;; esac
+    has "$m" '^(get|list)[A-Za-z0-9_]*$' && continue
+    return 0
+  done
+  return 1
+}
 # 고가치 규칙(리팩토링 진행 중: 배포·마이그레이션 적용·원격 DB 접속) — lq·lz·hv·hvz 사본마다(bash -c "ver"'cel --prod').
 #   $2 = 원격 DB 주소 판정용 문자열(원형은 lr, 사본은 그 사본)
 hv_deploy() {
@@ -1937,14 +1968,29 @@ hv_deploy() {
   #   :·-·=·, 가 붙은 꼴(wrangler secret:put · railway up:x)은 막힌다. vercel aliases 는 alias 와 같이
   #   0.3.7 G1: heroku rollback·releases:rollback·pg:reset · netlify rollback·sites:delete(같은 경계 — heroku releases·releases:info·restart 는 통과)
   #   보완(검사 A#7): heroku apps:destroy(netlify sites:delete 와 같은 성격 — apps:info 는 통과)
-  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|netlify[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
+  #   0.4.0 G4: gh release create·delete·edit·upload · gh pr|release|workflow 뒤 하위명령 앞의 -R|--repo <저장소>(옵션 순서만 다른 철자)도 같게
+  local ghr="([[:space:]]+(-r|--repo)(=|[[:space:]]+)[^[:space:];&|]+)?"
+  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|netlify[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr${ghr}[[:space:]]+merge|release${ghr}[[:space:]]+(create|delete|edit|upload)|workflow${ghr}[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
   local re_pkg_deploy="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?([a-z0-9_-]+:)?(deploy|release|publish|ship)([[:space:]:]|$)"
-  if has "$t" "$re_deploy" || has "$t" "$re_pkg_deploy"; then
+  # 0.4.0 G6(#10): vercel 의 첫 하위 명령이 조회(ls·list·inspect·logs)인 조각에서만 --prod 는 배포가 아니다(vercel ls --prod = 운영 배포 목록) —
+  #   그 조각(; & | 앞까지)의 --prod 만 지운 사본(tv)으로 배포 규칙을 본다. 하위 명령 앞에 옵션이 있거나(vercel --prod ls) 다른 하위 명령이면 그대로 막는다
+  local tv=$t
+  if has "$t" 'vercel' && has "$t" '--prod'; then
+    local vrest=$t vout="" vm re_vro="${S}vercel[[:space:]]+(ls|list|inspect|logs)([[:space:]][^;&|]*)?"
+    while [[ $vrest =~ $re_vro ]]; do
+      vm=${BASH_REMATCH[0]}; vout=$vout${vrest%%"$vm"*}; vrest=${vrest#*"$vm"}
+      while [[ $vm =~ --prod ]]; do vm=${vm/"${BASH_REMATCH[0]}"/--x}; done
+      vout=$vout$vm
+    done
+    tv=$vout$vrest
+  fi
+  if has "$tv" "$re_deploy" || has "$t" "$re_pkg_deploy"; then
     # 0.3.4 §10-5: PR 합치기(gh pr merge)가 걸렸을 때만 입력창 명령을 안내한다(합치기는 승인 스크립트가 검사 뒤 직접 한다)
     local dh="필요한 명령을 사람에게 안내하세요."
-    has "$t" "${S}gh[[:space:]]+pr[[:space:]]+merge" && dh="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요."
+    has "$t" "${S}gh[[:space:]]+pr${ghr}[[:space:]]+merge" && dh="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요."
     block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "$dh"
   fi
+  netlify_api_write "$t" && block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요. 읽기는 netlify api get…·list… 로 됩니다."
   # 0.3.5 X1: gh api 로 PR 합치기(REST pulls/<번호>/merge · 가지 합치기 /merges · graphql mergePullRequest·enablePullRequestAutoMerge·mergeBranch)
   #   — gh pr merge 차단을 비껴가는 길. 방식 옵션(-X·--method)과 상관없이 막는다(합쳐졌는지 보는 읽기 GET 도 — 안내에 조회 대안).
   #   번호 칸은 숫자가 아니어도(변수·따옴표) 본다. gh.exe·경로 붙은 gh 도(조각 = gh api 부터 ; & | 앞까지)
@@ -1971,6 +2017,12 @@ hv_deploy() {
     fi
     if has "$mn" "/git/refs([/\"'[:space:]?)]|$)|/contents([/\"'[:space:]?)]|$)" && gha_write "$mn"; then
       block "$MSG_GHW" "$MSG_GHW2"
+    fi
+    # 0.4.0 G4(#11): 배포 기록(…/deployments · …/deployments/<번호>/statuses) · 워크플로 실행(…/actions/workflows/<x>/dispatches · repos/<o>/<r>/dispatches) ·
+    #   릴리스(…/releases · …/releases/<번호>/assets) · Pages 빌드(…/pages/builds) 쓰기 = 배포 명령(gh workflow run · gh release create 와 같은 묶음).
+    #   쓰기 판정은 gha_write(-X·--method 가 GET 이 아님 · 방식 없이 -f·-F·--field·--raw-field·--input) — 읽기(GET)는 통과
+    if has "$mn" "/(deployments|dispatches|releases)([/?\"'[:space:])]|$)|/pages/builds([/?\"'[:space:])]|$)" && gha_write "$mn"; then
+      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
     fi
     if has "$mn" "[[:space:]][\"']?/?graphql([\"'[:space:]?)]|$)" \
       && has "$mn" "[[:space:]][\"']?((-i*f|--field|--raw-field)([[:space:]]+|=)?[\"']?[^[:space:]=\"']*[\"']?=[\"']?@|--input([[:space:]=\"']|$))"; then
@@ -2018,6 +2070,8 @@ go_runner() {
     [[ $rseg =~ $re_cmt ]] && rseg=${rseg%%"${BASH_REMATCH[0]}"}   # 주석(# …)은 명령이 아니다
     has "$rseg" "$re_mark" && continue
     has "$rseg" "$re_plug" && continue   # 플러그인 자체 현황 스크립트(경로에 띄어쓰기가 있어도)
+    # 0.4.0 G2: 자동 마감은 인자 없는 /refactor:go 차례 안에서 돈다 — 허락된 자동 모드 스크립트 꼴 그대로(AOK — 명령 전체가 그 한 줄)일 때만
+    [ "${AOK:-0}" = 1 ] && has "$rseg" "run\\.sh[\"']?[[:space:]]+refactor-auto([[:space:]]|$)" && continue
     if runs_project_code "$rseg"; then
       block "리팩토링(/refactor:go) 중에는 테스트·빌드·앱 실행을 안전 실행기로만 합니다 — 운영 DB·운영 키 대신 가짜 값(127.0.0.1:9 등)을 넣어, 실수로 운영 데이터를 바꾸거나 알림을 보내지 않게 합니다." "명령 앞에 붙이세요(&&·; 로 이은 명령마다 각각): bash \"$runsh\" refactor-safe-run -- <명령>   예) bash \"$runsh\" refactor-safe-run -- npm test   · 무엇이 가짜 값으로 바뀌는지(이름만): bash \"$runsh\" refactor-safe-run --check"
     fi
@@ -2038,8 +2092,9 @@ strip_call_opt() {
 # 명령을 && || ; | ` $( 로 나눈 조각들 → CUTS(줄바꿈 구분)
 cut_segs() { local s=$1; s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; CUTS=${s//\$(/$NL}; }
 # 새 Claude 세션(claude -p … · npx claude · node …/claude-code/…)에 승인 명령·--from-hook 을 넘기는가 — 새 세션의 입력 훅이 사람 입력으로 보고 승인한다
+#   $2 = 볼 낱말 정규식(없으면 승인 명령 — 0.4.0 자동 모드 스크립트는 'refactor-auto' 로 따로 부른다: 막는 문구가 다르다)
 nested_claude_approve() {
-  has "$1" 'claude' && has "$1" 'refactor:(approve|go)|from-hook' || return 1
+  has "$1" 'claude' && has "$1" "${2:-refactor:(approve|go)|from-hook}" || return 1
   local s seg i a
   cut_segs "$1"; s=$CUTS
   while [ -n "$s" ]; do
@@ -3279,6 +3334,61 @@ merge_block() {
   if [ "${MG:-}" = 1 ]; then block "$MSG_MERGE_EXEC" "허락은 그대로입니다 — 아래 꼴 그대로 한 번만 다시 실행하세요(그래도 막히면 사용자에게 /refactor:approve 합치기 를 다시 입력해 달라고 하세요): $ML"; fi
   block "$MSG_MERGE_EXEC" "$MSG_MERGE_NO"
 }
+# 0.4.0 G2 자동 모드 허락: 사람이 /refactor:approve B<n> 자동 → 승인 스크립트가 만든 docs/refactor/.turn-auto.B<n>(합치기 전 단계 preflight·push·pr·merge),
+#   합친 뒤 자동 모드 스크립트가 만든 .turn-merged.B<n>(deploy-wait·verify). guard 는 여기까지만 본다 — 파일 이름 꼴(B+숫자) · 2줄 = 만든 시각(초)이고
+#   0~7200초 안 · 3줄 = 이 세션 ID(글자 그대로). 가지·카드·go= 대조는 스크립트가 한다. $1 = 파일 앞머리(.turn-auto. / .turn-merged.) · 하나라도 유효하면 0.
+#   refactor-auto 낱말이 보이는 명령에서만 부른다(date 1회 — 평소 도구 호출엔 비용 0)
+auto_grant() {
+  hascs "$sid" '^[A-Za-z0-9_-]{1,128}$' || return 1
+  local f l1 l2 l3 now="" re="^${1//./[.]}B[0-9]{1,6}\$"
+  for f in "$rdir/$1"B*; do
+    [ -f "$f" ] || continue
+    hascs "${f##*/}" "$re" || continue
+    l1=""; l2=""; l3=""
+    { IFS= read -r l1; IFS= read -r l2; IFS= read -r l3; } < "$f" 2>/dev/null
+    l2=${l2%$'\r'}; l3=${l3%$'\r'}
+    hascs "$l2" '^[0-9]{1,12}$' || continue
+    [ "$l3" = "$sid" ] || continue
+    [ -n "$now" ] || now=$(date +%s 2>/dev/null)
+    hascs "$now" '^[0-9]{1,12}$' || return 1
+    l1=$((10#$now - 10#$l2))
+    [ "$l1" -ge 0 ] && [ "$l1" -le 7200 ] && return 0
+  done
+  return 1
+}
+# 0.4.0 G2: 이 명령이 허락된 자동 모드 스크립트 호출 그대로인가 → 0(그때만 hv_human 의 실행 차단과 go 턴 안전 실행기 강제를 건너뛴다 — 다른 규칙은 그대로 본다).
+#   도구가 Bash · 맨 위 명령(PTOP) · JSON 이스케이프(\" \/)만 푼 원문(앞뒤 공백 뗌)에 다른 역슬래시가 없고, 꼴이 정확히
+#   bash <run.sh 경로> refactor-auto <단계> [인자…] [2>&1] — 경로는 따옴표("…", $ ` 없음) 또는 맨글자이고 . .. 를 정리하면 이 플러그인의 hooks/run.sh ·
+#   단계 = preflight·push·pr·merge(유효한 .turn-auto 필요) / deploy-wait·verify(유효한 .turn-merged 필요) · 인자 = 따옴표 글("…", $ ` 없음) ·
+#   맨글자 [A-Za-z0-9_./:@%+,=-] · "$CLAUDE_PROJECT_DIR" · "${CLAUDE_PROJECT_DIR}". 대소문자를 가린다
+auto_ok() {
+  [ "$tool" = Bash ] && [ "$PTOP" = 1 ] && [ -n "$plugroot" ] || return 1
+  local r=${rawcmd//"$BS$Q"/$Q} p st kind qa='"[^"$`]+"' ua='[A-Za-z0-9_./:@%+,=~-]+' pd='"[$]CLAUDE_PROJECT_DIR"|"[$][{]CLAUDE_PROJECT_DIR[}]"' re
+  r=${r//"$P_BSSL"/$SL}
+  while [ "${r# }" != "$r" ]; do r=${r# }; done
+  while [ "${r% }" != "$r" ]; do r=${r% }; done
+  # Windows 경로(C:\…\run.sh — JSON 원문에서는 \\)는 첫 따옴표 경로 안에서만 / 로 바꿔 본다(그 밖의 역슬래시는 아래에서 막는다)
+  case "$r" in 'bash "'*'"'*) p=${r#bash \"}; p=${p%%\"*}; st=${r#"bash \"$p\""}; p=${p//"$BS$BS"/$SL}; r="bash \"$p\"$st" ;; esac
+  case "$r" in *"$BS"*) return 1 ;; esac
+  re="^bash +(${qa}|${ua}) +refactor-auto +(preflight|push|pr|merge|deploy-wait|verify)(( +(${pd}|${qa}|${ua}))*)( +2>&1)?\$"
+  hascs "$r" "$re" || return 1
+  p=${BASH_REMATCH[1]}; st=${BASH_REMATCH[2]}
+  p=${p#\"}; p=${p%\"}
+  case "$p" in "~"*) return 1 ;; esac
+  normpath "$p" "$cwd"
+  [ "$NP" = "$plugroot/hooks/run.sh" ] || return 1
+  case "$st" in deploy-wait|verify) kind=.turn-merged. ;; *) kind=.turn-auto. ;; esac
+  auto_grant "$kind"
+}
+MSG_AUTO_EXEC="자동 모드 스크립트는 /refactor:approve B<n> 자동 으로 켠 묶음에서만 돕니다."
+MSG_AUTO_NO="사용자에게 /refactor:approve B<n> 자동 을 입력해 달라고 하세요(승인 뒤 2시간 안 · 인자 없는 /refactor:go 한 차례 안에서만). 그 밖에는 푸시·합치기를 사용자가 /refactor:approve 푸시 · /refactor:approve 합치기 로 합니다."
+# G2: 자동 모드 스크립트 실행 차단 — 이 세션의 자동 허락이 하나라도 유효하면 정해진 꼴을, 아니면 입력창 명령을 안내한다(막을 때만 허락 파일을 읽는다)
+auto_block() {
+  if auto_grant .turn-auto. || auto_grant .turn-merged.; then
+    block "$MSG_AUTO_EXEC" "허락은 그대로입니다 — 7-execute 「8. 자동 마감」 의 명령을 다른 명령·래퍼와 섞지 않고 한 줄 그대로 실행하세요: bash \"$plugroot/hooks/run.sh\" refactor-auto <단계> …(preflight·push·pr·merge 는 합치기 전, deploy-wait·verify 는 합친 뒤)"
+  fi
+  block "$MSG_AUTO_EXEC" "$MSG_AUTO_NO"
+}
 # $1 판정용 문자열 하나가 "허락된 가지($2)로 보내는 정확한 push 한 번" 인가. 조각(&& || ; | & ( ) 백틱 줄바꿈)으로 나눠
 #   push 낱말(따옴표 뗀 뒤 대소문자 무시)이 정확히 한 번 · 그 조각이 git push [-u|--set-upstream] origin <가지>(가지는 따옴표 한 쌍까지) [2>&1] 뿐 ·
 #   그 조각에 \ 없음 · 모든 조각의 첫 낱말이 git·echo·tail·head·true·wc(0.3.4 T7 허용 목록 — 작업 폴더·저장소·git 을 바꾸는 조각이 끼지 않게) ·
@@ -3430,6 +3540,9 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   #   MG = 허락 파일이 유효했나(빈 값 = 아직 안 읽음 — 글로브 꼴로 막힐 때 merge_block 이 그때 읽는다)
   local MOK=0 MG="" ML=""
   if has "$cmd0$NL$lq$NL$lz$NL$hv$NL$hvz" 'refactor-merge'; then merge_ok && MOK=1; fi
+  # 0.4.0 G2: 자동 모드 낱말(refactor-auto)이 보일 때만 허락을 읽어 "허락된 꼴 그대로"인지 본다(AOK)
+  local AOK=0
+  if has "$cmd0$NL$lq$NL$lz$NL$hv$NL$hvz" 'refactor-auto'; then auto_ok && AOK=1; fi
   # 승인·훅 진입점·중첩 claude(새 Claude 세션은 그 입력을 사람 입력으로 본다) — 원형과 따옴표를 모두 뺀 사본(lz) 둘 다.
   # 승인 스크립트는 실행하는 모양만 막는다(cat·grep·head 로 읽는 것은 통과)
   hv_human "$lq" "$lr"
@@ -3439,6 +3552,8 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # 0.3.5: 합치기 스크립트 판정을 먼저 — 승인 이름 정규식(run.sh 뒤 24글자 안의 turn·guard…)이 경로 글자(예: /tmp/guardtest-…)에 걸려 안내 문구가 바뀌지 않게(둘 다 막음)
   #   0.3.7 G5: 승인 스크립트 낱말(refactor-approve)도 보이면 합치기 안내 대신 아래 승인 문구로(허락이 살아 있을 때 합치기 명령을 다시 권하지 않게)
   [ "$MOK" != 1 ] && ! has "$lr" 'refactor-approve' && interp_approve "$lr" 'refactor-merge' && merge_block
+  # 0.4.0 G2: 인터프리터 코드(python -c · node -e · 히어독) 안의 자동 모드 스크립트도 같은 판정 — 승인 스크립트 낱말이 함께 보이면 아래 승인 문구로
+  [ "$AOK" != 1 ] && ! has "$lr" 'refactor-approve' && interp_approve "$lr" 'refactor-auto' && auto_block
   interp_approve "$lr" && block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"
   if writes_to '(docs/refactor/)?\.allow-[a-z-]+|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/' || interp_writes '\.allow-|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/'; then
     block "허용 파일(.allow-*)·승인 기록(APPROVALS.log)·.turn 은 사람과 플러그인만 만들고 지웁니다." "$MSG_HUMAN"

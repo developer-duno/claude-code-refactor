@@ -856,6 +856,13 @@ def main():
     check_interp_plugin_write_035(res)
     check_gh_api_write_035(res)
     check_guard_037(res)
+    check_auto_files_040(res)
+    check_auto_call_040(res)
+    check_auto_still_040(res)
+    check_deploy_write_040(res)
+    check_netlify_api_040(res)
+    check_vercel_read_040(res)
+    check_readme_040(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -5002,6 +5009,325 @@ def check_guard_037(res):
         _cases_034(res, plain, "G4·G6 평소에는 통과", [(OK, bash(c)) for c in [g4[0], g4[4], g4[8], bl[1], mg[1]]])
     finally:
         rmtree_rw(plain)
+
+
+
+# ── 0.4.0 WG: 자동 모드 허락 파일 보호 · refactor-auto 호출 판정 · 배포 기록·워크플로·릴리스 쓰기 · netlify api · vercel 조회 --prod ──
+W_AUTO = "자동 모드 스크립트는 /refactor:approve B<n> 자동 으로 켠 묶음에서만 돕니다."
+W_AUTO_NO = "사용자에게 /refactor:approve B<n> 자동 을 입력해 달라고 하세요"
+W_AUTO_FORM = "허락은 그대로입니다 — 7-execute 「8. 자동 마감」 의 명령을"
+W_DEP = "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다."
+AUTO_PRE = ("preflight", "push", "pr", "merge")      # .turn-auto.<B> 가 있어야 하는 단계
+AUTO_POST = ("deploy-wait", "verify")                 # .turn-merged.<B> 가 있어야 하는 단계
+
+
+def _acmd_040(proj, stage, tail=None):
+    """자동 모드 스크립트 호출(설계서 §2-2 `refactor-auto.sh <단계>` 를 run.sh 로) — 인자는 WA 가 정한다(guard 는 인자 꼴만 본다)"""
+    tail = f' "{pathlib.Path(proj).as_posix()}" t' if tail is None else tail
+    return f'bash "{_mroot_035()}/hooks/run.sh" refactor-auto {stage}{tail}'
+
+
+def _agrant_040(proj, kind="auto", bid="B1", sid="t", ago=0, lines=None, crlf=False, name=None):
+    """자동 허락 파일을 직접 만든다(승인 스크립트·자동 모드 스크립트는 부르지 않는다). kind = auto(.turn-auto) · merged(.turn-merged) · None(모두 지움).
+    줄: ① B-ID ② 만든 시각(epoch) ③ 세션 ID — guard 는 ②③ 과 파일 이름 꼴만 본다(그 뒤 줄은 스크립트 몫)"""
+    d = proj / "docs/refactor"
+    for p in list(d.glob(".turn-auto*")) + list(d.glob(".turn-merged*")):
+        p.unlink()
+    if kind is None:
+        return
+    rows = lines if lines is not None else (
+        [bid, str(int(time.time()) - ago), sid, "feat", "rebase", "/tmp/t.jsonl", "https://x.example", "vercel", "/version.txt", "/ 홈", "go="]
+        if kind == "auto" else [bid, str(int(time.time()) - ago), sid, SHA40, "https://x.example"])
+    nl = "\r\n" if crlf else "\n"
+    (d / (name or f".turn-{kind}.{bid}")).write_bytes((nl.join(rows) + nl).encode("utf-8"))
+
+
+def _gate_run_040(proj, call):
+    """스위치(REFACTOR_GUARD_ALWAYS) 없이 진짜 문을 지나는 호출 — 평소(STATE 없음) 통과 확인용"""
+    env = env_for(proj)
+    env.pop("REFACTOR_GUARD_ALWAYS", None)
+    pl = {"session_id": "t", "transcript_path": "/tmp/t.jsonl", "cwd": str(proj), "permission_mode": "default", "hook_event_name": "PreToolUse",
+          "tool_name": call[0], "tool_input": call[1], "tool_use_id": "toolu_1"}
+    r = run_hook([BASH, (HOOKS / "run.sh").as_posix(), "guard"], input=json.dumps(pl, ensure_ascii=False).encode("utf-8"), capture_output=True, env=env)
+    return r.returncode, r.stderr.decode("utf-8", "replace")
+
+
+def check_auto_files_040(res):
+    """0.4.0 G1(검사 C #4): 자동 허락 파일 .turn-auto.<B>·.turn-merged.<B> 가 기존 .turn* 보호 10곳을 그대로 물려받는지 자리마다 1꼴 이상.
+    (줄 번호는 0.3.6 88041eb 기준 → 0.3.7 자리) ① :527 is_human_only(파일 도구) ② :612-632 파일 본문(.sh·.py·.md) ③ :1413-1424 hv_human(실행 판정 — G2 의
+    refactor-auto) ④ :2357-2364 is_human_path·is_record_path(만들기·복사·이동·링크·압축 해제) ⑤ :2601 셸 쓰기 대상(리다이렉트·tee·cd 상대경로) ⑥ :2616 복사 원본
+    이름 ⑦ :3397 writes_to·interp_writes(인터프리터 쓰기) ⑧ :3408 히어독 ⑨ turn.sh:236 docs/refactor/.gitignore 의 .turn* ⑩ 하루 정리(find -name '.turn*').
+    읽기(cat·test -f·ls·Read)는 통과"""
+    W_FT = "파일은 사람만 만들고 지웁니다."
+    W_SH = "은 사람과 플러그인만 만들고 지웁니다."
+    W_CODE = "에 쓰는 코드를 파일로 쓰지 않습니다(사람 전용)."
+    W_DOC = "에 쓰는 명령을 문서에 적지 않습니다(사람 전용)."
+    W_TG = "는 사람과 플러그인만 만들고 지우고 바꿉니다."
+    W_ARC = "리팩토링 기록 폴더(docs/refactor)에 압축을 풀거나"
+    W_HD = "을 다루는 내용을 파일로 쓰지 않습니다(사람 전용)."
+    proj = make_project(phase="EXECUTE")
+    try:
+        P = proj.as_posix()
+        for n in (".turn-auto.B1", ".turn-merged.B1", ".turn-auto.B12"):
+            f = "docs/refactor/" + n
+            _cases_034(res, proj, f"G1 ① 파일 도구 {n}", [(B, ("Write", {"file_path": f, "content": "B1\n1\nt\n"})),
+                                                       (B, ("Edit", {"file_path": f"{P}/{f}", "old_string": "a", "new_string": "b"})),
+                                                       (B, ("MultiEdit", {"file_path": f, "edits": [{"old_string": "a", "new_string": "b"}]}))], need=W_FT)
+            _cases_034(res, proj, f"G1 ② 파일 본문(코드) {n}", [(B, ("Write", {"file_path": "scripts/mk.sh", "content": f"printf 'B1\\n' > {f}\n"})),
+                                                         (B, ("Write", {"file_path": "src/mk.py", "content": f"open('{f}','w').write('B1')\n"}))], need=W_CODE)
+            _cases_034(res, proj, f"G1 ② 파일 본문(문서) {n}", [(B, ("Write", {"file_path": "notes.md", "content": f"echo B1 > {f}\n"}))], need=W_DOC)
+            _cases_034(res, proj, f"G1 ④⑤⑦ 셸 쓰기 {n}", [(B, bash(c)) for c in [
+                f"touch {f}", f"printf 'B1\\n1\\nt\\n' > {f}", f'echo x >> "{f}"', f"echo x | tee {f}", f"cp /tmp/x {f}", f"mv docs/refactor/tmp.txt {f}",
+                f"ln -s /tmp/x {f}", f"install -m 644 /tmp/x {f}", f"sed -i 's/a/b/' {f}", f"rm {f}", f"truncate -s 0 {f}", f"echo x > {P}/{f}",
+                f"python3 -c \"open('{f}','w').write('B1')\"", f"node -e \"require('fs').writeFileSync('{f}','B1')\"",
+                f"perl -e 'open(F,\">\",\"{f}\")'", f"python3 - <<'EOF'\nopen('{f}','w').write('B1')\nEOF", f"cat > {f} <<'EOF'\nB1\nEOF"]], need=W_SH)
+            _cases_034(res, proj, f"G1 ⑤ cd 뒤 상대경로 {n}", [(B, bash(c)) for c in [
+                f"cd docs/refactor && printf x > {n}", f"cd docs/refactor && python3 -c \"open('{n}','w').write('B1')\""]], need=W_TG)
+            _cases_034(res, proj, f"G1 ⑥ 복사 원본 이름 {n}", [(B, bash(f"cp /tmp/{n} docs/refactor/"))], need=W_TG)
+            _cases_034(res, proj, f"G1 ⑧ 히어독으로 스크립트 만들기 {n}", [(B, bash(f"cat > /tmp/mk.sh <<'EOF'\nprintf B1 > {f}\nEOF"))], need=W_HD)
+            _cases_034(res, proj, f"G1 PowerShell {n}", [(B, ps(f"Set-Content -Path {f} -Value B1"))])
+            _cases_034(res, proj, f"G1 읽기는 통과 {n}", [(OK, bash(f"cat {f}")), (OK, bash(f"test -f {f} && echo y")), (OK, bash("ls docs/refactor/.turn-*")),
+                                                     (OK, ("Read", {"file_path": f})), (OK, bash(f"head -3 {f}"))])
+        _cases_034(res, proj, "G1 ④ 압축 풀기", [(B, bash("tar -xf /tmp/a.tar -C docs/refactor")), (B, bash("unzip /tmp/a.zip -d docs/refactor"))], need=W_ARC)
+        # ③ hv_human = 실행 판정 자리(파일 보호 아님) — G2 의 refactor-auto 를 여기에 넣었다(허락 없음)
+        _agrant_040(proj, None)
+        _cases_034(res, proj, "G1 ③ hv_human 자리: 허락 없는 refactor-auto 실행", [(B, bash(_acmd_040(proj, "push")))], need=W_AUTO)
+    finally:
+        rmtree_rw(proj)
+    # ⑨ turn.sh 가 만드는 docs/refactor/.gitignore 의 .turn* 이 새 이름을 덮는다(단계 커밋에 실려 올라가지 않게) · ⑩ 하루 지난 것은 하루 정리가 지운다
+    proj = make_project(phase="EXECUTE")
+    try:
+        turn(proj, "t", "/refactor:go")
+        gi = proj / "docs/refactor/.gitignore"
+        res["total"] += 1
+        if not gi.is_file() or ".turn*" not in gi.read_text(encoding="utf-8").splitlines():
+            res["fails"].append(("0.4.0 G1 ⑨ turn.sh 의 .gitignore 에 .turn*", "있음", "없음", "", "", ""))
+        for n in (".turn-auto.B1", ".turn-merged.B3"):
+            lf(proj / "docs/refactor" / n, "B1\n1\nt\n")
+            r = subprocess.run(["git", "-C", str(proj), "check-ignore", "-q", "docs/refactor/" + n], capture_output=True)
+            res["total"] += 1
+            if r.returncode != 0:
+                res["fails"].append(("0.4.0 G1 ⑨ git 이 무시함 " + n, 0, r.returncode, "", "", ""))
+        old = time.time() - 2 * 86400
+        for n in (".turn-auto.B1", ".turn-merged.B3"):
+            os.utime(proj / "docs/refactor" / n, (old, old))
+        sw = proj / "docs/refactor/.turn-sweep"
+        if sw.exists():
+            sw.unlink()
+        turn(proj, "t", "안녕")
+        for n in (".turn-auto.B1", ".turn-merged.B3"):
+            res["total"] += 1
+            if (proj / "docs/refactor" / n).exists():
+                res["fails"].append(("0.4.0 G1 ⑩ 하루 지난 " + n + " 정리", "지움", "남음", "", "", ""))
+    finally:
+        rmtree_rw(proj)
+
+
+def check_auto_call_040(res):
+    """0.4.0 G2: bash …/run.sh refactor-auto <단계> 는 유효한 허락이 있을 때만 통과 — preflight·push·pr·merge = .turn-auto.<B>, deploy-wait·verify =
+    .turn-merged.<B>. 유효 = 파일 있음 + 3줄 세션 ID 일치 + 2줄 epoch 0~7200초 안. 허락이 있어도 인터프리터·새 세션·하위 에이전트·래퍼·다른 명령과 섞기는 차단.
+    읽기는 통과 · go 턴 안에서 통과 · 평소(STATE 없음)는 판정 없이 통과"""
+    R = _mroot_035()
+    run_sh, ascr = f"{R}/hooks/run.sh", f"{R}/scripts/refactor-auto.sh"
+    proj = make_project(phase="EXECUTE")
+    try:
+        P = proj.as_posix()
+        # 허락 없음 — 단계 6 전부 · 실행 꼴들 · 안내
+        _agrant_040(proj, None)
+        _cases_034(res, proj, "G2 허락 없음 · 단계 6", [(B, bash(_acmd_040(proj, s))) for s in AUTO_PRE + AUTO_POST], need=W_AUTO_NO)
+        forms = [f"bash {run_sh} refactor-auto push", f"sh {run_sh} refactor-auto push", f"source {run_sh} refactor-auto push", f"{run_sh} refactor-auto push",
+                 f"bash {ascr} push", f"{ascr} push", f"exec {ascr} push", f"cat {ascr} | bash", f"bash < {ascr}", f"echo push | xargs bash {ascr}",
+                 f"bash -c 'bash {run_sh} refactor-auto push'", f"eval bash {run_sh} refactor-auto push", f"timeout 100 bash {run_sh} refactor-auto push",
+                 f"env bash {run_sh} refactor-auto push", f"nohup bash {run_sh} refactor-auto push", f"/bin/bash {run_sh} refactor-auto push",
+                 f"BASH {run_sh} REFACTOR-AUTO PUSH", f'bash {run_sh} refactor-au"to" push', f"bash {run_sh} refactor-au''to push",
+                 f"bash {run_sh} refactor-au${{z}}to push", f"A=auto; bash {run_sh} refactor-$A push", f"bash {run_sh} refactor-aut? push",
+                 f"bash {R}/scripts/refactor-aut[o].sh push", f"bash {run_sh} refactor-auto push # 자동",
+                 f"python3 -c \"import subprocess; subprocess.run(['bash','{run_sh}','refactor-auto','push'])\"",
+                 f"node -e \"require('child_process').execSync('bash {run_sh} refactor-auto push')\"",
+                 f"python3 - <<'EOF'\nimport os\nos.system('bash {run_sh} refactor-auto push')\nEOF",
+                 f"claude -p 'bash {run_sh} refactor-auto push'", f"npx claude -p 'bash {run_sh} refactor-auto merge'",
+                 f"\"$(which claude)\" -p 'run refactor-auto push'",
+                 f"npx @anthropic-ai/claude-code -p 'bash {run_sh} refactor-auto push'"]
+        _cases_034(res, proj, "G2 허락 없음 · 실행 꼴 차단", [(B, bash(c)) for c in forms], need=W_AUTO)
+        _cases_034(res, proj, "G2 허락 없음 · PowerShell", [(B, ps(_acmd_040(proj, "push")))], need=W_AUTO)
+        reads = [f"cat {ascr}", f"grep -n push {ascr}", f"head -20 {ascr}", f"wc -l {ascr}", f"ls {R}/scripts", "echo refactor-auto",
+                 'git commit -m "docs: refactor-auto 안내"', f"python3 -c \"print(open('{ascr}').read())\"", f"grep -rn refactor-auto {R}/skills"]
+        _cases_034(res, proj, "G2 읽기는 통과", [(OK, bash(c)) for c in reads])
+        # .turn-auto 있음 — 합치기 전 단계만 통과, 합친 뒤 단계는 차단
+        _agrant_040(proj, "auto")
+        _cases_034(res, proj, "G2 .turn-auto · 합치기 전 단계 통과", [(OK, bash(_acmd_040(proj, s))) for s in AUTO_PRE])
+        _cases_034(res, proj, "G2 .turn-auto · 합친 뒤 단계 차단", [(B, bash(_acmd_040(proj, s))) for s in AUTO_POST], need=W_AUTO_FORM)
+        # .turn-merged 있음 — 합친 뒤 단계만 통과
+        _agrant_040(proj, "merged")
+        _cases_034(res, proj, "G2 .turn-merged · 합친 뒤 단계 통과", [(OK, bash(_acmd_040(proj, s))) for s in AUTO_POST])
+        _cases_034(res, proj, "G2 .turn-merged · 합치기 전 단계 차단", [(B, bash(_acmd_040(proj, s))) for s in AUTO_PRE], need=W_AUTO_FORM)
+        # 허락 유효성 — 단계 6 × (만료 · 미래 · 세션 다름) 은 차단, 7100초·CRLF·다른 B 번호는 통과
+        for s in AUTO_PRE + AUTO_POST:
+            kind = "auto" if s in AUTO_PRE else "merged"
+            for label, kw in (("7201초 지남", {"ago": 7201}), ("시각이 미래", {"ago": -120}), ("세션 다름", {"sid": "t2"})):
+                _agrant_040(proj, kind, **kw)
+                _cases_034(res, proj, f"G2 {s} · {label}", [(B, bash(_acmd_040(proj, s)))], need=W_AUTO_NO)
+            _agrant_040(proj, kind, ago=7100)
+            _cases_034(res, proj, f"G2 {s} · 7100초는 통과", [(OK, bash(_acmd_040(proj, s)))])
+        for label, kw, want in (("CRLF", {"crlf": True}, OK), ("B12", {"bid": "B12"}, OK), ("세션 대문자", {"sid": "T"}, B),
+                                ("2줄 숫자 아님", {"lines": ["B1", "now", "t"]}, B), ("3줄 없음", {"lines": ["B1", str(int(time.time()))]}, B),
+                                ("3줄 뒤 공백", {"lines": ["B1", str(int(time.time())), "t "]}, B), ("이름 소문자 b1", {"name": ".turn-auto.b1"}, B),
+                                ("이름 B 뒤 글자", {"name": ".turn-auto.B1x"}, B), ("이름 B 없음", {"name": ".turn-auto.1"}, B),
+                                ("이름 .turn-autoB1", {"name": ".turn-autoB1"}, B), ("다른 이름 .turn-push", {"name": ".turn-push.t"}, B)):
+            _agrant_040(proj, "auto", **kw)
+            _cases_034(res, proj, "G2 허락 파일 " + label, [(want, bash(_acmd_040(proj, "push")))], need=W_AUTO if want == B else None)
+        # 허락 있음 — 통과하는 꼴(인자·경로 표기)
+        _agrant_040(proj, "auto")
+        X = _acmd_040(proj, "push")
+        ok_forms = [X, X + " 2>&1", "  " + X + "  ", _acmd_040(proj, "push", ""), _acmd_040(proj, "push", ' "$CLAUDE_PROJECT_DIR"'),
+                    _acmd_040(proj, "push", ' "${CLAUDE_PROJECT_DIR}" t'), _acmd_040(proj, "merge", " squash"),
+                    f'bash "{R}/skills/go/../../hooks/run.sh" refactor-auto push "{P}" t', f"bash {run_sh} refactor-auto push {P} t",
+                    f'bash "{R}//hooks/./run.sh" refactor-auto pr',
+                    'bash "' + R.replace("/", "\\") + '\\hooks\\run.sh" refactor-auto push']   # Windows 역슬래시 경로(따옴표 경로 안만)
+        _cases_034(res, proj, "G2 허락 있음 · 통과", [(OK, bash(c)) for c in ok_forms])
+        bad = [X + "; echo x", X + " && echo x", X + " || true", X + " | tail -5", X + " > /tmp/a.txt", X + " 2>/dev/null", X + " &", X + " # 메모",
+               X + "\necho x", "cd /tmp && " + X, "X=1 " + X, "timeout 100 " + X, "env " + X, "nohup " + X, "exec " + X, "echo x; " + X,
+               X.replace("bash ", "BASH ", 1), X.replace("refactor-auto", "REFACTOR-AUTO"), X.replace(" push ", " PUSH "), X.replace("bash ", "sh ", 1),
+               X.replace("bash ", "/bin/bash ", 1), X.replace(" refactor-auto ", " \\\n refactor-auto "), f"bash -c '{X}'", f"eval '{X}'",
+               _acmd_040(proj, "push", ' "$(id)"'), _acmd_040(proj, "push", " `id`"), _acmd_040(proj, "push", " $HOME"), _acmd_040(proj, "push", " x;y"),
+               _acmd_040(proj, "deploy"), _acmd_040(proj, "push2"), _acmd_040(proj, "", ""),
+               f'bash "/tmp/x/hooks/run.sh" refactor-auto push', f'bash "{R}/scripts/refactor-auto.sh" push', f'"{run_sh}" refactor-auto push',
+               f'bash "{R}/hooks/run.sh" refactor-auto push "{P}" t\\', f"bash '{run_sh}' refactor-auto push",
+               _acmd_040(proj, "push", ' "a\\b"'), "bash " + run_sh.replace("/", "\\") + " refactor-auto push"]
+        _cases_034(res, proj, "G2 허락 있음 · 다른 꼴 차단", [(B, bash(c)) for c in bad], need=W_AUTO)
+        _cases_034(res, proj, "G2 허락 있음 · 안내는 정해진 꼴", [(B, bash(c)) for c in [X + "; echo x", f"bash -c '{X}'"]], need=W_AUTO_FORM)
+        _cases_034(res, proj, "G2 허락 있음 · 인터프리터·새 세션", [(B, bash(c)) for c in forms[-7:]], need=W_AUTO)
+        _cases_034(res, proj, "G2 허락 있음 · PowerShell·Monitor", [(B, ps(X)), (B, ("Monitor", {"command": X}))], need=W_AUTO)
+        _cases_034(res, proj, "G2 허락 있음 · 하위 에이전트 지시문", [(B, ("Agent", {"description": "자동", "prompt": "아래를 실행:\n```\n" + X + "\n```\n"}))])
+        # 승인 스크립트 낱말이 함께 든 인터프리터 꼴은 승인 문구(0.3.7 G5 와 같은 우선순위)
+        _cases_034(res, proj, "G2 승인 스크립트와 함께면 승인 문구", [(B, bash(f"python3 -c \"import os; os.system('bash {run_sh} refactor-approve {P} x')\" # refactor-auto"))],
+                   need=W_APPROVE_EXEC)
+    finally:
+        rmtree_rw(proj)
+    # go 턴(인자 없는 /refactor:go 차례) 안에서도 통과 — 안전 실행기 강제(go_runner)는 허락된 꼴 그대로일 때만 건너뛴다
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        _agrant_040(proj, "auto")
+        _cases_034(res, proj, "G2 go 턴 · 허락 있음 통과", [(OK, bash(_acmd_040(proj, s))) for s in AUTO_PRE])
+        _cases_034(res, proj, "G2 go 턴 · 섞으면 차단", [(B, bash(_acmd_040(proj, "push") + "; npm test")), (B, bash("npm test"))])
+        _agrant_040(proj, "merged")
+        _cases_034(res, proj, "G2 go 턴 · 합친 뒤 단계 통과", [(OK, bash(_acmd_040(proj, s))) for s in AUTO_POST])
+        _agrant_040(proj, None)
+        _cases_034(res, proj, "G2 go 턴 · 허락 없음 차단", [(B, bash(_acmd_040(proj, "push")))], need=W_AUTO)
+    finally:
+        rmtree_rw(proj)
+    # 평소(STATE 없음·스위치 없음)는 판정하지 않는다
+    plain = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-"))
+    try:
+        res["total"] += 1
+        code, err = _gate_run_040(plain, bash(_acmd_040(plain, "push")))
+        if code != OK:
+            res["fails"].append(("0.4.0 G2 평소(STATE 없음) 통과", OK, code, "Bash", "", err.strip()[:200]))
+    finally:
+        rmtree_rw(plain)
+
+
+def check_auto_still_040(res):
+    """0.4.0 G3: 자동 허락(.turn-auto · .turn-merged)이 있어도 계속 막힘 — 강제 push · 다른 가지·기본 가지·작업 가지 push(푸시 허락이 아님) ·
+    gh pr merge 직접(--admin·--auto) · 배포·되돌리기 · 원격 설정 · 가지 옮기기 · gh api 합치기"""
+    proj = make_project(phase="EXECUTE")
+    try:
+        rows = [(B, bash(c)) for c in [
+            "git push --force", "git push -f origin feat", "git push origin +feat", "git push origin other", "git push origin main", "git push -u origin feat",
+            "gh pr merge 5 --squash", "gh pr merge 5 --admin --squash", "gh pr merge --auto --squash", "gh pr -R o/r merge 5", "gh api -X PUT repos/o/r/pulls/5/merge",
+            "vercel --prod", "vercel rollback", "railway redeploy", "wrangler rollback", "netlify rollback", "heroku rollback", "gh workflow run deploy.yml",
+            "git remote set-url origin https://x/y.git", "git config remote.origin.push refs/heads/x", "git switch main", "git checkout main",
+            "git reset --hard", "gh repo edit --default-branch x"]]
+        for kind in ("auto", "merged"):
+            _agrant_040(proj, kind)
+            _cases_034(res, proj, f"G3 .turn-{kind} 있어도 차단", rows)
+    finally:
+        rmtree_rw(proj)
+
+
+def check_deploy_write_040(res):
+    """0.4.0 G4(#11): gh api 로 배포 기록(/deployments …/statuses)·워크플로 실행(…/actions/workflows/<x>/dispatches · repos/<o>/<r>/dispatches)·
+    릴리스(/releases …)·Pages 빌드(/pages/builds) 쓰기 차단(-X POST|PUT|PATCH|DELETE · -X 없이 -f/-F/--input · --method · 방식 헤더) ·
+    gh workflow run · gh release create|delete|edit|upload(-R 옵션 순서 포함) — 읽기(GET·list·view)는 통과"""
+    proj = make_project(phase="EXECUTE")
+    try:
+        paths = ["repos/o/r/deployments", "repos/o/r/deployments/5/statuses", "/repos/o/r/actions/workflows/deploy.yml/dispatches",
+                 "repos/o/r/actions/workflows/123/dispatches", "repos/o/r/dispatches", "repos/o/r/releases", "repos/o/r/releases/5",
+                 "repos/o/r/releases/5/assets", "repos/o/r/pages/builds", "repos/{owner}/{repo}/deployments"]
+        ways = ["gh api -X POST {p} -f ref=main", "gh api {p} -f ref=main", "gh api {p} -F id=1", "gh api {p} --input body.json", "gh api --method PUT {p}",
+                "gh api -X DELETE {p}", "gh api -X PATCH {p} -f name=x", "gh api {p} --raw-field ref=main", "gh api --method=post {p}",
+                "gh api -H 'X-HTTP-Method-Override: POST' -X GET {p}"]
+        _cases_034(res, proj, "G4 경로 × 방식 차단", [(B, bash(w.format(p=p))) for p in paths for w in ways], need=W_DEP)
+        _cases_034(res, proj, "G4 gh 명령 차단", [(B, bash(c)) for c in [
+            "gh workflow run deploy.yml", "gh workflow run deploy.yml -f env=prod", "gh release create v1", "gh release delete v1 -y", "gh release edit v1 --draft=false",
+            "gh release upload v1 a.zip", "gh release delete-asset v1 a.zip", "gh release -R o/r create v1", "gh release --repo=o/r delete v1",
+            "gh workflow -R o/r run x.yml", "gh pr --repo o/r merge 5", "GH RELEASE CREATE v1", "gh.exe release create v1", "npx gh release create v1",
+            "echo x; gh release create v1", "gh release create v1 # 메모", "bash -c 'gh release upload v1 a'", "gh rel\"ease\" create v1",
+            "GH API -X POST repos/o/r/deployments", "gh api repos/o/r/deployments -f 'ref=main'", "gh api \"repos/o/r/dispatches\" -f event_type=x",
+            "gh api repos/o/r/releases --input - < body.json", "gh  api  repos/o/r/pages/builds  -X  POST"]], need=W_DEP)
+        _cases_034(res, proj, "G4 PowerShell", [(B, ps(c)) for c in ["gh api repos/o/r/deployments -f ref=main", "gh release create v1"]], need=W_DEP)
+        _cases_034(res, proj, "G4 읽기는 통과", [(OK, bash(c)) for c in [
+            "gh api repos/o/r/deployments", "gh api repos/o/r/deployments/5/statuses", "gh api -X GET repos/o/r/deployments -f per_page=5",
+            "gh api repos/o/r/deployments --jq '.[0].sha'", "gh api repos/o/r/releases/latest", "gh api repos/o/r/pages/builds/latest",
+            "gh api repos/o/r/actions/workflows", "gh api --method GET repos/o/r/releases -F per_page=3", "gh run list", "gh run view 5",
+            "gh release list", "gh release view v1", "gh workflow list", "gh workflow view deploy.yml", "gh pr view 5", "gh pr -R o/r view 5",
+            'git commit -m "docs: gh release create 안내"', "grep -rn 'gh workflow run' .github"]])
+    finally:
+        rmtree_rw(proj)
+    plain = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-"))
+    try:
+        _cases_034(res, plain, "G4 평소에는 통과", [(OK, bash(c)) for c in ["gh api repos/o/r/deployments -f ref=main", "gh release delete v1 -y"]])
+    finally:
+        rmtree_rw(plain)
+
+
+def check_netlify_api_040(res):
+    """0.4.0 G5(#11): netlify api 는 get…·list… 메서드만 통과, 그 밖(create·update·delete·restore·rollback·cancel·lock·unlock·모르는 이름·변수)은 배포 문구로 차단"""
+    proj = make_project(phase="EXECUTE")
+    try:
+        bad = ["createSiteDeploy", "createSite", "updateSite", "updateSiteDeploy", "deleteSite", "deleteDeploy", "restoreSiteDeploy", "rollbackSiteDeploy",
+               "cancelSiteDeploy", "lockDeploy", "unlockDeploy", "fooBar"]
+        _cases_034(res, proj, "G5 메서드 12꼴 차단", [(B, bash(f"netlify api {m}")) for m in bad], need=W_DEP)
+        _cases_034(res, proj, "G5 다른 철자 차단", [(B, bash(c)) for c in [
+            "netlify api $M", "npx netlify api createSite", "npx netlify-cli@17 api createSite", "NETLIFY API createSite", 'netlify api "createSite"',
+            "netlify api --data '{}' createSite", "netlify api createSite # 메모", "netlify api CreateSite", "echo x && netlify api updateSite",
+            "bash -c 'netlify api deleteSite'", "netlify api --auth abc createSite", "netlify  api  restoreSiteDeploy --data '{\"a\":1}'"]], need=W_DEP)
+        _cases_034(res, proj, "G5 읽기는 통과", [(OK, bash(c)) for c in [
+            "netlify api listSites", "netlify api getSite --data '{\"site_id\":\"x\"}'", "netlify api listSiteDeploys --data '{\"site_id\":\"x\"}'",
+            "netlify status", "netlify api --list", "netlify api getSite # createSite", "npx netlify api getCurrentUser", "netlify sites:list"]])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_vercel_read_040(res):
+    """0.4.0 G6(#10): vercel 바로 뒤 첫 하위 명령이 ls·list·inspect·logs 일 때만 --prod 통과 — vercel --prod · vercel . --prod · vercel deploy --prod ·
+    vercel --prod . 와 하위 명령 앞 옵션(vercel --prod ls)은 차단 유지"""
+    proj = make_project(phase="EXECUTE")
+    try:
+        _cases_034(res, proj, "G6 조회는 통과", [(OK, bash(c)) for c in [
+            "vercel ls --prod", "vercel inspect https://x.vercel.app --wait", "vercel ls -m githubCommitSha=abc", "vercel list --prod",
+            "vercel logs https://x.vercel.app --prod", "npx vercel ls --prod", "vercel 'ls' --prod", "vercel ls --prod --scope team",
+            "vercel ls --prod | head -5", "VERCEL LS --prod"]])
+        _cases_034(res, proj, "G6 배포는 차단", [(B, bash(c)) for c in [
+            "vercel --prod", "vercel . --prod", "vercel deploy --prod", "vercel --prod .", "vercel --prod ls", "vercel ls --prod && vercel --prod",
+            "vercel ls --prod; vercel . --prod", "npx vercel --prod", "vercel --prod # ls", "vercel ls --prod deploy", "VERCEL --PROD", "vercel deploy",
+            "vercel promote x", "bash -c 'vercel --prod'"]], need=W_DEP)
+    finally:
+        rmtree_rw(proj)
+
+
+def check_readme_040(res):
+    """0.4.0 G8: README §6-1 표의 "막는 것"에 배포 기록·워크플로 실행·릴리스 쓰기·netlify 쓰기 API · §6-4 에 vercel 조회 --prod 통과"""
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    s61 = rd[rd.find("### 6-1. 막는 것"):rd.find("### 6-2.")]
+    s64 = rd[rd.find("### 6-4. 한계"):rd.find("## 7. 안전 실행기")]
+    for label, sec, words in (("§6-1", s61, ["배포 기록·워크플로 실행·릴리스 쓰기", "`…/deployments`", "`…/dispatches`", "`…/releases`", "`…/pages/builds`",
+                                              "`gh workflow run`", "`gh release create`", "netlify 쓰기 API", "`get…`·`list…`"]),
+                              ("§6-4", s64, ["`vercel ls --prod` 같은 조회는 통과", "`ls`·`list`·`inspect`·`logs`", "`vercel --prod ls`"])):
+        for w in words:
+            res["total"] += 1
+            if w not in sec:
+                res["fails"].append(("0.4.0 G8 README " + label, "있음", "없음", "", w, ""))
 
 
 if __name__ == "__main__":
