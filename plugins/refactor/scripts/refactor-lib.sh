@@ -696,6 +696,50 @@ rl_mergetp_write() {
   [ -f "$f" ]
 }
 
+# 합치기 입력 감시 판정(0.3.7 합치기 스크립트 S2b 에서 옮김 — 0.4.1 R7: 자동 모드 verify 가 새 가지 직전에도 같이 쓴다). grep·tail·wc 만(bash 3.2)
+# 파일 크기(바이트) → RL_FSZ
+rl_fsize() { local s; s=$(wc -c < "$1" 2>/dev/null) || return 1; s=${s//[!0-9]/}; [ -n "$s" ] || return 1; RL_FSZ=$((10#$s)); }
+RL_RE_TS='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
+# 경로 파일 세 줄의 값(줄 끝 \r 은 부른 쪽이 뗌): $1 대화 기록 경로 $2 허락 때 크기 $3 허락 시각(UTC YYYY-MM-DDTHH:MM:SS)
+#   → RL_TP(읽을 수 있는 파일일 때만 · 아니면 빈 값 = 감시 꺼짐) · RL_TP0(기준 크기 = $2 가 숫자이고 지금 크기 이하면 그 값, 아니면 지금 크기)
+#   · RL_TPT(숫자 14자리 — 꼴이 다르거나 지금(UTC)보다 뒤면 빈 값 = 크기만으로)
+rl_tp_prep() {
+  local tpb=${2:-} nowu
+  RL_TP=${1:-}; RL_TP0=0; RL_TPT=${3:-}
+  [[ $RL_TPT =~ $RL_RE_TS ]] && RL_TPT=${RL_TPT//[!0-9]/} || RL_TPT=""
+  if [ -n "$RL_TPT" ]; then nowu=$(date -u +%Y%m%d%H%M%S 2>/dev/null); case "$nowu" in ""|*[!0-9]*) ;; *) [ "$RL_TPT" -gt "$nowu" ] && RL_TPT="" ;; esac; fi
+  { [ -n "$RL_TP" ] && [ -f "$RL_TP" ] && [ -r "$RL_TP" ] && rl_fsize "$RL_TP"; } && RL_TP0=$RL_FSZ || RL_TP=""
+  if [ -n "$RL_TP" ]; then
+    case "$tpb" in ""|*[!0-9]*) ;; *) [ "${#tpb}" -le 15 ] && [ $((10#$tpb)) -le "$RL_TP0" ] && RL_TP0=$((10#$tpb)) ;; esac
+  fi
+  return 0
+}
+# 허락 뒤 사람 입력이 있었나(0 = 있음): $1 = RL_TP · $2 = RL_TP0 · $3 = RL_TPT · $4 = q 면 AskUserQuestion 답 줄도(0.4.1 R7 — verify 만).
+#   지금 크기 > 기준 크기면 늘어난 부분에서 "type":"queue-operation" · "operation":"enqueue" 가 든 줄 중 "content" 칸이 없거나 < 로 시작하지 않는 줄
+#   (사람이 친 것 — 작업 완료 알림 등은 content 가 <task-notification … 처럼 < 로 시작) · q 면 "toolUseResult":{"questions" 가 든 줄(AskUserQuestion 답 —
+#   보통 도구 결과 줄은 이 칸이 없다)도. 허락 시각이 있으면 그 줄의 "timestamp" 앞 19자가 이 초보다 뒤인 줄만(시각 칸이 없거나 꼴이 다르면 사람 입력 — 안전 쪽).
+#   줄이 반쯤 쓰인 순간에 본 조각도 같은 거름망 — 잘려 사람 줄로 보이면 사람 입력으로(안전 쪽). 경로가 비었거나 못 읽으면 1(감시 꺼짐)
+rl_tp_human() {
+  local p=$1 b=$2 t=$3 q=${4:-}
+  [ -n "$p" ] && rl_fsize "$p" && [ "$RL_FSZ" -gt "$b" ] || return 1
+  if [ -z "$t" ]; then
+    { tail -c +"$((b + 1))" "$p" 2>/dev/null | grep '"type":"queue-operation"' | grep '"operation":"enqueue"' | grep -v '"content":"<'
+      [ "$q" = q ] && tail -c +"$((b + 1))" "$p" 2>/dev/null | grep '"toolUseResult":{"questions"'; } | grep -q .
+    return
+  fi
+  # 후보 줄마다 "timestamp":"…" 값의 앞 19자 → 꼴이 맞으면 숫자만 남겨 허락 시각(숫자 14자리)과 크기 비교(로캘과 무관) · 그 밖은 사람 입력
+  { tail -c +"$((b + 1))" "$p" 2>/dev/null | grep '"type":"queue-operation"' | grep '"operation":"enqueue"' | grep -v '"content":"<'
+    [ "$q" = q ] && tail -c +"$((b + 1))" "$p" 2>/dev/null | grep '"toolUseResult":{"questions"'; } | {
+    while IFS= read -r x || [ -n "$x" ]; do
+      case "$x" in *'"timestamp":"'*) x=${x#*\"timestamp\":\"}; x=${x:0:19} ;; *) exit 0 ;; esac
+      [[ $x =~ $RL_RE_TS ]] || exit 0
+      x=${x//[!0-9]/}
+      [ $((10#$x)) -gt $((10#$t)) ] && exit 0
+    done
+    exit 1
+  }
+}
+
 # 기준선 허용 파일(docs/refactor/.allow-baseline-edit) 읽기(0.3.2 #10) — $1 docs/refactor 폴더. 표준출력 1줄째:
 #   NONE            파일 없음(기준선은 잠김)
 #   ALL             공백만(개행·BOM·CR·NUL 포함) — 예전처럼 기준선 전부 허용(사람이 지운다)
