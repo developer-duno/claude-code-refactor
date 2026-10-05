@@ -62,7 +62,8 @@ PF="$dir/.turn-autopre.$B"    # preflight 가 적은 것(1줄 = 시각 · 2줄 =
 MF="$dir/.turn-merged.$B"     # 합친 뒤 허락(merge 단계가 만듦 — deploy-wait·verify)
 EF="$dir/.turn-autoend.$B"    # 끝 표시(자동 모드가 끝날 때 남김 — ① B ② 끝난 시각 ③ 세션 ④ 가지 ⑤ 방식). 셸 명령 뒤 점검이 이 차례의 자동 줄을 알리지 않게만 쓴다
                               #   (자동 단계의 허락 근거가 아니다 — 이 스크립트·합치기 스크립트는 읽지 않음). 입력 훅이 다음 사람 입력에 지운다
-NX="$dir/.turn-nextok.$B"     # 합친 뒤 사람 입력 없음 표시(merge 가 씀 — ① B ② 시각 ③ 세션). 입력 훅이 사람 입력마다 지운다 · verify 성공 끝에 새 가지를 만들 근거
+NX="$dir/.turn-nextok.$B"     # 합친 뒤 사람 입력 없음 표시(merge 가 씀 — ① B ② 시각 ③ 세션 ④⑤⑥ 합치기 허락 때의 대화 기록 경로·크기·시각(0.4.1 R7 — 없으면 빈 줄)).
+                              #   입력 훅이 사람 입력마다 지운다 · verify 성공 끝에 새 가지를 만들 근거 · verify·합친 뒤 거절이 끝에 지운다
 
 lim() {
   LIMV=$2
@@ -128,7 +129,8 @@ again() { say "$1"; [ -n "${2:-}" ] && say "$2"; say "   (자동 허락은 그�
 refuse() { say "$1"; [ -n "${2:-}" ] && say "$2"; exit 1; }
 # 합친 뒤 거절(.turn-merged 를 지우고 1 — 자동 모드 끝)
 REVERT_WAY="   되돌리기는 사람이 합니다: ① 호스팅 화면(Vercel·Cloudflare·Railway 등)에서 이전 배포로 되돌리기(가장 빠름) ② 코드는 GitHub PR 화면의 Revert 버튼으로 되돌리는 PR 을 만들어 사람이 합칩니다(자동 되돌리기는 하지 않습니다)."
-nom() { end_merged; say "$1"; [ -n "${2:-}" ] && say "$2"; say "   (자동 모드가 끝났습니다 — 합친 것은 그대로입니다.)"; exit 1; }
+# 0.4.1 R6(N#2): 합친 뒤 자동 모드가 끝나면 사람 입력 표시(.turn-nextok)도 지운다(남으면 다음 차례에 엉뚱하게 읽힘)
+nom() { end_merged; [ -e "$NX" ] && rm -f "$NX"; say "$1"; [ -n "${2:-}" ] && say "$2"; say "   (자동 모드가 끝났습니다 — 합친 것은 그대로입니다.)"; exit 1; }
 clean() { local x=$1; x=${x//[[:cntrl:]]/?}; printf '%s' "${x:0:${2:-160}}"; }
 
 # 파일 줄 → 배열 L(줄 끝 \r 뗌)
@@ -304,12 +306,18 @@ EOF
   # 기준선 커밋 꼴(검사 C#9): 제목이 "test: 기준선" 으로 시작하고, 바꾼 파일(하나 이상)이 tests/baseline/ 아래와 기록 폴더 docs/refactor/ 아래뿐
   #   (5-baseline 이 기록 파일을 같은 커밋에 싣는다 · 합치기 커밋은 파일 목록이 비어 거절 · 이름만 같은 커밋은 거절)
   #   재검사 A2#6: tests/baseline/ 아래 파일이 하나 이상 있어야 한다(docs/refactor 만 바꾼 'test: 기준선 …' 은 묶음 밖)
+  #   0.4.1 R5(A2#6 나머지): docs/refactor 아래는 기록 파일 꼴만 — *.md(하위 폴더 포함) · *.log · approved/.log-sum · approved/.log-copy(봉인) ·
+  #   바로 아래 .gitattributes · .gitignore. 그 밖(run.js·*.sh·*.json 등)이 들면 묶음 밖
   base_only() {
     local fl f n=0
     fl=$("${G[@]}" diff-tree --no-commit-id --name-only --no-renames -r --root "$1" 2>/dev/null) || return 1
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      case "$f" in tests/baseline/*) n=$((n + 1)) ;; docs/refactor/*) ;; *) return 1 ;; esac
+      case "$f" in
+        tests/baseline/*) n=$((n + 1)) ;;
+        docs/refactor/*.md|docs/refactor/*.log|docs/refactor/approved/.log-sum|docs/refactor/approved/.log-copy|docs/refactor/.gitattributes|docs/refactor/.gitignore) ;;
+        *) return 1 ;;
+      esac
     done <<EOF
 $fl
 EOF
@@ -484,6 +492,10 @@ merge)
     # 판 표지 읽기가 늦었으면 합치기 스크립트(한 호출 최악 약 110초)는 다음 실행에서(Bash 도구 한도 120초 안 — 허락은 만들어 둠)
     [ $((SECONDS - t0)) -gt 5 ] && again "⏳ 판 표지를 다시 읽느라 늦어 합치기 확인은 다음 실행에서 합니다(합치기 허락은 만들었습니다)" "$MNOTE"
   fi
+  # 0.4.1 R7: 합치기 스크립트는 합치기 직전에 입력 감시 경로 파일(.turn-mergetp)을 지운다 → 그 세 줄을 먼저 읽어 두었다가 합친 뒤 표시 ④⑤⑥ 에 싣는다
+  tq1=""; tq2=""; tq3=""
+  [ -f "$mtp" ] && { IFS= read -r tq1; IFS= read -r tq2; IFS= read -r tq3; } < "$mtp"
+  tq1=${tq1%$'\r'}; tq2=${tq2%$'\r'}; tq3=${tq3%$'\r'}
   bash "$root/hooks/run.sh" refactor-merge "$proj" "$sid" >"$TD/mo" 2>&1; mrc=$?
   mout=$(< "$TD/mo")
   case "$mrc" in
@@ -503,7 +515,7 @@ EOF
       # 0.4.0 사람 입력 표시(.turn-nextok.<B> — ① B ② 시각 ③ 세션): 합친 뒤 사람 입력이 없었는지 verify 가 새 가지를 만들기 전에 본다
       #   (입력 훅이 사람 입력마다 지움 · verify 가 끝에 지움). merge-only 는 사람이 "검증해" 라고 입력해야 verify 가 돌므로 쓰지 않는다
       if [ "$AMODE" != merge-only ] && [ -f "$MF" ]; then
-        { printf '%s\n%s\n%s\n' "$B" "$(date +%s)" "$sid" > "$NX.tmp.$$" && mv -f "$NX.tmp.$$" "$NX"; } 2>/dev/null || rm -f "$NX.tmp.$$"
+        { printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$B" "$(date +%s)" "$sid" "$tq1" "$tq2" "$tq3" > "$NX.tmp.$$" && mv -f "$NX.tmp.$$" "$NX"; } 2>/dev/null || rm -f "$NX.tmp.$$"
       fi
       end_auto
       say "✅ 합쳤습니다(자동 $B) — 합친 커밋 ${msha:0:12}"
@@ -722,9 +734,16 @@ PWJS
     #   새 가지는 덧붙이는 일. 만들지 않는 네 경우 = merge-only(사람이 "검증해" 라고 입력해야 verify 가 돎) · 합친 뒤 사람 입력(.turn-nextok 없음·다름) ·
     #   받아 오기(fetch) 실패 · 남은 묶음 0 — 그리고 lib rl_new_branch 의 판정 실패(사람 길과 같은 확인). 표시 파일은 여기서 지운다
     nxw="다음: 보고 → 다음 묶음은 사람이 /refactor:approve 새 가지"
-    nxok=0
-    if [ -f "$NX" ]; then read_lines "$NX"; [ "${L[0]:-}" = "$B" ] && [ "${L[2]:-}" = "$sid" ] && age_ok "${L[1]:-}" 7200 && nxok=1; fi
+    nxok=0; nxtp=""; nxsz=""; nxts=""
+    if [ -f "$NX" ]; then read_lines "$NX"; [ "${L[0]:-}" = "$B" ] && [ "${L[2]:-}" = "$sid" ] && age_ok "${L[1]:-}" 7200 && nxok=1; nxtp=${L[3]:-}; nxsz=${L[4]:-}; nxts=${L[5]:-}; fi
     rm -f "$NX"
+    # 0.4.1 R7(#14): AskUserQuestion 답·권한 확인 응답이 입력 훅을 거치는지는 공식 문서에 없다 → 훅에 기대지 않고 새 가지 직전에 대화 기록을 한 번 더 본다
+    #   (합치기 허락 때의 경로·크기·시각 — 합치기 스크립트와 같은 판정 lib rl_tp_human + AskUserQuestion 답 줄). 사람 입력이 보이면 "합친 뒤 입력" 길로.
+    #   기록을 못 보면(경로 없음·못 읽음) 지금처럼 표시만 믿는다. 권한 확인 창 응답은 기록 꼴을 몰라 알아보지 못한다(한계)
+    if [ "$nxok" = 1 ] && [ -n "$nxtp" ]; then
+      rl_tp_prep "$nxtp" "$nxsz" "$nxts"
+      rl_tp_human "$RL_TP" "$RL_TP0" "$RL_TPT" q && nxok=0
+    fi
     if [ "$MMODE" = merge-only ]; then
       say "ℹ️ 배포 방식이 '수동'(합치기까지만)이라 새 가지는 만들지 않았습니다 — 다음 묶음은 /refactor:approve 새 가지"
     elif [ "$nxok" != 1 ]; then
@@ -761,6 +780,7 @@ PWJS
     say "$nxw"
     exit 0
   fi
+  [ -e "$NX" ] && rm -f "$NX"   # 0.4.1 R6(N#2): 실패로 끝나도 표시를 지운다
   say "⛔ 라이브 검증 실패($B) — 합친 것은 그대로입니다(자동 되돌리기 없음):$fails"
   say "   $pw"
   say "$REVERT_WAY"

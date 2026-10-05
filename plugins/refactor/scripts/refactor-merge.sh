@@ -130,39 +130,17 @@ case "$g3" in 'bash "'*' refactor-merge '*) ;; *) no "$NO_GRANT" ;; esac
 #   허락 시각(TPT) = 경로 파일 3번째 줄(UTC 초 YYYY-MM-DDTHH:MM:SS — 보완 G2, 재검사 A2 #1): 있으면 크기 뒤 후보 줄 중 "timestamp" 앞 19자가
 #   이 초보다 뒤인 줄만 사람 입력으로 본다(허락을 친 입력 자신의 줄이 비동기로 늦게 크기 뒤에 쓰여도 제외 · 같은 초도 제외).
 #   후보 줄에 시각 칸이 없거나 꼴이 다르면 사람 입력으로(안전 쪽). 3번째 줄이 없거나 꼴이 다르면 크기만으로
-TP=""; TP0=0; FSZ=0; tpb=""; TPT=""
-fsize() { local s; s=$(wc -c < "$1" 2>/dev/null) || return 1; s=${s//[!0-9]/}; [ -n "$s" ] || return 1; FSZ=$((10#$s)); }
-re_ts='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
+#   (0.4.1: 값 정리·판정은 lib rl_tp_prep·rl_tp_human 으로 옮김 — 자동 모드 verify 가 새 가지 직전에 같이 쓴다. 동작은 그대로)
+#   재검사 A3 #2: 허락 시각이 지금(UTC)보다 뒤면 그 시각까지의 사람 줄을 영영 못 본다 → 크기만으로(2번째 줄의 "지금 크기 이하" 상한과 짝)
+TP=""; TP0=0; tpb=""; TPT=""
 if [ -f "$tpf" ]; then
   { IFS= read -r TP; IFS= read -r tpb; IFS= read -r TPT; } < "$tpf" || :
-  TP=${TP%$'\r'}; tpb=${tpb%$'\r'}; TPT=${TPT%$'\r'}
-  [[ $TPT =~ $re_ts ]] && TPT=${TPT//[!0-9]/} || TPT=""
-  # 재검사 A3 #2: 허락 시각이 지금(UTC)보다 뒤면 그 시각까지의 사람 줄을 영영 못 본다 → 크기만으로(2번째 줄의 "지금 크기 이하" 상한과 짝)
-  if [ -n "$TPT" ]; then nowu=$(date -u +%Y%m%d%H%M%S 2>/dev/null); case "$nowu" in ""|*[!0-9]*) ;; *) [ "$TPT" -gt "$nowu" ] && TPT="" ;; esac; fi
-  { [ -n "$TP" ] && [ -f "$TP" ] && [ -r "$TP" ] && fsize "$TP"; } && TP0=$FSZ || TP=""
-  if [ -n "$TP" ]; then
-    case "$tpb" in ""|*[!0-9]*) ;; *) [ "${#tpb}" -le 15 ] && [ $((10#$tpb)) -le "$TP0" ] && TP0=$((10#$tpb)) ;; esac
-  fi
+  rl_tp_prep "${TP%$'\r'}" "${tpb%$'\r'}" "${TPT%$'\r'}"
+  TP=$RL_TP; TP0=$RL_TP0; TPT=$RL_TPT
 fi
 if [ -n "$TP" ]; then WLINE="입력 감시: 켬"; else WLINE="입력 감시: 꺼짐(대화 기록 경로 없음)"; fi
 trap 'say "$WLINE"' EXIT
-human_typed() {
-  [ -n "$TP" ] && fsize "$TP" && [ "$FSZ" -gt "$TP0" ] || return 1
-  if [ -z "$TPT" ]; then
-    tail -c +"$((TP0 + 1))" "$TP" 2>/dev/null | grep '"type":"queue-operation"' | grep '"operation":"enqueue"' | grep -v '"content":"<' | grep -q .
-    return
-  fi
-  # 후보 줄마다 "timestamp":"…" 값의 앞 19자 → 꼴이 맞으면 숫자만 남겨 허락 시각(숫자 14자리)과 크기 비교(로캘과 무관) · 그 밖은 사람 입력
-  tail -c +"$((TP0 + 1))" "$TP" 2>/dev/null | grep '"type":"queue-operation"' | grep '"operation":"enqueue"' | grep -v '"content":"<' | {
-    while IFS= read -r x || [ -n "$x" ]; do
-      case "$x" in *'"timestamp":"'*) x=${x#*\"timestamp\":\"}; x=${x:0:19} ;; *) exit 0 ;; esac
-      [[ $x =~ $re_ts ]] || exit 0
-      x=${x//[!0-9]/}
-      [ $((10#$x)) -gt $((10#$TPT)) ] && exit 0
-    done
-    exit 1
-  }
-}
+human_typed() { rl_tp_human "$TP" "$TP0" "$TPT"; }
 # 사람 입력이 보이면: 허락이 이 실행이 읽은 것 그대로일 때만 허락·경로 파일을 지우고(바뀌었으면 사람이 새로 만든 것 — S17 과 같게 둔다) 거절
 watch_input() {
   local r1="" r2=""
@@ -212,6 +190,17 @@ case "$glast" in
       || no "⛔ 자동 모드 합치기 허락이 맞지 않습니다(자동 허락이 없거나 끝남 — 2시간 · 같은 대화 · 같은 가지) — 사용자가 /refactor:approve 합치기 를 입력해야 합니다" ;;
   *) no "⛔ 합치기 허락이 승인 기록과 맞지 않습니다 — 사용자가 /refactor:approve 합치기 를 다시 입력해야 합니다" ;;
 esac
+# 0.4.1 R4(검사 C#13): 허락 수명은 되풀이 바퀴 앞마다·합치기 직전에 다시 본다(시작 때 한 번만 보면 2시간·30분 경계에서 한 호출 최악 약 110초 넘겨 합칠 수 있었다)
+#   자동 꼴 = 그 묶음의 자동 허락(auto_grant_ok 그대로) · 사람 꼴 = 허락 파일 2줄 시각(이 실행이 읽은 값) 0~1800초
+grant_alive() {
+  if [ -n "$MAUTO" ]; then
+    auto_grant_ok "$MAUTO" || no "⛔ 자동 허락이 끝났습니다(2시간) — 합치지 않았습니다"
+  else
+    age=$(( $(date +%s) - gt ))
+    { [ "$age" -ge 0 ] && [ "$age" -le 1800 ]; } || no "$NO_GRANT"
+  fi
+  return 0
+}
 
 # git 호출 방어(승인 스크립트·안전장치와 같게): 대체 객체 무시 · fsmonitor 끔 · 합칠 때 renormalize 끔
 G=(git --no-replace-objects -c core.fsmonitor=false -c merge.renormalize=false -C "$proj")
@@ -262,6 +251,7 @@ merged_sha() {
 cf_have=0; cf_set=""; cf_oid=""; cf_free=1
 while :; do
   watch_input
+  grant_alive
   set -- pr view
   [ -n "$gpr" ] && set -- "$@" "$gpr"
   (cd "$proj" && rl_bounded "$QL" gh "$@" --json number,state,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,statusCheckRollup --jq "$JQV") >"$mtmp/o" 2>"$mtmp/e"; prc=$?
@@ -398,8 +388,9 @@ if [ ! -f "$mf" ] || [ "$r1" != "$g1" ] || [ "$r2" != "$g2" ]; then
   fi
   exit 1
 fi
-# 0.3.7: 합치기 바로 전에 한 번 더 입력 감시(비교하는 동안 친 말도 여기서 걸린다)
+# 0.3.7: 합치기 바로 전에 한 번 더 입력 감시(비교하는 동안 친 말도 여기서 걸린다) · 0.4.1 R4: 허락 수명도 한 번 더
 watch_input
+grant_alive
 drop
 if [ -e "$mf" ]; then
   say "⚠️ 합치기 허락 파일을 지우지 못해 합치지 않았습니다 — 사람이 확인해 주세요: $mf"

@@ -72,11 +72,13 @@ auto_only_lines() {
     [ $((nw - 10#$l2)) -ge 0 ] && [ $((nw - 10#$l2)) -le 7200 ] || continue
     case "$f" in
       */.turn-auto.*) [[ ${L[10]:-} =~ ^go=[0-9]{1,12}$ ]] || continue; br=${L[3]:-}; mt=${L[4]:-} ;;
-      */.turn-autoend.*) br=${L[3]:-}; mt=${L[4]:-}; ge="$ge|$b|" ;;
+      */.turn-autoend.*) br=${L[3]:-}; mt=${L[4]:-} ;;
       *) br=${L[11]:-}; mt="*" ;;
     esac
     [[ $br =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || continue
     case "$mt" in squash|rebase|merge|"*") ;; *) continue ;; esac
+    # 0.4.1 R6(N#3): 끝 표시 B 는 가지·방식 꼴 검사를 통과한 뒤에만 센다
+    case "$f" in */.turn-autoend.*) ge="$ge|$b|" ;; esac
     gi="$gi|$b|$br|$mt|"
   done
   [ -n "$gi" ] || return 1
