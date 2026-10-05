@@ -5403,7 +5403,13 @@ def check_fg_040(res):
             'claude -p hi >"$OUT"', 'claude -p hi 2>"$ERR"', 'claude -p "요약" <"$IN"', "claude -p hi &>log.txt", "claude -p hi >>log.txt"]])
         _cases_034(res, proj, "보안 claude 옵션에 붙인 리다이렉트", [(B, bash(c)) for c in [
             "claude -p --resume>x", "claude -p>x --resume y", "claude --resume y -p>x", "claude -p --resume>>x", "claude -p -r<f",
-            "claude -c&>x -p", "claude -p -r2>x", "claude --resume x -p>out"]])
+            "claude -c&>x -p", "claude -p -r2>x", "claude --resume x -p>out",
+            "claude -pc>x", "claude -p -r'x'>o", "claude -p -c>'x'", "claude -p --resume=x>o", "claude -p -c>|x",
+            "claude -p --resume<<<x", "claude --print>x -c", "claude -p --from-pr>x 5"]])
+        _cases_034(res, proj, "보안 claude 따옴표 친 리다이렉트 기호 뒤 낱말은 건너뛰지 않음", [(B, bash(c)) for c in [
+            'claude -p >">" $R', "claude -p >'>' $(echo --resume)", 'claude -p 2>">" $X', "claude -p >'>>' -c"]])
+        _cases_034(res, proj, "보안 claude 맨 리다이렉트 뒤 변수 파일은 통과", [(OK, bash(c)) for c in [
+            "claude -p > $OUT", 'claude -p hi >> "$LOG" 2>&1']])
         _cases_034(res, proj, "FG2 H2 gh -R 알 수 없는 값 · 읽기는 통과", [(OK, bash(c)) for c in [
             'gh -R "$R" pr view 1', 'gh -R "$R" pr list', "gh -R ${R} run list", "gh -Ro/r pr view 1"]])
         _cases_034(res, proj, "FG F1 gh -R 앞 · 읽기는 통과", [(OK, bash(c)) for c in [
