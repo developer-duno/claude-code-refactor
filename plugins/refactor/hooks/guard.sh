@@ -1430,6 +1430,14 @@ hv_human() {
     if has "$1" 'refactor-merge' && approve_exec "$1" refactor-merge; then merge_block; fi
     glob_protected_exec "$1" "refactor-merge.sh refactor-merge" && merge_block
   fi
+  # 0.4.0 G2: 자동 모드 스크립트(refactor-auto)를 실행하는 꼴(승인 스크립트와 같은 판정 · 글로브 이름 · 새 Claude 세션에 넘기기) —
+  #   유효한 자동 허락(.turn-auto/.turn-merged)이 있고 정해진 꼴 그대로(AOK)일 때만 건너뛴다
+  if [ "${AOK:-0}" != 1 ]; then
+    nested_claude_approve "$2" 'refactor-auto' && auto_block
+    if has "$1" "(^|[^[:alnum:]._/-])claude([.](exe|cmd))?([^[:alnum:]_.-]|$)" && has "$1" 'refactor-auto'; then auto_block; fi
+    if has "$1" 'refactor-auto' && approve_exec "$1" refactor-auto; then auto_block; fi
+    glob_protected_exec "$1" "refactor-auto.sh refactor-auto" && auto_block
+  fi
   if has "$1" "run\\.sh[\"']?[[:space:]]+[\"']?(turn|guard|post-check|session-start)([\"'[:space:];&|)]|$)" \
     || has "$1" "${S}(sudo[[:space:]]+)?(bash|sh|zsh|dash|source|exec)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
     || has "$1" "(^|[;&|({\`])[[:space:]]*(sudo[[:space:]]+)?\\.[[:space:]]+[\"']?[^[:space:]\"';&|]*[/\\\\]hooks[/\\\\](turn|guard|post-check|session-start)\\.sh([\"'[:space:];&|)]|$)" \
@@ -1821,6 +1829,7 @@ hv_git() {
   local gseg grest=$t re_gha="gh[[:space:]]+api([[:space:]][^;&|]*)?"
   while [[ $grest =~ $re_gha ]]; do
     gseg=${BASH_REMATCH[0]}; grest=${grest#*"$gseg"}
+    case "$gseg" in *%*) pct_dec "$gseg"; gseg=$PD ;; esac   # 0.4.0 보완: git/re%66s 같은 %XX 철자
     # 0.3.7 G2: -H 'X-HTTP-Method-Override: DELETE' 도 DELETE 와 같게
     if { has "$gseg" "[[:space:]](-X[[:space:]]*|--method([[:space:]]+|=))[\"']?delete([\"'[:space:])]|$)" \
         || { [[ $gseg =~ $RE_HMO ]] && has "$gseg" "x-http-method-override[[:space:]]*:[[:space:]]*[\"']?delete([\"'[:space:])]|$)"; }; } \
@@ -1847,6 +1856,17 @@ MSG_REPOSET="리팩토링 중에는 저장소 설정(기본 가지·이름·공�
 MSG_REPOSET2="읽기(gh repo view · gh api repos/<주인>/<저장소>)는 됩니다. 꼭 지금 바꿔야 하면 멈추고 사람에게 부탁하세요."
 MSG_GHW="리팩토링 진행 중에는 GitHub API 로 가지·파일을 직접 쓰지 않습니다(PR 없이 합치는 길)."
 MSG_GHW2="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요. 가지·파일 변경은 git 커밋과 /refactor:approve 푸시 로 합니다."
+# 0.4.0 보완(검사 A#9): gh api 조각의 %XX 중 영문·숫자·/ - _ . 를 풀어 판정한다(deploy%6Dents = deployments) → PD. 그 밖의 %XX 는 그대로
+pct_dec() {
+  local s=$1 out="" h c m re='%([0-9A-Fa-f]{2})'
+  while [[ $s =~ $re ]]; do
+    m=${BASH_REMATCH[0]}; h=${BASH_REMATCH[1]}
+    out=$out${s%%"$m"*}; s=${s#*"$m"}
+    printf -v c "\\x$h"
+    case "$c" in [A-Za-z0-9/_.-]) out=$out$c ;; *) out=$out%$h ;; esac
+  done
+  PD=$out$s
+}
 # 0.3.5 F16: gh api 조각($1)이 읽기가 아닌 요청인가(0 = 쓰기). gh 공식 문서: 방식을 주지 않으면 GET, 필드(-f·-F·--field·--raw-field)가 있으면 POST ·
 #   --method GET 이면 필드는 질의 문자열. 그래서 -X·--method 값이 하나라도 GET 이 아니면(변수·따옴표로 쪼갠 값 포함) 쓰기 · 방식 값이 모두 GET 이면 읽기 ·
 #   방식이 없으면 필드나 --input 이 있을 때 쓰기. 짧은 옵션 묶음은 gh api 의 켜기 옵션 -i 하나뿐이라 -iX·-if 까지 본다
@@ -1929,6 +1949,29 @@ hv_db() {
   fi
   return 0
 }
+# 0.4.0 G5(#11): netlify api <메서드> 가 읽기(get…·list…)가 아닌가 → 0. 메서드 = api 뒤 첫 낱말 중 옵션이 아닌 것(값을 받는 옵션
+#   --data·-d·--auth·--filter·--http-proxy·--http-proxy-certificate-filename 은 값까지 건너뜀). 그 밖(create…·update…·delete…·restore…·rollback…·
+#   cancel…·lock…·unlock…·모르는 이름·변수)은 쓰기로 본다. 메서드가 없으면(목록 --list·도움말·# 주석 뒤) 아니다. npx netlify-cli@x api … 도 같게
+netlify_api_write() {
+  local rest=$1 seg i m w=() re="${S}(netlify(-cli)?|ntl)(@[^[:space:];&|]*)?[[:space:]]+api([[:space:]][^;&|]*)?"   # 보완: ntl = netlify 별칭
+  while [[ $rest =~ $re ]]; do
+    seg=${BASH_REMATCH[0]}; rest=${rest#*"$seg"}
+    seg=${BASH_REMATCH[5]}; seg=${seg//\"/ }; seg=${seg//\'/ }
+    set -f; w=($seg); set +f
+    m=""; i=0
+    while [ "$i" -lt "${#w[@]}" ]; do
+      case "${w[$i]}" in
+        --data|-d|--auth|--filter|--http-proxy|--http-proxy-certificate-filename) i=$((i + 2)) ;;
+        -*) i=$((i + 1)) ;;
+        *) m=${w[$i]}; break ;;
+      esac
+    done
+    case "$m" in ""|"#"*) continue ;; esac
+    has "$m" '^(get|list)[A-Za-z0-9_]*$' && continue
+    return 0
+  done
+  return 1
+}
 # 고가치 규칙(리팩토링 진행 중: 배포·마이그레이션 적용·원격 DB 접속) — lq·lz·hv·hvz 사본마다(bash -c "ver"'cel --prod').
 #   $2 = 원격 DB 주소 판정용 문자열(원형은 lr, 사본은 그 사본)
 hv_deploy() {
@@ -1937,14 +1980,31 @@ hv_deploy() {
   #   :·-·=·, 가 붙은 꼴(wrangler secret:put · railway up:x)은 막힌다. vercel aliases 는 alias 와 같이
   #   0.3.7 G1: heroku rollback·releases:rollback·pg:reset · netlify rollback·sites:delete(같은 경계 — heroku releases·releases:info·restart 는 통과)
   #   보완(검사 A#7): heroku apps:destroy(netlify sites:delete 와 같은 성격 — apps:info 는 통과)
-  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|netlify[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|netlify[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release[[:space:]]+create|workflow[[:space:]]+run)|ssh[[:space:]]|scp[[:space:]])"
+  #   0.4.0 G4: gh release create·delete·edit·upload · gh pr|release|workflow 뒤 하위명령 앞의 -R|--repo <저장소>(옵션 순서만 다른 철자)도 같게
+  #   0.4.0 보완(검사 C#5·A#9): vercel --target production(=) · ntl(netlify 별칭) deploy·rollback·sites:delete · gh workflow enable·disable · gh run rerun
+  local ghr="([[:space:]]+(-r|--repo)(=|[[:space:]]+)[^[:space:];&|]+)?"
+  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|--target([[:space:]]+|=)[\"']?production|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|(netlify|ntl)[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|(netlify|ntl)[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr${ghr}[[:space:]]+merge|release${ghr}[[:space:]]+(create|delete|edit|upload)|workflow${ghr}[[:space:]]+(run|enable|disable)|run${ghr}[[:space:]]+rerun)|ssh[[:space:]]|scp[[:space:]])"
   local re_pkg_deploy="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?([a-z0-9_-]+:)?(deploy|release|publish|ship)([[:space:]:]|$)"
-  if has "$t" "$re_deploy" || has "$t" "$re_pkg_deploy"; then
+  # 0.4.0 G6(#10): vercel 의 첫 하위 명령이 조회(ls·list·inspect·logs)인 조각에서만 --prod 는 배포가 아니다(vercel ls --prod = 운영 배포 목록) —
+  #   그 조각(; & | 앞까지)의 --prod 만 지운 사본(tv)으로 배포 규칙을 본다. 하위 명령 앞에 옵션이 있거나(vercel --prod ls) 다른 하위 명령이면 그대로 막는다
+  local tv=$t
+  if has "$t" 'vercel' && has "$t" '--prod'; then
+    # 보완(검사 A#2): 조각은 $( · ` · <( · >( · 줄바꿈 앞에서도 끊는다 — 그 안의 진짜 배포 명령(vercel ls $(vercel --prod))의 --prod 를 지우지 않게
+    local vrest=$t vout="" vm re_vro="${S}vercel[[:space:]]+(ls|list|inspect|logs)([[:space:]][^;&|\`(${NL}]*)?"
+    while [[ $vrest =~ $re_vro ]]; do
+      vm=${BASH_REMATCH[0]}; vout=$vout${vrest%%"$vm"*}; vrest=${vrest#*"$vm"}
+      while [[ $vm =~ --prod ]]; do vm=${vm/"${BASH_REMATCH[0]}"/--x}; done
+      vout=$vout$vm
+    done
+    tv=$vout$vrest
+  fi
+  if has "$tv" "$re_deploy" || has "$t" "$re_pkg_deploy"; then
     # 0.3.4 §10-5: PR 합치기(gh pr merge)가 걸렸을 때만 입력창 명령을 안내한다(합치기는 승인 스크립트가 검사 뒤 직접 한다)
     local dh="필요한 명령을 사람에게 안내하세요."
-    has "$t" "${S}gh[[:space:]]+pr[[:space:]]+merge" && dh="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요."
+    has "$t" "${S}gh[[:space:]]+pr${ghr}[[:space:]]+merge" && dh="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요."
     block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "$dh"
   fi
+  netlify_api_write "$t" && block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요. 읽기는 netlify api get…·list… 로 됩니다."
   # 0.3.5 X1: gh api 로 PR 합치기(REST pulls/<번호>/merge · 가지 합치기 /merges · graphql mergePullRequest·enablePullRequestAutoMerge·mergeBranch)
   #   — gh pr merge 차단을 비껴가는 길. 방식 옵션(-X·--method)과 상관없이 막는다(합쳐졌는지 보는 읽기 GET 도 — 안내에 조회 대안).
   #   번호 칸은 숫자가 아니어도(변수·따옴표) 본다. gh.exe·경로 붙은 gh 도(조각 = gh api 부터 ; & | 앞까지)
@@ -1957,7 +2017,8 @@ hv_deploy() {
     mseg=${BASH_REMATCH[0]}; mrest=${mrest#*"$mseg"}
     # 보완: 조각이 따옴표 안의 ; & |(--jq '.a|.b' · -H 'a;b')에서 끊겼으면(따옴표 짝이 안 맞음) 따옴표 밖의 구분자까지 다시 잡는다 — 뒤의 -X·경로·필드를 놓치지 않게
     if quote_odd "$mseg"; then gha_scan "$mseg$mrest"; mrest=${mseg}${mrest}; mrest=${mrest:${#GS}}; mseg=$GS; fi
-    mn=$mseg; while [[ $mn == *"$d2"* ]]; do mn=${mn//"$d2"/$d1}; done
+    mn=$mseg; case "$mn" in *%*) pct_dec "$mn"; mn=$PD ;; esac
+    while [[ $mn == *"$d2"* ]]; do mn=${mn//"$d2"/$d1}; done
     if has "$mn" "pulls/[^/[:space:]]*/merge([^A-Za-z0-9_]|$)|/merges([^A-Za-z0-9_]|$)|mergepullrequest|enablepullrequestautomerge|mergebranch|enqueuepullrequest|updateref|createcommitonbranch|deleteref"; then
       block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요. 합쳐졌는지 보려면 gh pr view <번호> --json state,mergedAt 를 쓰세요."
     fi
@@ -1971,6 +2032,25 @@ hv_deploy() {
     fi
     if has "$mn" "/git/refs([/\"'[:space:]?)]|$)|/contents([/\"'[:space:]?)]|$)" && gha_write "$mn"; then
       block "$MSG_GHW" "$MSG_GHW2"
+    fi
+    # 0.4.0 G4(#11): 배포 기록(…/deployments · …/deployments/<번호>/statuses) · 워크플로 실행(…/actions/workflows/<x>/dispatches · repos/<o>/<r>/dispatches) ·
+    #   릴리스(…/releases · …/releases/<번호>/assets) · Pages 빌드(…/pages/builds) 쓰기 = 배포 명령(gh workflow run · gh release create 와 같은 묶음).
+    #   쓰기 판정은 gha_write(-X·--method 가 GET 이 아님 · 방식 없이 -f·-F·--field·--raw-field·--input) — 읽기(GET)는 통과
+    if has "$mn" "/(deployments|dispatches|releases)([/?\"'[:space:])]|$)|/pages/builds([/?\"'[:space:])]|$)" && gha_write "$mn"; then
+      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+    fi
+    # 0.4.0 보완(검사 C#5·A#9): 워크플로 다시 돌리기(…/actions/runs|jobs/<번호>/rerun · rerun-failed-jobs) 쓰기 = 배포(gh run rerun 과 같은 묶음) ·
+    #   배포 환경 설정(…/environments/<이름>(/…) — 보호 규칙·대기 시간·비밀값) 쓰기 = 저장소 설정 · GraphQL 변이 createDeployment(배포 기록) ·
+    #   updateRepository·create|update|deleteBranchProtectionRule(저장소 설정) — 질의 글자에서 본다. 읽기(GET·query)는 통과
+    if has "$mn" "/actions/(runs|jobs)/[^/[:space:]\"']+/(rerun|rerun-failed-jobs)([/?\"'[:space:])]|$)" && gha_write "$mn"; then
+      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+    fi
+    if has "$mn" "/environments/[^/[:space:]\"'?]+" && gha_write "$mn"; then
+      block "$MSG_REPOSET" "$MSG_REPOSET2"
+    fi
+    if has "$mn" "[[:space:]][\"']?/?graphql([\"'[:space:]?)]|$)"; then
+      has "$mn" "createdeployment" && block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+      has "$mn" "updaterepository|(create|update|delete)branchprotectionrule" && block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
     if has "$mn" "[[:space:]][\"']?/?graphql([\"'[:space:]?)]|$)" \
       && has "$mn" "[[:space:]][\"']?((-i*f|--field|--raw-field)([[:space:]]+|=)?[\"']?[^[:space:]=\"']*[\"']?=[\"']?@|--input([[:space:]=\"']|$))"; then
@@ -2018,6 +2098,8 @@ go_runner() {
     [[ $rseg =~ $re_cmt ]] && rseg=${rseg%%"${BASH_REMATCH[0]}"}   # 주석(# …)은 명령이 아니다
     has "$rseg" "$re_mark" && continue
     has "$rseg" "$re_plug" && continue   # 플러그인 자체 현황 스크립트(경로에 띄어쓰기가 있어도)
+    # 0.4.0 G2: 자동 마감은 인자 없는 /refactor:go 차례 안에서 돈다 — 허락된 자동 모드 스크립트 꼴 그대로(AOK — 명령 전체가 그 한 줄)일 때만
+    [ "${AOK:-0}" = 1 ] && has "$rseg" "run\\.sh[\"']?[[:space:]]+refactor-auto([[:space:]]|$)" && continue
     if runs_project_code "$rseg"; then
       block "리팩토링(/refactor:go) 중에는 테스트·빌드·앱 실행을 안전 실행기로만 합니다 — 운영 DB·운영 키 대신 가짜 값(127.0.0.1:9 등)을 넣어, 실수로 운영 데이터를 바꾸거나 알림을 보내지 않게 합니다." "명령 앞에 붙이세요(&&·; 로 이은 명령마다 각각): bash \"$runsh\" refactor-safe-run -- <명령>   예) bash \"$runsh\" refactor-safe-run -- npm test   · 무엇이 가짜 값으로 바뀌는지(이름만): bash \"$runsh\" refactor-safe-run --check"
     fi
@@ -2038,8 +2120,9 @@ strip_call_opt() {
 # 명령을 && || ; | ` $( 로 나눈 조각들 → CUTS(줄바꿈 구분)
 cut_segs() { local s=$1; s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; CUTS=${s//\$(/$NL}; }
 # 새 Claude 세션(claude -p … · npx claude · node …/claude-code/…)에 승인 명령·--from-hook 을 넘기는가 — 새 세션의 입력 훅이 사람 입력으로 보고 승인한다
+#   $2 = 볼 낱말 정규식(없으면 승인 명령 — 0.4.0 자동 모드 스크립트는 'refactor-auto' 로 따로 부른다: 막는 문구가 다르다)
 nested_claude_approve() {
-  has "$1" 'claude' && has "$1" 'refactor:(approve|go)|from-hook' || return 1
+  has "$1" 'claude' && has "$1" "${2:-refactor:(approve|go)|from-hook}" || return 1
   local s seg i a
   cut_segs "$1"; s=$CUTS
   while [ -n "$s" ]; do
@@ -2058,6 +2141,70 @@ nested_claude_approve() {
     esac
   done
   return 1
+}
+# 0.4.0 보완(검사 A#9 #23): 다른(또는 이) Claude 세션을 이어서(--resume·-r·--continue·-c) 출력 모드(-p·--print)로 부르는가 — 넘긴 글(파이프·< 파일 포함)은
+#   그 세션의 입력 훅이 사람 입력으로 보고 처리한다(승인 낱말을 글 안에 숨기면 판정할 수 없다). 조각(&& || ; | ` $( 로 나눔)마다 claude 낱말 뒤의 낱말만 본다 —
+#   띄어쓰기가 든 따옴표 글은 한 낱말로 비우고(질문 글 속 -r 은 옵션이 아님) 남은 따옴표 글자는 떼며(--res"ume"), 짧은 옵션 묶음(-pc)도 글자로 본다.
+#   새 세션(claude -p "질문")·대화형(claude -c)은 통과. 따옴표를 모두 뺀 사본(lz)에는 쓰지 않는다(질문 글이 낱말로 풀려 헛막힘) — lq·hv 로 본다
+MSG_RESUME="리팩토링 진행 중에는 Claude 세션을 이어서(--resume·--continue) 출력 모드(-p)로 부르지 않습니다 — 넘긴 글이 그 세션에서 사람 입력처럼 처리됩니다."
+MSG_RESUME2="새 질문은 새 세션(claude -p \"<질문>\")으로 하세요. 다른 세션에 이어서 할 일은 사람에게 부탁하세요."
+#   재검사 A2#3: claude 찾기는 nested_claude_approve 와 같은 방식도 — 조각 첫 낱말(경로 뗀 이름)이 claude(.exe·.cmd)이거나(./claude · ~/.local/bin/claude),
+#   실행기(npx·pnpx·bunx·node·bun·deno·pnpm·yarn·npm — exec·dlx·x·run 과 옵션은 건너뜀) 뒤 첫 낱말이 *claude-code* · */claude 꼴이면 그 뒤 낱말을 본다.
+#   $( · ` 자리는 알 수 없는 낱말($X)로 남기고, 풀 수 없는 낱말($ 가 남음)은 출력 모드·이어서 둘 다일 수 있다고 보고 막는다
+claude_resume_print() {
+  has "$1" 'claude' || return 1
+  local s seg cw i a re_cl="(^|[^[:alnum:]._/-])claude([.](exe|cmd))?([^[:alnum:]_.-]|$)"
+  s=$1; s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/ \$X$NL}; s=${s//\$(/ \$X$NL}
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    case "$seg" in *claude*) ;; *) continue ;; esac
+    if [[ $seg =~ $re_cl ]]; then crp_words "${seg#*"${BASH_REMATCH[0]}"}" && return 0; fi
+    seg_words "$seg"; cw=""
+    case "$SCMD" in
+      claude|claude.cmd) cw=${SW[$SI]} ;;
+      npx|pnpx|bunx|node|bun|deno|pnpm|yarn|npm)
+        for ((i = SI + 1; i < ${#SW[@]}; i++)); do
+          a=${SW[$i]}
+          case "$a" in exec|dlx|x|run) continue ;; -*) continue ;; esac
+          case "$a" in *claude-code*|*/claude|*/claude.exe|*/claude.cmd|claude|claude.exe|claude.cmd) cw=$a ;; esac
+          break
+        done ;;
+    esac
+    [ -z "$cw" ] && continue
+    seg=${seg#*"$cw"}; case "$seg" in [\"\']*) seg=${seg:1} ;; esac
+    crp_words "$seg" && return 0
+  done
+  return 1
+}
+# claude 낱말 뒤 글($1)에 출력 모드(-p·--print)와 이어서(--resume·-r·--continue·-c)가 둘 다 있는가 — 풀 수 없는 낱말($ 가 남음)은 둘 다로 본다
+crp_words() {
+  local seg=$1 w raw pr=0 rs=0 sk=0 re_q="\"[^\"]*[[:space:]][^\"]*\"|'[^']*[[:space:]][^']*'"
+  while [[ $seg =~ $re_q ]]; do seg=${seg/"${BASH_REMATCH[0]}"/ Q }; done
+  set -f
+  for w in $seg; do
+    raw=$w; w=${w//\"/}; w=${w//\'/}
+    # 리다이렉트 대상(> "$OUT")은 옵션이 아니다 — 단 보안 검사(10-05): 리다이렉트인지는 따옴표를 벗기기 **전** 낱말로 본다('>' · ">" 는 글이다) ·
+    #   건너뛸 자리에 - 로 시작하는 낱말이 오면 건너뛰지 않고 판정한다(막는 쪽)
+    if [ "$sk" = 1 ]; then sk=0; case "$w" in -*) ;; *) continue ;; esac; fi
+    # 리다이렉트 기호로 시작하는 낱말(>"$OUT" · 2>"$ERR" · <"$IN" · &>x)은 따옴표가 있어도 대상이다(재검사 A3 🟡 헛막힘)
+    case "$raw" in '<'*|'>'*|[0-9]'>'*|[0-9]'<'*|'&>'*) case "$raw" in '<'|'<<'|'<<<'|'>'|'>>'|'>|'|[0-9]'>'|[0-9]'>>'|'&>') sk=1 ;; esac; continue ;; esac
+    # 따옴표 밖 기호가 낱말 중간·끝에 붙으면(-p>x · --resume>>x · -c&>x · -r<f) 기호 앞부분을 옵션으로 판정하고, 기호로 끝나면 다음 낱말만 대상으로 건너뛴다
+    #   (보안 검사 10-05 — 낱말 통째로 건너뛰면 붙여 쓴 옵션을 못 봤다)
+    case "$raw" in *\"*|*\'*) ;; *'<'*|*'>'*)
+      case "$w" in *'<'|*'>'|*'>|'|*'<<'|*'<<<') sk=1 ;; esac
+      w=${w%%[<>]*}; w=${w%&}; w=${w%[0-9]}
+      [ -n "$w" ] || continue ;;
+    esac
+    case "$w" in
+      *'$'*) pr=1; rs=1 ;;
+      --print|--print=*) pr=1 ;;
+      --resume|--resume=*|--continue|--from-pr|--from-pr=*) rs=1 ;;
+      --*) ;;
+      -[A-Za-z]*) case "$w" in *[!A-Za-z-]*) ;; *) case "$w" in *p*) pr=1 ;; esac; case "$w" in *[rc]*) rs=1 ;; esac ;; esac ;;
+    esac
+  done
+  set +f
+  [ "$pr" = 1 ] && [ "$rs" = 1 ]
 }
 # 승인 스크립트를 "실행"하는 모양인가(읽기·검색은 아니다): bash·sh·source·. 로 부르기, 직접 실행, run.sh refactor-approve,
 # 셸로 흘려 넣기(cat … | bash · bash < … · <( ) · eval · xargs bash · -exec bash). $1 = 판정용 명령(따옴표 정리됨)
@@ -2321,6 +2468,7 @@ seg_targets() {
       esac ;;
   esac
   [ "$cls" = fmt ] && { for a in "${args[@]}"; do case "$a" in --write|-w|--fix|--apply|--apply-unsafe|format|fmt|-a|-A|--autocorrect|--autocorrect-all|-i|--in-place) wf=1 ;; esac; done; [ "$wf" = 1 ] && cls=w || cls=r; }
+  SARGS=("${args[@]}")   # 0.4.0 WC: 리다이렉트를 뺀 인자(copy_dir_seg 가 옵션째 다시 본다)
   # 쓰기 옵션 값
   for ((i = 0; i < ${#args[@]}; i++)); do
     a=${args[$i]}; nx=${args[$((i + 1))]:-}
@@ -2668,6 +2816,435 @@ shell_targets1() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨) — cd·push
         block "$fence_why docs/refactor 밖의 파일을 셸 명령으로 바꾸지 않습니다." "발견한 문제는 보고서와 계획서 후보로만 적으세요. 임시 파일은 /tmp 나 \$TMPDIR 에 쓰세요. (리팩토링과 상관없는 평소 작업이면 사용자에게 새 대화에서 하자고 안내하세요.)"
       fi
     done
+  done
+  cwd=$CWD_BASE
+}
+# 0.4.0 WC: 기록 폴더(docs/refactor) 자체나 그 상위 폴더(docs · 프로젝트 · 절대경로)로 폴더째·와일드카드 복사·옮기기, 거기에 압축 풀기,
+#   그 폴더를 잇거나 그 자리에 링크 만들기 → 막는다. 이름을 적은 파일 복사·기록 폴더 밖·기록 폴더에서 밖으로는 그대로 통과.
+#   (지금까지는 목적지가 기록 폴더 자체일 때 원본 이름만 봐서 cp -r /tmp/d/. docs/refactor · cp /tmp/d/.t* docs/refactor/ · cp -r /tmp/refactor docs/ 가 지나갔다)
+RE_UNPACK_ENV='(^|[^A-Za-z0-9_])(TAR_OPTIONS|UNZIPOPT|UNZIP)([^A-Za-z0-9_]|$)'   # FC4 K2
+MSG_CPDIR="폴더째·와일드카드 복사는 기록 폴더 안의 허락 파일·승인 기록을 덮어쓸 수 있어 막습니다 — 파일 이름을 하나씩 적어 복사하세요."
+MSG_UNPACK="리팩토링 기록 폴더(docs/refactor)에 압축을 풀거나 파일을 한꺼번에 넣지 않습니다(사람 전용 파일을 덮어쓸 수 있음)."
+MSG_LINK="기록 폴더(docs/refactor)나 그 상위 폴더를 잇거나 그 자리에 링크를 만들면 허락 파일·승인 기록을 다른 이름으로 바꿀 수 있어 막습니다 — 링크 없이 파일을 하나씩 다루세요."
+# 단어가 기록 폴더 자체나 그 상위 폴더인가($2 = in 이면 기록 폴더 안도, rec 이면 그 안의 STATE.md·APPROVALS.log·approved·.turn*·.allow-* 도).
+#   판정할 수 없는 단어(모르는 변수)는 끝이 docs·docs/refactor 인 꼴만
+#   경로 비교는 다른 판정처럼 대소문자를 가리지 않는다(copy_dir_seg1 이 옵션 글자 때문에 꺼 둔 nocasematch 를 여기서만 켠다)
+cpd_hit() { shopt -s nocasematch; cpd_hit1 "$@"; local r=$?; shopt -u nocasematch; return $r; }
+cpd_hit1() {
+  local t=${1//\"/}
+  t=${t//\'/}
+  if resolve_tok "$t"; then
+    case "$RP" in ''|/|[A-Za-z]:|[A-Za-z]:/) return 0 ;; esac   # 루트·드라이브
+    case "$rdir/" in "$RP"/*) return 0 ;; esac
+    if [ "${2:-}" = in ]; then case "$RP" in "$rdir"/*) return 0 ;; esac; fi
+    if [ "${2:-}" = rec ]; then { is_record_path "$RP" || is_human_path "$RP"; } && return 0; fi
+    return 1
+  fi
+  t=${t//"$BS"/$SL}; t=${t%"${t##*[!/]}"}
+  case "$t" in docs|*/docs|docs/refactor|*/docs/refactor) return 0 ;; esac
+  return 1
+}
+# 목적지가 어디인가 → CW = self(기록 폴더 자체나 그 안) | up(그 상위·루트·드라이브) | no. 판정할 수 없는 단어는 끝이 docs/refactor 면 self, docs 면 up
+#   up 이면 FIRST = 목적지에서 기록 폴더까지 남은 경로의 첫 칸(FC2 G2 — 프로젝트 상위면 프로젝트 이름, docs 면 refactor)
+cpd_where() { shopt -s nocasematch; cpd_where1 "$1"; shopt -u nocasematch; }
+cpd_where1() {
+  local t=${1//\"/} rel
+  CW=no; FIRST=""; t=${t//\'/}
+  if resolve_tok "$t"; then
+    case "$RP" in "$rdir"|"$rdir"/*) CW=self; return 0 ;; esac
+    case "$RP" in ''|/) CW=up; rel=${rdir#/} ;;
+      [A-Za-z]:|[A-Za-z]:/) CW=up; rel=${rdir#?:}; rel=${rel#/} ;;
+      *) case "$rdir/" in "$RP"/*) CW=up; rel=${rdir#"$RP"/} ;; esac ;;
+    esac
+    [ "$CW" = up ] && FIRST=${rel%%/*}
+    return 0
+  fi
+  t=${t//"$BS"/$SL}; t=${t%"${t##*[!/]}"}
+  case "$t" in docs/refactor|*/docs/refactor) CW=self ;; docs|*/docs) CW=up; FIRST=refactor ;; esac
+  return 0
+}
+# 원본 이름을 미리 알 수 없는가: 와일드카드·중괄호 · 변수·명령 치환 · 끝이 / 또는 /. · . 이나 ..
+#   (FC F7: 변수가 든 경로라도 마지막 이름 조각이 보통 이름이고 허락 파일 꼴이 아니면 안다 — cp $HOME/notes.md docs/refactor/)
+cpd_unknown() { shopt -s nocasematch; cpd_unknown1 "$1"; local r=$?; shopt -u nocasematch; return $r; }
+cpd_unknown1() {
+  local t=${1//\"/} b
+  t=${t//\'/}; t=${t//"$BS"/$SL}
+  case "$t" in *[\*\?\[\{]*|*/|*/.|*/..|.|..) return 0 ;; esac
+  case "$t" in
+    *'$'*|*'`'*)
+      case "$t" in */*) ;; *) return 0 ;; esac
+      b=${t##*/}
+      case "$b" in ''|*'$'*|*'`'*|.allow-*|approvals.log|.turn|.turn.*|.turn-*|approved|state.md) return 0 ;; esac ;;
+  esac
+  return 1
+}
+# FC F7: 상위 폴더로 폴더째 복사할 때 막는 원본 — 모름(변수·명령 치환) · 끝이 / · /. · 와일드카드 · 이름이 refactor·docs
+#   또는 목적지에서 기록 폴더까지의 첫 칸(FIRST — FC2 G2: cp -r /tmp/x/<프로젝트 이름> ..) · 대소문자 무시
+cpd_upsrc() { shopt -s nocasematch; cpd_upsrc1 "$1"; local r=$?; shopt -u nocasematch; return $r; }
+cpd_upsrc1() {
+  local t=${1//\"/} b
+  t=${t//\'/}; t=${t//"$BS"/$SL}
+  case "$t" in *[\*\?\[\{]*|*'$'*|*'`'*|*/|*/.|*/..|.|..) return 0 ;; esac
+  cpd_upname "$t"
+}
+# 원본 마지막 이름이 refactor·docs·FIRST 인가(nocasematch 켠 채로 부른다)
+cpd_upname() {
+  local b=${1%"${1##*[!/]}"}
+  b=${b##*/}
+  case "$b" in refactor|docs) return 0 ;; esac
+  [ -n "${FIRST:-}" ] && [ "$b" = "$FIRST" ] && return 0
+  [ -n "${FIRST:-}" ] && case "$b" in "$FIRST") return 0 ;; esac
+  return 1
+}
+# 링크 원본: 지금 폴더 기준과 링크가 놓일 폴더($2) 기준 둘 다 풀어 하나라도 기록 폴더·그 상위·그 안의 사람 전용 파일이면 0
+cpd_lnsrc() {
+  cpd_hit "$1" rec && return 0
+  [ -n "${2:-}" ] || return 1
+  local c0=$cwd r=1
+  cwd=$2; cpd_hit "$1" rec && r=0; cwd=$c0
+  return $r
+}
+# 링크가 놓일 폴더: 목적지가 있는 폴더거나 끝이 / 면 그 폴더, 아니면 그 상위 → LDIR(판정할 수 없으면 빈 값)
+cpd_linkdir() {
+  LDIR=""
+  local t=${1//\"/}
+  t=${t//\'/}
+  resolve_tok "$t" || return 0
+  case "$t" in */) LDIR=$RP; return 0 ;; esac
+  if [ -d "$RP" ]; then LDIR=$RP; else LDIR=${RP%/*}; [ -n "$LDIR" ] || LDIR=/; fi
+}
+# 조각 하나(seg_targets 를 부른 뒤 — SCMD·SARGS·XARGS·cwd)를 본다. 옵션 글자는 대소문자를 가린다(cp -t 와 -T) — 명령 이름은 먼저 가린다
+copy_dir_seg() {
+  local k=""
+  case "$SCMD" in
+    cp|install|scp) k=cp ;;
+    mv) k=mv ;;
+    rsync) k=rsync ;;
+    copy-item|cpi|copy) k=psc ;;
+    move-item|mi|move) k=psm ;;
+    xcopy|robocopy) k=win ;;
+    ln) k=ln ;;
+    mklink) k=mklink ;;
+    tar|bsdtar) k=tar ;;
+    unzip) k=unzip ;;
+    7z|7za|7zr) k=7z ;;
+    expand-archive) k=xa ;;
+    new-item|ni) k=ni ;;
+    *) return 0 ;;
+  esac
+  local wk=0 rec=0 lnk=0 tt=0 bk=0 sc=$SCMD envx=0 j
+  case "$SCMD" in copy|move|xcopy|robocopy) wk=1 ;; esac
+  # FC3 H3: 같은 조각에 붙인 대입(TAR_OPTIONS=… tar · env UNZIP=… unzip)은 풀기 옵션을 몰래 더한다 — seg_words 가 명령 앞(SI 전)에 남긴 낱말
+  for ((j = 0; j < SI; j++)); do case "${SW[$j]}" in TAR_OPTIONS=*|UNZIP=*|UNZIPOPT=*) envx=1 ;; esac; done
+  case "$SCMD" in robocopy|rsync) rec=1 ;; esac
+  shopt -u nocasematch
+  copy_dir_seg1 "$k"
+  shopt -s nocasematch
+  return 0
+}
+# 짧은 옵션 묶음(-rt X · -tX · -S .bak)에서 값을 받는 글자($2 목록) 뒤를 값으로 → OV(값) · OVN=1(값이 다음 낱말) · OL(값 앞 글자들)
+cpd_short() {
+  local o=${1#-} c
+  OL=""; OV=""; OVN=0; OC=""
+  while [ -n "$o" ]; do
+    c=${o:0:1}; o=${o:1}
+    case "$2" in *"$c"*) OC=$c; if [ -n "$o" ]; then OV=$o; else OVN=1; fi; return 0 ;; esac
+    OL="$OL$c"
+  done
+}
+# 긴 옵션 이름($1, -- 뗀 = 앞)이 $2 의 줄임인가(--targ → target-directory)
+cpd_long() { [ -n "$1" ] && case "$2" in "$1"*) return 0 ;; esac; return 1; }
+copy_dir_seg1() {
+  local k=$1 i a nx skip=0 tdir="" pos=() srcs=() dirs=() ext=0 out=0 ab=0 n d s j nm vl="" itype="" npath="" nname="" ltgt=() tvl=gCTXfFLbHVIKN tq="" o c cfail=0 tm="" lst=0
+  case "$sc" in cp|mv|ln) vl=tS ;; install) vl=tSmog ;; scp) vl=PiFoclJS ;; rsync) vl=efTBM ;; bsdtar) tvl="${tvl}s" ;; esac
+  for ((i = 0; i < ${#SARGS[@]}; i++)); do
+    a=${SARGS[$i]}; nx=${SARGS[$((i + 1))]:-}
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    case "$a" in '\'|'+') continue ;; esac   # find -exec 끝(\; · +) (FC F4 · 배경 실행 & 는 copy_dir_targets1 이 조각 경계로 — FC F1)
+    case "$k" in
+      cp|mv|ln|rsync)
+        case "$a" in
+          --*)
+            nm=${a#--}; nm=${nm%%=*}
+            if [ "$k" != rsync ] && cpd_long "$nm" target-directory; then
+              case "$a" in *=*) tdir=${a#*=} ;; *) tdir=$nx; skip=1 ;; esac
+            else
+              case "$a" in --rec*|--ar*) [ "$k" = cp ] && rec=1 ;; --l|--li*|--sy*) [ "$sc" = cp ] && lnk=1 ;; --no-t*) tt=1 ;; --b|--ba*) bk=1 ;; esac
+              case "$a" in *=*) ;; *)
+                case "$k:$nm" in
+                  rsync:exclude|rsync:include|rsync:filter|rsync:rsh|rsync:backup-dir|rsync:log-file|rsync:exclude-from|rsync:include-from|rsync:files-from|rsync:partial-dir|rsync:temp-dir|rsync:compare-dest|rsync:copy-dest|rsync:link-dest|rsync:chmod|rsync:chown|rsync:block-size|rsync:max-size|rsync:min-size|rsync:timeout|rsync:port|rsync:password-file|rsync:out-format|rsync:suffix|rsync:remote-option|rsync:rsync-path|rsync:log-file-format|rsync:usermap|rsync:groupmap|rsync:checksum-choice|rsync:compress-choice)
+                    skip=1 ;;
+                  *) { cpd_long "$nm" suffix && [ "${#nm}" -ge 2 ]; } && skip=1
+                     [ "$sc" = install ] && { cpd_long "$nm" mode || cpd_long "$nm" owner || cpd_long "$nm" group; } && skip=1 ;;
+                esac ;;
+              esac
+            fi ;;
+          -[A-Za-z]*)
+            cpd_short "$a" "$vl"
+            [ "$k" = cp ] && case "$OL" in *r*|*R*|*a*) rec=1 ;; esac
+            [ "$sc" = cp ] && case "$OL" in *l*|*s*) lnk=1 ;; esac
+            [ "$k" != rsync ] && case "$OL" in *T*) tt=1 ;; esac   # FC2 G1: -T = 원본 안쪽을 목적지에 붓는다
+            [ "$sc" = mv ] && case "$OL" in *b*) bk=1 ;; esac      # FC2 G6: mv -b = 있던 것을 백업하고 갈아 끼운다
+            if [ -n "$OC" ]; then
+              if [ "$OC" = t ] && [ "$k" != rsync ]; then
+                if [ "$OVN" = 1 ]; then tdir=$nx; skip=1; else tdir=$OV; fi
+              elif [ "$OVN" = 1 ]; then skip=1
+              fi
+            fi ;;
+          -*) ;;
+          *) pos+=("$a") ;;
+        esac ;;
+      psc|psm)
+        case "$a" in
+          -[Rr]|-[Rr][Ee]*) rec=1 ;;
+          -[Dd][Ee][Ss]*) tdir=$nx; skip=1 ;;
+          -[Pp][Aa][Tt]*|-[Ll][Ii]*) srcs+=("$nx"); skip=1 ;;
+          /[A-Za-z]*/*) pos+=("$a") ;;
+          /[A-Za-z]*) [ "$wk" = 1 ] || pos+=("$a") ;;
+          -*) ;;
+          *) pos+=("$a") ;;
+        esac ;;
+      win|mklink)
+        case "$a" in
+          /[A-Za-z]*/*) pos+=("$a") ;;
+          /[SsEe]) rec=1 ;;
+          /[A-Za-z]*) ;;
+          -*) ;;
+          *) pos+=("$a") ;;
+        esac ;;
+      tar)
+        case "$a" in
+          --extract|--get) ext=1 ;;
+          --ex|--ext|--extr*) ext=1; cfail=1 ;;   # FC6 S1: 모드를 줄여 쓴 꼴은 풀기 · 줄임은 판정을 비껴가는 데 쓰이니 애매 → 막음
+          --list) tm="${tm}t" ;;
+          --create|--append|--update|--catenate|--concatenate|--diff|--compare|--delete|--test-label) tm="${tm}c" ;;
+          --ab|--abs*|--insecure) ab=1 ;;   # 보안 검사(10-06): 절대경로·.. 를 그대로 풀면 풀 곳과 상관없이 어디든 씀(GNU 긴 옵션 줄임 · bsdtar --insecure = -P)
+          --to-stdout|--to-command*) out=1 ;;
+          --directory=*) dirs+=("${a#*=}") ;;
+          --directory) dirs+=("$nx"); skip=1 ;;
+          --*) ;;
+          -[A-Za-z]*)   # FC3 H1·H2: 앞 글자부터 보다가 값 받는 글자에서 멈춘다(-xPfOevil.tar 의 O 는 파일 이름) · C 의 값은 풀 곳
+            cpd_short "$a" "$tvl"
+            # FC4 K1: x·P 는 묶음 어디에 있든(맥 bsdtar 의 값 글자는 GNU 와 달라 -xHPf 의 P 를 놓칠 수 있음 — 파일 이름 속 P 헛막힘은 받아들임) ·
+            #   O 는 값 글자 앞부분만(파일 이름의 O 로 판정을 건너뛰지 않게) · C 가 있는데 풀 곳으로 못 잡았으면 애매 → 막음(cfail)
+            case "$a" in *x*) ext=1 ;; esac; case "$OL" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac
+            case "$a" in *C*) [ "$OC" = C ] || cfail=1 ;; esac
+            case "$OL" in *[tcruAd]*) tm="$tm$OL" ;; esac   # FC6 S1: 값 글자 앞의 분명한 모드(t 목록 · c r u A d)
+            if [ -n "$OC" ]; then
+              if [ "$OVN" = 1 ]; then [ "$OC" = C ] && dirs+=("$nx"); skip=1
+              else [ "$OC" = C ] && dirs+=("$OV"); fi
+            fi ;;
+          *)
+            if [ "$i" -eq 0 ]; then
+              case "$a" in
+                *[!A-Za-z]*) ;;
+                *)   # 옛꼴 첫 낱말(xfC): 글자는 모두 옵션 · 값 받는 글자마다 뒤 위치 인자를 차례로 소비(tq)
+                  case "$a" in *x*) ext=1 ;; esac; case "$a" in *O*) out=1 ;; esac; case "$a" in *P*) ab=1 ;; esac
+                  case "$a" in *[tcruAd]*) tm="$tm$a" ;; esac
+                  o=$a; while [ -n "$o" ]; do c=${o:0:1}; o=${o:1}; case "$tvl" in *"$c"*) tq="$tq$c" ;; esac; done ;;
+              esac
+            elif [ -n "$tq" ]; then
+              c=${tq:0:1}; tq=${tq:1}; [ "$c" = C ] && dirs+=("$a")
+            fi ;;
+        esac ;;
+      unzip)
+        ext=1
+        case "$a" in
+          -d) dirs+=("$nx"); skip=1 ;;
+          -d?*) dirs+=("${a#-d}") ;;
+          --*) ;;
+          -*:*) ab=1 ;;   # unzip -: = ../ 를 그대로 풂
+          -[A-Za-z]*) case "$a" in *[lvtzZpc]*) out=1 ;; esac ;;
+        esac ;;
+      7z)
+        case "$a" in
+          -o?*) dirs+=("${a#-o}") ;;
+          -so) out=1 ;;
+          -spf*) ab=1 ;;   # 7z -spf = 절대경로 그대로
+          -*) ;;
+          *) [ "${#pos[@]}" -eq 0 ] && case "$a" in x|e) ext=1 ;; esac; pos+=("$a") ;;
+        esac ;;
+      xa)   # FC F6: Expand-Archive [-Path] <zip> [-DestinationPath] <폴더> — 풀 곳이 없으면 지금 폴더
+        ext=1
+        case "$a" in
+          -[Dd]*) dirs+=("$nx"); skip=1 ;;
+          -[Pp][Aa]*|-[Ll][Ii]*) skip=1; pos+=("$nx") ;;
+          -*) ;;
+          *) pos+=("$a") ;;
+        esac ;;
+      ni)   # FC F6: New-Item -ItemType SymbolicLink|Junction|HardLink -Path/-Name <링크> -Target/-Value <원본>
+        case "$a" in
+          -[Ii]*|-[Tt][Yy]*) itype=$nx; skip=1 ;;
+          -[Pp][Aa][Tt]*|-[Ll][Ii]*) npath=$nx; skip=1 ;;
+          -[Nn]*) nname=$nx; skip=1 ;;
+          -[Tt]*|-[Vv][Aa]*) ltgt+=("$nx"); skip=1 ;;
+          -*) ;;   # -PassThru·-Force·-WhatIf 처럼 값 없는 옵션은 다음 낱말을 삼키지 않는다(FC2 G5)
+          *) if [ -z "$npath" ]; then npath=$a; else ltgt+=("$a"); fi ;;
+        esac ;;
+    esac
+  done
+  # 풀기: 풀 곳(없으면 지금 폴더)이 기록 폴더·그 안·그 상위면(루트에서 tar xzf 도 — 안에 무엇이 있는지 모름)
+  case "$k" in
+    tar|unzip|7z|xa)
+      [ "$k" = xa ] && [ "${#dirs[@]}" -eq 0 ] && [ "${#pos[@]}" -ge 2 ] && dirs=("${pos[1]}")
+      # FC6 S1: 풀기 후보 = 목록 보기·다른 분명한 모드만 뺀 전부(모드가 없거나 애매하면 후보 — TAR_OPTIONS="-x" 로 모드를 몰래 넣는 꼴)
+      #   tar: x 가 없고 t·c·r·u·A·d 같은 모드가 분명하면 아님 · unzip: -l·-v·-t·-Z·-p 면 아님 · 7z: l·t 면 아님
+      case "$k" in
+        tar) [ "$ext" = 1 ] || [ -z "$tm" ] || return 0 ;;
+        unzip) for a in "${SARGS[@]}"; do case "$a" in --*) ;; -*[lvtZp]*) lst=1 ;; esac; done; [ "$lst" = 0 ] || return 0 ;;
+        7z) case "${pos[0]:-}" in l|t) return 0 ;; esac ;;
+      esac
+      UNPK=1   # FC5 E1·FC6 S2: 풀기 후보가 있다 — 같은 명령에 환경을 바꾸는 명령·꾸민 명령 이름·대입이 있으면 끝에서 막는다
+      [ "$ab" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"     # FC3 H1: 절대경로·.. 그대로 풀기는 표준출력 표시와 상관없이
+      # FC4 K2·FC6 S2(d): 명령 원문 어디에든 풀기 옵션 환경 변수 이름이 보이면(ext 로 돌아가기 전에)
+      [[ $rawcmd =~ $RE_UNPACK_ENV ]] && envx=1
+      [ "$envx" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"
+      # 모드가 없는 tar·7z 는 풀기로 본다(애매하면 막기)
+      [ "$k" = tar ] && [ -z "$tm" ] && ext=1
+      [ "$k" = 7z ] && [ "${#pos[@]}" -eq 0 ] && ext=1
+      [ "$ext" = 1 ] || return 0
+      case "$tq" in *C*) cfail=1 ;; esac                    # FC4 K1: 옛꼴 C 의 값 낱말이 모자람 → 애매
+      [ "$cfail" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"  # FC4 K1: 묶음 안 C 의 풀 곳을 판정할 수 없음
+      [ "$out" = 0 ] || return 0
+      [ "${#dirs[@]}" -eq 0 ] && dirs=(.)
+      for d in "${dirs[@]}"; do cpd_where "$d"; [ "$CW" != no ] && block "$MSG_UNPACK" "$MSG_HUMAN"; done
+      return 0 ;;
+  esac
+  n=${#pos[@]}
+  # 링크(심볼릭·하드·mklink /d /j /h · New-Item 링크): 가리킬 원본이나 만들 자리(목적지 폴더)가 기록 폴더·그 상위, 또는 그 안의 사람 전용 파일이면.
+  #   상대 원본은 지금 폴더 기준과 링크가 놓일 폴더 기준 둘 다 본다(FC F5) · xargs·{}·명령 치환으로 넘긴 원본(모름)도 막는다(FC F4)
+  if [ "$k" = ni ]; then
+    case "$itype" in symboliclink|junction|hardlink|[Ss][Yy][Mm]*|[Jj][Uu][Nn]*|[Hh][Aa][Rr][Dd]*) ;; *) return 0 ;; esac
+    local lk=$npath   # 링크 자리 = -Path, -Name 이 있으면 -Path/-Name(FC2 G5)
+    [ -n "$nname" ] && { if [ -n "$lk" ]; then lk="$lk/$nname"; else lk=$nname; fi; }
+    LDIR=""
+    [ -n "$lk" ] && { cpd_hit "$lk" rec && block "$MSG_LINK"; cpd_linkdir "$lk"; }
+    for s in "${ltgt[@]}"; do cpd_lnsrc "$s" "$LDIR" && block "$MSG_LINK"; done
+    return 0
+  fi
+  if [ "$k" = ln ] || [ "$k" = mklink ]; then
+    local lk="" ls=()
+    if [ "$k" = mklink ]; then
+      [ "$n" -ge 1 ] && lk=${pos[0]}; [ "$n" -ge 2 ] && ls=("${pos[@]:1}")
+    elif [ -n "$tdir" ]; then lk=$tdir; ls=("${pos[@]}")
+    elif [ "$n" -eq 1 ]; then lk=.; ls=("${pos[0]}")
+    elif [ "$n" -ge 2 ]; then lk=${pos[$((n - 1))]}; ls=("${pos[@]:0:$((n - 1))}")
+    fi
+    [ -n "$lk" ] && cpd_hit "$lk" rec && block "$MSG_LINK"
+    LDIR=""; [ -n "$lk" ] && cpd_linkdir "$lk"
+    { [ "$n" -eq 1 ] || [ -n "$tdir" ]; } && [ "$k" = ln ] && [ -n "$lk" ] && { resolve_tok "${lk//\"/}" && LDIR=$RP; }
+    [ "$XARGS" = 1 ] && block "$MSG_LINK"
+    for s in "${ls[@]}"; do
+      case "$s" in *'$bt'*) block "$MSG_LINK" ;; esac
+      cpd_lnsrc "$s" "$LDIR" && block "$MSG_LINK"
+    done
+    return 0
+  fi
+  # 복사·옮기기: 목적지 → d, 원본 → srcs
+  if [ -n "$tdir" ]; then
+    d=$tdir; srcs+=("${pos[@]}")
+  elif [ "$k" = win ]; then
+    [ "$n" -ge 2 ] || return 0
+    d=${pos[1]}; srcs+=("${pos[0]}")
+    [ "$sc" = robocopy ] && for ((j = 2; j < n; j++)); do srcs+=("${pos[$j]}"); done
+  else
+    [ "$n" -ge 1 ] || return 0
+    d=${pos[$((n - 1))]}
+    for ((j = 0; j < n - 1; j++)); do srcs+=("${pos[$j]}"); done
+  fi
+  [ "$XARGS" = 1 ] && srcs+=('$bt')   # FC F4: xargs 로 넘긴 원본 = 모름
+  [ "${#srcs[@]}" -gt 0 ] || return 0
+  # FC F6: cp -l·-s·--link·--symbolic-link 은 원본을 잇는다 — 원본이 기록 폴더나 그 안·그 상위면
+  if [ "$lnk" = 1 ]; then for s in "${srcs[@]}"; do cpd_hit "$s" in && block "$MSG_LINK"; done; fi
+  cpd_where "$d"
+  case "$CW" in
+    self)   # 기록 폴더 자체나 그 안: 폴더째 · 이름을 알 수 없는 원본 · mv -T(기록 폴더를 통째 갈아 끼움 — FC2 G6)
+      [ "$rec" = 1 ] && block "$MSG_CPDIR"
+      [ "$tt" = 1 ] && [ "$sc" = mv ] && block "$MSG_CPDIR"
+      for s in "${srcs[@]}"; do cpd_unknown "$s" && block "$MSG_CPDIR"; done ;;
+    up)     # 그 상위(FC F7 — 헛막힘 좁히기): 폴더째 그리고 원본이 모름·/.·/·와일드카드·이름이 refactor·docs 일 때만
+      #   FC2 G1: -T·--no-target-directory·robocopy·xcopy 는 원본 안쪽을 붓는다 = /. 와 같다
+      if [ "$tt" = 1 ] && { [ "$rec" = 1 ] || [ "$sc" = mv ]; }; then block "$MSG_CPDIR"; fi
+      if [ "$k" = win ] && [ "$rec" = 1 ]; then block "$MSG_CPDIR"; fi
+      if [ "$rec" = 1 ]; then for s in "${srcs[@]}"; do cpd_upsrc "$s" && block "$MSG_CPDIR"; done; fi
+      #   FC2 G6: mv -b·--backup = 있던 것을 백업하고 갈아 끼운다(mv -b /tmp/refactor docs/)
+      if [ "$bk" = 1 ]; then for s in "${srcs[@]}"; do cpd_upsrc "$s" && block "$MSG_CPDIR"; done; fi ;;
+  esac
+  return 0
+}
+# 명령 전체: 백틱·$( ) 치환은 한 단어 $bt(이름을 알 수 없는 낱말)로 접고 안의 명령은 뒤에 따로 붙여 본다(FC F2) · {} 도 $bt(FC F4) ·
+#   find -exec/-execdir/-ok/-okdir 뒤는 새 조각(FC F4) · 단독 & 도 조각 경계(FC F1) — cd 를 따라 조각마다 copy_dir_seg
+copy_dir_targets() {
+  local s=$1 o="" in="" BT='`' r m dp ii ch pc DQS='"/' SQS="'/"
+  while :; do case "$s" in *"$BT"*"$BT"*) o="$o${s%%"$BT"*}\$bt"; r=${s#*"$BT"}; in="$in$NL${r%%"$BT"*}"; s=${r#*"$BT"} ;; *) break ;; esac; done
+  s="$o$s"; o=""
+  # $( ) 는 괄호 깊이로(겹친 $( ) · 따옴표 안 괄호 — FC2 G4): 다음 ) 까지 잘라 그 안의 ( 수만큼 깊이를 더한다
+  while :; do
+    case "$s" in *'$('*) ;; *) break ;; esac
+    o="$o${s%%'$('*}\$bt"; r=${s#*'$('}; dp=1; ii=""
+    while :; do
+      case "$r" in *')'*) ;; *) ii="$ii$r"; r=""; break ;; esac
+      ch=${r%%')'*}; r=${r#*')'}; pc=${ch//[!(]/}
+      dp=$((dp + ${#pc} - 1)); ii="$ii$ch"
+      [ "$dp" -le 0 ] && break
+      ii="$ii)"
+    done
+    in="$in$NL$ii"; s=$r
+  done
+  s="$o$s"
+  # 따옴표를 닫은 바로 뒤에 / 가 오면 따옴표를 지워 한 낱말로("$PWD"/docs/refactor — FC2 G3 · 이 사본에서만, 공유 판정 문자열은 그대로)
+  s=${s//"$DQS"/$SL}; s=${s//"$SQS"/$SL}
+  s="$s$in"
+  s=${s//'{}'/'$bt'}
+  for m in -execdir -exec -okdir -ok; do s=${s//" $m "/"$NL"}; done
+  UNPK=0; ENVSET=0
+  cd_all copy_dir_targets1 "$s"
+  # FC6 S2: 풀기 후보가 있으면 명령 원문(JSON 이스케이프만 풀어)의 조각마다 명령 자리 낱말을 본다 — 판정 문자열은 단순 따옴표를 이미 벗겨("tar" → tar)
+  #   꾸민 이름을 못 보므로 원문으로 · ( · 백틱도 조각 경계(안 명령)
+  if [ "$UNPK" = 1 ] && [ "$ENVSET" = 0 ]; then
+    local rr=${rawcmd//'\n'/$NL} rs
+    rr=${rr//'\t'/ }; rr=${rr//'\"'/'"'}
+    rr=${rr//&&/$NL}; rr=${rr//||/$NL}; rr=${rr//;/$NL}; rr=${rr//|/$NL}; rr=${rr//&/$NL}; rr=${rr//\(/$NL}; rr=${rr//\`/$NL}
+    while [ -n "$rr" ] && [ "$ENVSET" = 0 ]; do
+      rs=${rr%%"$NL"*}; if [ "$rs" = "$rr" ]; then rr=""; else rr=${rr#*"$NL"}; fi
+      cdt_cmdword "$rs"
+    done
+  fi
+  # FC5 E1: 풀기와 함께 환경을 바꾸는 명령(export·declare·typeset·local·readonly·set·eval·source·. ·env -S)이 같은 명령에 있으면
+  #   TAR_OPTIONS·UNZIP 를 글자를 꼬아(TAR_OPT""IONS·TAR_\OPTIONS·eval·source 파일) 넣을 수 있어 막는다(애매하면 막기)
+  [ "$UNPK" = 1 ] && [ "$ENVSET" = 1 ] && block "$MSG_UNPACK" "$MSG_HUMAN"
+}
+# FC6 S2: 조각의 명령 자리 낱말(원문 그대로)을 본다 → ENVSET=1 이면 같은 명령의 풀기 후보를 막는다
+#   (a) 따옴표·역슬래시를 지운 이름이 export·declare·typeset·local·readonly·set·eval·source·. ·env (ex""port · \export)
+#   (b) 명령 자리 낱말에 따옴표·역슬래시·$·백틱(꾸민 명령 이름) (c) 조각 앞·env 뒤의 NAME=VALUE 대입(이름과 상관없이)
+cdt_cmdword() {
+  local rest=$1 w c nm n=0
+  while [ "$n" -lt 24 ]; do
+    n=$((n + 1))
+    rest=${rest#"${rest%%[![:space:](\{\!]*}"}
+    [ -n "$rest" ] || return 0
+    w=${rest%%[[:space:]]*}; rest=${rest#"$w"}
+    case "$w" in *=*) nm=${w%%=*}; case "$nm" in ''|[0-9]*|*[!A-Za-z0-9_]*) ;; *) ENVSET=1; continue ;; esac ;; esac
+    case "$w" in *[\"\'\\\$\`]*) ENVSET=1 ;; esac
+    c=${w//[\"\'\\]/}
+    case "$c" in
+      export|declare|typeset|local|readonly|set|eval|source|.|env) ENVSET=1; return 0 ;;
+      command|builtin|exec|nohup|sudo|time|nice|then|do|else|elif|if|while|until) ;;
+      *) return 0 ;;
+    esac
+  done
+}
+copy_dir_targets1() {
+  local s=$1 seg CWD_BASE=$cwd CD_PREV=$cwd j
+  s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//&/$NL}
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
+    cd_seg "$seg" && continue
+    seg_targets "$seg"
+    case "$SCMD" in export|declare|typeset|local|readonly|set|eval|source|.) ENVSET=1 ;; esac
+    for ((j = 0; j < SI; j++)); do [ "${SW[$j]}" = eval ] || [ "${SW[$j]}" = -S ] && ENVSET=1; case "${SW[$j]}" in --split-string*|-[a-zA-Z]*S) ENVSET=1 ;; esac; done
+    copy_dir_seg
   done
   cwd=$CWD_BASE
 }
@@ -3083,6 +3660,18 @@ mk_views() {
   while [[ $r =~ $re_null ]]; do r=${r/"${BASH_REMATCH[0]}"/ }; done
   local re_gopt="git[[:space:]]+(-[Cc][[:space:]]+(\"[^\"]*\"|'[^']*'|[^[:space:]]+)|--no-pager|-P|--paginate|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--namespace=[^[:space:]]+|--bare|--no-replace-objects|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-optional-locks)[[:space:]]+"
   while [[ $r =~ $re_gopt ]]; do r=${r/"${BASH_REMATCH[0]}"/git }; done
+  # 0.4.0 보완(검사 A#1 · 재검사 A2#1·#2): gh 바로 뒤 저장소 옵션(gh -R o/r pr merge · gh --repo=o/r release upload · gh -Ro/r …)도 옵션 순서만 다른 철자.
+  #   판정 글(r)은 고치지 않는다 — 옵션을 걷어낸 사본(g2)을 만들어 뒤에 덧붙이고 원문과 사본을 둘 다 모든 규칙이 본다
+  #   (r 을 직접 고치면 echo "gh -R 'x"; <위험 명령>; echo ' y' 처럼 따옴표 짝을 짜 맞춘 꼴이 위험 명령까지 지웠다).
+  #   걷어내는 값은 좁게: 따옴표 값은 공백·; & | 없이, 맨 값은 저장소 이름 글자만. 값을 알 수 없는 꼴($R · "$R" · ${R} · "$(…)" · `…` · <(…) · o/r$x)은
+  #   사본에서 자리표시 X 로 바꾼 뒤 걷어낸다(gh 규칙이 뒤 하위 명령을 보게 — 원문은 그대로라 그 안의 명령도 판정된다)
+  local g2=$r gk=0
+  local re_ghb="(^|[;&|({\`\"'[:space:]])gh([.]exe)?[[:space:]]+(-r(=|[[:space:]]+)?|--repo(=|[[:space:]]+))"
+  # 재검사 A3 #1·#2: 사본에서만 걷어내므로 값은 넓게 — 맨 글자·'…'·"…"·`…`·$(…)·<(…) 를 이어 붙인 한 덩어리(o\/r · {o/r,} · o/'r' · "$R" …)를
+  #   통째로 걷어낸다(최대 40번 — -R 을 여러 번 적은 꼴도). 원문(r)은 그대로 모든 규칙이 보므로 넓혀도 막는 판정이 줄지 않는다
+  local re_ghall="${re_ghb}(([^[:space:];&|()<>\"'\`]|'[^']*'|\"[^\"]*\"|\`[^\`]*\`|[\$<][(][^()]*[)])+)[[:space:]]+"
+  while [[ $g2 =~ $re_ghall ]] && [ "$gk" -lt 40 ]; do gk=$((gk + 1)); g2=${g2/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}gh${BASH_REMATCH[2]} "}; done
+  [ "$g2" != "$r" ] && r="$r ; popd ; $g2"
   LR=$r
 
   # lx: 비밀값 판정용 — 따옴표 속 파일 경로는 남기고(grep KEY ".env" 도 잡게), 검색어·커밋 메시지·echo 문구만 뺀다
@@ -3279,6 +3868,72 @@ merge_block() {
   if [ "${MG:-}" = 1 ]; then block "$MSG_MERGE_EXEC" "허락은 그대로입니다 — 아래 꼴 그대로 한 번만 다시 실행하세요(그래도 막히면 사용자에게 /refactor:approve 합치기 를 다시 입력해 달라고 하세요): $ML"; fi
   block "$MSG_MERGE_EXEC" "$MSG_MERGE_NO"
 }
+# 0.4.0 G2 자동 모드 허락: 사람이 /refactor:approve B<n> 자동 → 승인 스크립트가 만든 docs/refactor/.turn-auto.B<n>(합치기 전 단계 preflight·push·pr·merge),
+#   합친 뒤 자동 모드 스크립트가 만든 .turn-merged.B<n>(deploy-wait·verify). guard 는 여기까지만 본다 — 파일 이름 꼴(B+숫자) · 2줄 = 만든 시각(초)이고
+#   0~7200초 안 · 3줄 = 이 세션 ID(글자 그대로). 가지·카드·go= 대조는 스크립트가 한다. $1 = 파일 앞머리(.turn-auto. / .turn-merged.) · 하나라도 유효하면 0.
+#   refactor-auto 낱말이 보이는 명령에서만 부른다(date 1회 — 평소 도구 호출엔 비용 0)
+auto_grant() {
+  hascs "$sid" '^[A-Za-z0-9_-]{1,128}$' || return 1
+  local f l1 l2 l3 now="" re="^${1//./[.]}B[0-9]{1,6}\$"
+  for f in "$rdir/$1"B*; do
+    [ -f "$f" ] || continue
+    hascs "${f##*/}" "$re" || continue
+    l1=""; l2=""; l3=""
+    { IFS= read -r l1; IFS= read -r l2; IFS= read -r l3; } < "$f" 2>/dev/null
+    l2=${l2%$'\r'}; l3=${l3%$'\r'}
+    hascs "$l2" '^[0-9]{1,12}$' || continue
+    [ "$l3" = "$sid" ] || continue
+    [ -n "$now" ] || now=$(date +%s 2>/dev/null)
+    hascs "$now" '^[0-9]{1,12}$' || return 1
+    l1=$((10#$now - 10#$l2))
+    [ "$l1" -ge 0 ] && [ "$l1" -le 7200 ] && return 0
+  done
+  return 1
+}
+# 0.4.0 G2: 이 명령이 허락된 자동 모드 스크립트 호출 그대로인가 → 0(그때만 hv_human 의 실행 차단과 go 턴 안전 실행기 강제를 건너뛴다 — 다른 규칙은 그대로 본다).
+#   도구가 Bash · 맨 위 명령(PTOP) · JSON 이스케이프(\" \/)만 푼 원문(앞뒤 공백 뗌)에 다른 역슬래시가 없고, 꼴이 정확히
+#   bash <run.sh 경로> refactor-auto <단계> [인자…] [2>&1] — 경로는 따옴표("…", $ ` 없음) 또는 맨글자이고 . .. 를 정리하면 이 플러그인의 hooks/run.sh ·
+#   단계 = preflight·push·pr·merge(유효한 .turn-auto 필요) / deploy-wait·verify(유효한 .turn-merged 필요) · 인자 = 따옴표 글("…", $ ` 없음) ·
+#   맨글자 [A-Za-z0-9_./:@%+,=-] · "$CLAUDE_PROJECT_DIR" · "${CLAUDE_PROJECT_DIR}". 대소문자를 가린다
+auto_ok() {
+  [ "$tool" = Bash ] && [ "$PTOP" = 1 ] && [ -n "$plugroot" ] || return 1
+  local r=${rawcmd//"$BS$Q"/$Q} p st kind qa='"[^"$`]+"' ua='[A-Za-z0-9_./:@%+,=~-]+' pd='"[$]CLAUDE_PROJECT_DIR"|"[$][{]CLAUDE_PROJECT_DIR[}]"' re
+  r=${r//"$P_BSSL"/$SL}
+  while [ "${r# }" != "$r" ]; do r=${r# }; done
+  while [ "${r% }" != "$r" ]; do r=${r% }; done
+  # Windows 경로(C:\…\run.sh — JSON 원문에서는 \\)는 첫 따옴표 경로 안에서만 / 로 바꿔 본다(그 밖의 역슬래시는 아래에서 막는다)
+  case "$r" in 'bash "'*'"'*) p=${r#bash \"}; p=${p%%\"*}; st=${r#"bash \"$p\""}; p=${p//"$BS$BS"/$SL}; r="bash \"$p\"$st" ;; esac
+  case "$r" in *"$BS"*) return 1 ;; esac
+  # 보완(검사 A#5): 인자는 정확히 셋 — <프로젝트 폴더> <B 번호> <세션 ID>(7-execute 「8. 자동 마감」·입력 훅이 알려 주는 꼴). 프로젝트 폴더는 . .. 를 정리하면
+  #   이 대화 프로젝트($proj — "$CLAUDE_PROJECT_DIR" 도 됨) · 세션 ID 는 훅 입력의 session_id 와 글자 그대로 같을 때만(합치기 0.3.5 처럼 꼴 고정)
+  local pa sa
+  re="^bash +(${qa}|${ua}) +refactor-auto +(preflight|push|pr|merge|deploy-wait|verify) +(${pd}|${qa}|${ua}) +B[0-9]{1,6} +([A-Za-z0-9_-]{1,128})( +2>&1)?\$"
+  hascs "$r" "$re" || return 1
+  p=${BASH_REMATCH[1]}; st=${BASH_REMATCH[2]}; pa=${BASH_REMATCH[3]}; sa=${BASH_REMATCH[4]}
+  [ "$sa" = "$sid" ] || return 1
+  p=${p#\"}; p=${p%\"}
+  case "$p" in "~"*) return 1 ;; esac
+  normpath "$p" "$cwd"
+  [ "$NP" = "$plugroot/hooks/run.sh" ] || return 1
+  case "$pa" in
+    '"$CLAUDE_PROJECT_DIR"'|'"${CLAUDE_PROJECT_DIR}"') ;;
+    *) pa=${pa#\"}; pa=${pa%\"}
+       case "$pa" in "~"*) return 1 ;; esac
+       normpath "$pa" "$cwd"; pa=$NP; normpath "$proj" /
+       [ "$pa" = "$NP" ] || return 1 ;;
+  esac
+  case "$st" in deploy-wait|verify) kind=.turn-merged. ;; *) kind=.turn-auto. ;; esac
+  auto_grant "$kind"
+}
+MSG_AUTO_EXEC="자동 모드 스크립트는 /refactor:approve B<n> 자동 으로 켠 묶음에서만 돕니다."
+MSG_AUTO_NO="사용자에게 /refactor:approve B<n> 자동 을 입력해 달라고 하세요(승인 뒤 2시간 안 · 인자 없는 /refactor:go 한 차례 안에서만). 그 밖에는 푸시·합치기를 사용자가 /refactor:approve 푸시 · /refactor:approve 합치기 로 합니다."
+# G2: 자동 모드 스크립트 실행 차단 — 이 세션의 자동 허락이 하나라도 유효하면 정해진 꼴을, 아니면 입력창 명령을 안내한다(막을 때만 허락 파일을 읽는다)
+auto_block() {
+  if auto_grant .turn-auto. || auto_grant .turn-merged.; then
+    block "$MSG_AUTO_EXEC" "허락은 그대로입니다 — 7-execute 「8. 자동 마감」 의 명령을 다른 명령·래퍼와 섞지 않고 한 줄 그대로 실행하세요: bash \"$plugroot/hooks/run.sh\" refactor-auto <단계> …(preflight·push·pr·merge 는 합치기 전, deploy-wait·verify 는 합친 뒤)"
+  fi
+  block "$MSG_AUTO_EXEC" "$MSG_AUTO_NO"
+}
 # $1 판정용 문자열 하나가 "허락된 가지($2)로 보내는 정확한 push 한 번" 인가. 조각(&& || ; | & ( ) 백틱 줄바꿈)으로 나눠
 #   push 낱말(따옴표 뗀 뒤 대소문자 무시)이 정확히 한 번 · 그 조각이 git push [-u|--set-upstream] origin <가지>(가지는 따옴표 한 쌍까지) [2>&1] 뿐 ·
 #   그 조각에 \ 없음 · 모든 조각의 첫 낱말이 git·echo·tail·head·true·wc(0.3.4 T7 허용 목록 — 작업 폴더·저장소·git 을 바꾸는 조각이 끼지 않게) ·
@@ -3430,15 +4085,21 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   #   MG = 허락 파일이 유효했나(빈 값 = 아직 안 읽음 — 글로브 꼴로 막힐 때 merge_block 이 그때 읽는다)
   local MOK=0 MG="" ML=""
   if has "$cmd0$NL$lq$NL$lz$NL$hv$NL$hvz" 'refactor-merge'; then merge_ok && MOK=1; fi
+  # 0.4.0 G2: 자동 모드 낱말(refactor-auto)이 보일 때만 허락을 읽어 "허락된 꼴 그대로"인지 본다(AOK)
+  local AOK=0
+  if has "$cmd0$NL$lq$NL$lz$NL$hv$NL$hvz" 'refactor-auto'; then auto_ok && AOK=1; fi
   # 승인·훅 진입점·중첩 claude(새 Claude 세션은 그 입력을 사람 입력으로 본다) — 원형과 따옴표를 모두 뺀 사본(lz) 둘 다.
   # 승인 스크립트는 실행하는 모양만 막는다(cat·grep·head 로 읽는 것은 통과)
   hv_human "$lq" "$lr"
   [ -n "$lz" ] && hv_human "$lz" "$lz"
   [ -n "$hv" ] && hv_human "$hv" "$hv"
   [ -n "$hvz" ] && hv_human "$hvz" "$hvz"
+  if claude_resume_print "$lq" || { [ -n "$hv" ] && claude_resume_print "$hv"; }; then block "$MSG_RESUME" "$MSG_RESUME2"; fi
   # 0.3.5: 합치기 스크립트 판정을 먼저 — 승인 이름 정규식(run.sh 뒤 24글자 안의 turn·guard…)이 경로 글자(예: /tmp/guardtest-…)에 걸려 안내 문구가 바뀌지 않게(둘 다 막음)
   #   0.3.7 G5: 승인 스크립트 낱말(refactor-approve)도 보이면 합치기 안내 대신 아래 승인 문구로(허락이 살아 있을 때 합치기 명령을 다시 권하지 않게)
   [ "$MOK" != 1 ] && ! has "$lr" 'refactor-approve' && interp_approve "$lr" 'refactor-merge' && merge_block
+  # 0.4.0 G2: 인터프리터 코드(python -c · node -e · 히어독) 안의 자동 모드 스크립트도 같은 판정 — 승인 스크립트 낱말이 함께 보이면 아래 승인 문구로
+  [ "$AOK" != 1 ] && ! has "$lr" 'refactor-approve' && interp_approve "$lr" 'refactor-auto' && auto_block
   interp_approve "$lr" && block "$MSG_APPROVE_EXEC" "$MSG_APPROVE"
   if writes_to '(docs/refactor/)?\.allow-[a-z-]+|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/' || interp_writes '\.allow-|approvals\.log|docs/refactor/\.turn|docs/refactor/approved/'; then
     block "허용 파일(.allow-*)·승인 기록(APPROVALS.log)·.turn 은 사람과 플러그인만 만들고 지웁니다." "$MSG_HUMAN"
@@ -3468,6 +4129,9 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   if [ -n "$plugroot" ]; then case "$cwd/" in "$plugroot"/*) tchk=1 ;; esac; [ -n "$pb" ] && case "$tq" in *"$pb"*) tchk=1 ;; esac; fi
   [ "$fence" = 1 ] && tchk=1
   [ "$tchk" = 1 ] && shell_targets "$tq"
+  # 0.4.0 WC: 기록 폴더나 그 상위로 폴더째·와일드카드 복사·옮기기 · 거기에 압축 풀기 · 링크(복사·풀기·링크 낱말이 보일 때만 — tar xf x.tar 처럼 docs 낱말이 없어도)
+  has "$tq" '(^|[^[:alnum:]_.-])(cp|copy|copy-item|cpi|install|rsync|scp|xcopy|robocopy|mv|move|move-item|mi|ln|mklink|tar|bsdtar|unzip|7z|7za|7zr)([.]exe)?([[:space:]"'"'"']|$)' && copy_dir_targets "$tq"
+  has "$tq" '(^|[^[:alnum:]_.-])(expand-archive|new-item|ni)([[:space:]"'"'"']|$)' && copy_dir_targets "$tq"   # FC F6: PowerShell 풀기·링크
 
   # 2) 비밀값 ---------------------------------------------------------------
   # 명령 전체를 한 덩어리로 본다: 비밀값 파일 이름이 나오고(이름·존재만 보는 명령 조각은 제외), 명령 어딘가에

@@ -13,6 +13,8 @@
 #   되풀이 사이 사람이 새로 만든 허락(F9)은 그대로 둠)
 # 입력 감시(0.3.7, S2b): 허락과 함께 적힌 대화 기록 파일에 사람 입력 줄이 새로 생기면 조회 앞·간격의 매초·비교 앞·합치기 직전에 알아채고
 #   허락을 지운 뒤 1(⛔ 새 입력이 들어와 … — 자동 입력도 사람 입력으로 볼 수 있다). 경로가 없으면 감시 꺼짐(0.3.6 과 같음). 결과 끝 줄 "입력 감시: 켬/꺼짐"
+# 0.4.0 자동 모드: 자동 마감 스크립트(refactor-auto merge)도 이 스크립트를 그대로 부른다 — 기록의 마지막 줄이 "| - | 자동 B<n> 으로 실행" 꼴이면
+#   그 묶음의 자동 허락(.turn-auto.B<n>)이 살아 있을 때만 믿고, 합치면 "   합친 커밋: <40자>" 줄을 더 낸다(배포 확인용 — 사람 꼴은 0.3.7 그대로)
 # 승인 기록(APPROVALS.log)·봉인(approved/)·턴 스냅숏(.turn-dirty.*)은 건드리지 않는다(턴 중에 기록이 바뀌면 post-check 가 알린다 — 기록은 허락할 때 한 줄뿐)
 # gh 호출은 셋뿐: pr view(조회) · api compare(기본 가지에 새 커밋?) · pr merge <N> --<방식> --match-head-commit <PR 머리>.
 #   --admin·--auto·--delete-branch 는 어떤 입력으로도 붙지 않는다. gh 로그인 정보(토큰)는 읽거나 넘기지 않는다(gh 기본 로그인 그대로)
@@ -184,8 +186,30 @@ glast=""
 if [ -f "$dir/APPROVALS.log" ]; then
   while IFS= read -r x || [ -n "$x" ]; do x=${x%$'\r'}; [ -n "${x//[[:space:]]/}" ] && glast=$x; done < "$dir/APPROVALS.log"
 fi
+# 0.4.0 자동 모드(§2-3): 마지막 줄 꼴은 둘 — 사람(사용자가 /refactor:approve 로 실행) / 자동(자동 B<n> 으로 실행 — 자동 모드 스크립트의 merge 단계가 씀).
+#   자동 꼴은 그 묶음의 자동 허락(.turn-auto.B<n>: 1줄 = B<n> · 2줄 = 만든 시각 0~7200초 안 · 3줄 = 이 세션 ID · 4줄 = 허락한 가지 ·
+#   11줄 = go=<시각>(사람이 인자 없는 /refactor:go 를 쳐 자동 차례가 시작됨))이 있고, 봉인된 기록의 마지막 "| 자동 | B<n> | - | <시각> <가지> <방식>" 줄
+#   (사람이 B<n> 자동 을 친 기록 — 0.4.0 보완, 검사 A#4)이 그 파일 ②④⑤ 와 같을 때만 믿는다(끝 표시 .turn-autoend 는 보지 않는다)
+MAUTO=""
+auto_grant_ok() {
+  local f="$dir/.turn-auto.$1" a1="" a2="" a3="" a4="" a5="" a11="" x i=0 ag
+  [ -f "$f" ] || return 1
+  while IFS= read -r x || [ -n "$x" ]; do
+    x=${x%$'\r'}; i=$((i + 1))
+    case "$i" in 1) a1=$x ;; 2) a2=$x ;; 3) a3=$x ;; 4) a4=$x ;; 5) a5=$x ;; 11) a11=$x ;; esac
+  done < "$f"
+  [ "$a1" = "$1" ] && [ "$a3" = "$sid" ] && [ "$a4" = "$gbr" ] && [[ $a2 =~ ^[0-9]{1,12}$ ]] || return 1
+  [[ $a11 =~ ^go=[0-9]{1,12}$ ]] || return 1
+  ag=$(( $(date +%s) - 10#$a2 ))
+  [ "$ag" -ge 0 ] && [ "$ag" -le 7200 ] || return 1
+  rl_auto_rec "$dir" "$1" && [ "$RL_AEP" = "$a2" ] && [ "$RL_ABR" = "$a4" ] && [ "$RL_AMTH" = "$a5" ]
+}
 case "$glast" in
   *" KST | 합치기 | 허락 $gbr $gprw ($mth) @${goid:0:7} | - | 사용자가 /refactor:approve 로 실행") ;;
+  *" KST | 합치기 | 허락 $gbr $gprw ($mth) @${goid:0:7} | - | 자동 B"*" 으로 실행")
+    MAUTO=${glast##*"| - | 자동 "}; MAUTO=${MAUTO%" 으로 실행"}
+    { [[ $MAUTO =~ ^B[0-9]{1,6}$ ]] && auto_grant_ok "$MAUTO"; } \
+      || no "⛔ 자동 모드 합치기 허락이 맞지 않습니다(자동 허락이 없거나 끝남 — 2시간 · 같은 대화 · 같은 가지) — 사용자가 /refactor:approve 합치기 를 입력해야 합니다" ;;
   *) no "⛔ 합치기 허락이 승인 기록과 맞지 않습니다 — 사용자가 /refactor:approve 합치기 를 다시 입력해야 합니다" ;;
 esac
 
@@ -221,6 +245,18 @@ gh_err() {
 export GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 GIT_TERMINAL_PROMPT=0
 # 조회 칸: 첫 줄 = 번호·상태·초안·포크·기본 가지·머리 가지·머리 커밋·합칠 수 있음, 그다음 줄마다 검사 하나(종류·status·conclusion·state·이름)
 JQV='([.number, .state, .isDraft, .isCrossRepository, .baseRefName, .headRefName, .headRefOid, .mergeable] | map(tostring) | join("\u001f")), ((.statusCheckRollup // [])[] | [(.__typename // "-"), (.status // "-"), (.conclusion // "-"), (.state // "-"), (.name // .context // "-")] | map(tostring) | join("\u001f"))'
+
+# 0.4.0 자동 모드: 합친 커밋(기본 가지 위 — squash·rebase 면 PR 머리와 다르다)을 "   합친 커밋: <40자>" 줄로 낸다(자동 모드 스크립트가 이 글자로 찾는다 —
+#   결과의 마지막 줄은 늘 "입력 감시: …"). 자동 꼴 허락일 때만(사람 꼴은 gh 호출 수가 0.3.7 그대로) · 시작 뒤 85초 안일 때만(한도 = 조회 한도와 10초 중 작은 쪽)
+merged_sha() {
+  local ms="" ql=$QL
+  [ -n "$MAUTO" ] && [ $((SECONDS - t0)) -le 85 ] || return 0
+  [ "$ql" -gt 10 ] && ql=10
+  (cd "$proj" && rl_bounded "$ql" gh pr view "$pn" --json mergeCommit --jq '.mergeCommit.oid // ""') >"$mtmp/o" 2>"$mtmp/e" && ms=$(< "$mtmp/o")
+  ms=${ms%%"$RL_NL"*}
+  [[ $ms =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] && say "   합친 커밋: $ms"
+  return 0
+}
 
 # ── 조회 → 확인(되풀이: 검사 도는 중·계산 중·처음 본 초록이면 창 안에서 다시) ───────────────────────────────
 cf_have=0; cf_set=""; cf_oid=""; cf_free=1
@@ -261,7 +297,7 @@ EOF
   #   gh 가 그 가지의 합쳐진 옛 PR 을 돌려줄 수 있다: 합친 뒤 새 커밋·번호 잘못 줌이면 합친 것이 아니므로 거절)
   if [ "$pst" = MERGED ]; then
     if [ "$phead" = "$br" ] && [ "$poid" = "$hoid" ]; then
-      drop; say "ℹ️ PR #$pn 은 이미 합쳐져 있습니다 — 다음 묶음: /refactor:approve 새 가지"; exit 0
+      drop; say "ℹ️ PR #$pn 은 이미 합쳐져 있습니다 — 다음 묶음: /refactor:approve 새 가지"; merged_sha; exit 0
     fi
     no "⛔ PR #$pn 은 이미 합쳐진 PR 입니다($phead@${poid:0:7}) — 지금 커밋(${hoid:0:7})은 새 PR 이 필요합니다(gh pr create) · 다른 PR 이면 번호를 확인하세요"
   fi
@@ -380,6 +416,7 @@ if [ "$mrc" != 0 ]; then
 fi
 say "✅ 합쳤습니다: PR #$pn ($br → $bname, $mth)"
 say "   ⚠️ 기본 가지에 합쳐지면 운영 배포가 시작될 수 있습니다 — 배포 확인을 Claude 에게 부탁하세요"
+merged_sha
 # ── S20 바로 /refactor:approve 새 가지 를 칠 수 있게 기본 가지를 받아 온다(시간이 남을 때만 · 실패해도 알림만) ──
 if [ $((SECONDS - t0)) -le "$FB" ]; then
   if rl_bounded "$FL" "${G[@]}" fetch -q origin "$bname" >/dev/null 2>&1; then say "   (origin/$bname 을 받아 왔습니다.)"

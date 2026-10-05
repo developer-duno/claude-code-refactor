@@ -81,6 +81,20 @@ function field(s, name,   t) {
   sub("^[ \t>]*([-+*][ \t]+)?\\*\\*[^*]*" name "[^*]*\\*\\*[ \t]*:?[ \t]*", "", t)
   return trim(t)
 }
+# 0.4.0 카드의 선택 칸 "- **묶음**: B1 결제 안전" · "- **우선**: 12.3 · 빠른 승리" — 줄 머리가 이 꼴이고 값이 꼴에 맞을 때만 "B"/"P"(값은 BVAL).
+#   이 두 줄은 지문에서 뺀다(진행 중인 계획서·승인된 카드에도 덧붙일 수 있게). 값이 꼴 밖이면 "" → 보통 줄처럼 지문에 들어간다
+#   (묶음·우선 줄에 범위를 바꾸는 글을 몰래 넣으면 "승인 뒤 카드 바뀜"으로 잡힌다)
+function bline(s,   t, d) {
+  BVAL = ""; t = s; sub(/[ \t\r]+$/, "", t)
+  # 보안 검사(10-05): 설명 글은 64까지(바이트 — macOS awk 가 UTF-8 이면 글자)·범위를 바꾸는 데 쓰일 기호(: 백틱 | * ( ) / \ < > $ = [ ])가 없을 때만 지문 밖 — 아니면 지문에 넣는다
+  if (sub(/^-[ \t]+\*\*묶음\*\*:[ \t]*/, "", t)) {
+    if (t ~ /^B[0-9]+$/) { BVAL = t; return "B" }
+    if (t ~ /^B[0-9]+ [^ ]/ && length(t) <= 64) { d = t; sub(/^B[0-9]+ /, "", d); if (d !~ /[|:`*()<>$=\/\\[]/ && index(d, "]") == 0) { BVAL = t; return "B" } }
+    return ""
+  }
+  if (sub(/^-[ \t]+\*\*우선\*\*:[ \t]*/, "", t)) { if (t ~ /^[0-9]+(\.[0-9])? · (빠른 승리|계획된 큰 공사|틈날 때|하지 말 것)$/) { BVAL = t; return "P" } return "" }
+  return ""
+}
 function readlog(   line, f, k, act, id, hv, x) {
   if (LOG == "") return
   while ((getline line < LOG) > 0) {
@@ -102,17 +116,27 @@ function logstate(id, hv) {
 }
 BEGIN {
   US = "\037"
-  if (MODE == "cards") {
-    n = readall(PLAN); fences(n); nc = 0; cur = 0
+  if (MODE == "cards" || MODE == "bundles") {
+    n = readall(PLAN); fences(n); nc = 0; cur = 0; intab = 0; nt = 0
     for (i = 1; i <= n; i++) {
       s = L[i]
       if (!INF[i] && is_head(s)) {
+        intab = (s ~ /^##[ \t]+묶음([ \t\r]|$)/)   # 0.4.0 "## 묶음" 표(카드 밖 — 지문에 안 들어감, 보기용)
         if (is_card(s)) {
           cur = ++nc; ID[cur] = card_id(s); CNT[ID[cur]]++
           t = s; sub(/^###[ \t]*\[[A-Za-z0-9_-]+\][ \t]*/, "", t); TITLE[cur] = trim(t)
           BOX[cur] = "none"; DONE[cur] = 0; NB[cur] = 0
           addtxt(cur, s); if (ALT) addtxt("a" cur, s)
         } else cur = 0
+        continue
+      }
+      if (intab && !INF[i] && MODE == "bundles" && s ~ /^[ \t]*\|/) {   # 표 줄: | 묶음 | 설명 | 우선 | 카드 | 왜 함께 |
+        k = split(s, TF, "|"); tb = TF[2]; gsub(/[*`]/, "", tb); tb = toupper(trim(tb))
+        if (k >= 6 && tb ~ /^B[0-9]+$/) {
+          tc = TF[5]; gsub(/\[/, " ", tc); gsub(/\]/, " ", tc); gsub(/[`*]/, " ", tc); tl = ""
+          while (match(tc, /[A-Za-z0-9_]+-[0-9]+[A-Za-z]?/)) { tl = tl " " toupper(substr(tc, RSTART, RLENGTH)); tc = substr(tc, RSTART + RLENGTH) }
+          TROW[++nt] = "TB" US tb US substr(tl, 2)
+        }
         continue
       }
       if (!cur) continue
@@ -126,12 +150,24 @@ BEGIN {
         else if ((r = rest_of(s, "완료")) != "") { addtxt(cur, "(완료 줄 덧붙임) " r); if (ALT) addtxt("a" cur, "(완료 줄 덧붙임) " r) }
         continue
       }
+      if (!INF[i] && (bk = bline(s)) != "" && !(bk == "B" && HAVEB[cur]) && !(bk == "P" && HAVEP[cur])) {   # 0.4.0 묶음·우선 칸(꼴에 맞는 줄만) — 지문 밖. 카드마다 첫 줄만(같은 칸 두 번째 줄부터는 지문 — 보안 검사 10-05)
+        if (bk == "B") { BUND[cur] = BVAL; HAVEB[cur] = 1 } else { PRIO[cur] = BVAL; HAVEP[cur] = 1 }
+        continue
+      }
       if (!INF[i]) {
         if ((v = field(s, "종류")) != "") KIND[cur] = v
         if ((v = field(s, "위험도")) != "") RISK[cur] = v
         if ((v = field(s, "사람이 직접 할 일")) != "") HUMAN[cur] = v
       }
       addtxt(cur, s); if (ALT) addtxt("a" cur, s)
+    }
+    if (MODE == "bundles") {
+      for (c = 1; c <= nc; c++) {
+        b = BUND[c]; d = ""; if ((p = index(b, " ")) > 0) { d = trim(substr(b, p + 1)); b = substr(b, 1, p - 1) }
+        print "CB" US c US ID[c] US b US d US PRIO[c] US DONE[c]
+      }
+      for (c = 1; c <= nt; c++) print TROW[c]
+      exit
     }
     for (c = 1; c <= nc; c++) {
       f = DIR "/c" c; printf "%s", TXT[c] > f; close(f)
@@ -214,6 +250,81 @@ rl_card_text() { # $1 계획서 $2 ID
 }
 
 rl_base_text() { awk -v MODE=base -v PLAN="$1" "$RL_AWK"; }   # 기준선 계획의 지문용 본문
+
+# 0.4.0 묶음(함께 고칠 카드 몇 장 = 작업 가지 하나 = PR 하나) — 카드의 묶음·우선 칸과 "## 묶음" 표를 읽는다(rl_cards 의 CARD 줄은 그대로).
+#   $1 계획서 → 표준출력(칸 구분 \037):
+#   CB 순번 ID 묶음ID 설명 우선 완료(0/1)   카드마다(rl_cards 와 같은 순번). 칸이 없거나 꼴 밖이면 묶음ID·설명·우선은 빈 칸
+#   TB 묶음ID 카드ID…(공백 구분·대문자)      "## 묶음" 표의 줄마다(묶음 칸이 B<숫자> 꼴인 줄만 — 머리·구분 줄은 건너뜀)
+rl_card_bundles() { [ -f "$1" ] || return 0; awk -v MODE=bundles -v PLAN="$1" "$RL_AWK"; }
+
+# 실행 순서(0.4.0 §1-1): $1 계획서 $2 카드 ID 들(공백 구분 — 보통 실행 대기). 그 카드들을 묶음 단위로 모아 순서대로 한 줄씩:
+#   "<묶음ID>\037<설명>\037<ID…(공백 구분)>"  — 묶음 없는 카드는 묶음ID·설명이 빈 칸이고 카드 하나가 한 줄
+#   순서 = Phase(ID 의 P<숫자>- — 숫자가 없으면 맨 뒤) → 같으면 계획서에서 먼저 나온 것. 묶음의 자리는 그 안 가장 앞 Phase 카드의 자리
+#   (Phase 0 은 묶음이든 아니든 맨 앞 · 묶음 없는 카드도 Phase 순서 안). 같은 Phase 안·묶음 안의 순서는 계획서 순서(의존·우선 점수 순으로 적는다 — 6-plan)
+#   주어진 카드 중 묶음 칸이 있는 카드가 하나도 없으면 빈 출력(옛 꼴 그대로 보여 주라는 뜻)
+rl_ready_units() {
+  [ -n "${2// /}" ] || return 0
+  rl_card_bundles "$1" | awk -F "$RL_US" -v IDS=" $2 " -v US="$RL_US" '
+    $1 == "CB" && index(IDS, " " $3 " ") && !(($3) in SEEN) {
+      SEEN[$3] = 1; id = $3; b = $4; ph = 999999
+      if (match(id, /^P[0-9]+-/)) ph = substr(id, 2, RLENGTH - 2) + 0
+      if (b != "") anyb = 1
+      u = (b == "") ? ("#" NR) : b
+      if (!(u in FP)) { FP[u] = NR; MP[u] = ph; ORD[++n] = u; UB[u] = b; UD[u] = $5; UL[u] = id }
+      else { UL[u] = UL[u] " " id; if (ph < MP[u]) MP[u] = ph; if (UD[u] == "") UD[u] = $5 }
+    }
+    END {
+      if (!anyb) exit
+      for (i = 1; i <= n; i++) { K[i] = MP[ORD[i]] * 1000000 + FP[ORD[i]]; S[i] = ORD[i] }
+      for (i = 2; i <= n; i++) { k = K[i]; s = S[i]; j = i - 1; while (j >= 1 && K[j] > k) { K[j + 1] = K[j]; S[j + 1] = S[j]; j-- } K[j + 1] = k; S[j + 1] = s }
+      for (i = 1; i <= n; i++) print UB[S[i]] US UD[S[i]] US UL[S[i]]
+    }'
+}
+
+# 묶음이 승인 때와 다른가(0.4.0 §1-2 — 정본 = 승인 기록의 "묶음 승인" 줄의 카드 목록): $1 계획서 $2 승인 기록 → 다른 묶음마다 한 줄
+#   "<묶음ID>\037<승인 때 카드(안 끝난 것만)>\037<지금 카드(안 끝난 것만)>". 대조는 계획서에 있는 안 끝난 카드만(지운 카드·표의 오타는 대조 밖).
+#   지금 카드 = 카드의 묶음 칸, 그리고 "## 묶음" 표에 그 묶음 줄이 있으면 표의 카드 칸도(둘 중 하나라도 다르면 다름 — 표가 다르면 표 쪽을 보여 준다).
+#   카드는 한 묶음에만 든다 — 나중 "묶음 승인" 줄에 든 카드는 앞서 승인한 다른 묶음의 목록에서 뺀다(카드를 옮겨 다시 승인하면 옛 묶음의 ⚠ 도 사라지게).
+#   그 묶음의 마지막 줄이 "묶음 보류" 이거나 "재설정" 뒤에 승인이 없으면 대조하지 않는다
+rl_bundle_drift() {
+  [ -f "$1" ] && [ -f "$2" ] || return 0
+  rl_card_bundles "$1" | awk -F "$RL_US" -v LOG="$2" -v US="$RL_US" '
+    function tr_(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+    function inc(l,   a, k, i, j, o, x, t, m) {   # 계획서에 있는 안 끝난 카드만 · 중복 없이 · 정렬해서 공백으로 잇는다
+      k = split(l, a, " "); m = 0
+      for (i = 1; i <= k; i++) { x = a[i]; if (x == "" || !(x in DN) || DN[x] == 1 || (x in Q)) continue; Q[x] = 1; o[++m] = x }
+      for (i = 1; i <= m; i++) delete Q[o[i]]
+      for (i = 2; i <= m; i++) { t = o[i]; j = i - 1; while (j >= 1 && o[j] > t) { o[j + 1] = o[j]; j-- } o[j + 1] = t }
+      t = ""; for (i = 1; i <= m; i++) t = t " " o[i]
+      return substr(t, 2)
+    }
+    BEGIN {
+      while ((getline line < LOG) > 0) {
+        k = split(line, f, "|"); if (k < 4) continue
+        act = tr_(f[2]); b = toupper(tr_(f[3]))
+        if (act == "재설정") { for (x in AL) delete AL[x]; continue }
+        if (k < 5) continue
+        if (act == "묶음 승인") {
+          v = toupper(tr_(f[5])); sub(/^카드 [0-9]+개:[ \t]*/, "", v); AL[b] = v
+          k = split(v, nv, " ")
+          for (x in AL) if (x != b) { t = " " AL[x] " "; for (i = 1; i <= k; i++) gsub(" " nv[i] " ", " ", t); AL[x] = tr_(t) }
+        }
+        else if (act == "묶음 보류") delete AL[b]
+      }
+      close(LOG)
+    }
+    $1 == "CB" { DN[$3] = $7; if ($4 != "") CUR[$4] = CUR[$4] " " $3 }
+    $1 == "TB" { TB[$2] = TB[$2] " " $3; HT[$2] = 1 }
+    END {
+      m = 0; for (b in AL) BS[++m] = b
+      for (i = 2; i <= m; i++) { t = BS[i]; j = i - 1; while (j >= 1 && (substr(BS[j], 2) + 0) > (substr(t, 2) + 0)) { BS[j + 1] = BS[j]; j-- } BS[j + 1] = t }
+      for (i = 1; i <= m; i++) {
+        b = BS[i]; a = inc(AL[b]); c = inc(CUR[b])
+        if (a != c) { print b US a US c; continue }
+        if (b in HT) { t = inc(TB[b]); if (t != a) print b US a US t }
+      }
+    }'
+}
 
 # 바뀐 내용 보여 주기: $1 승인 때 남긴 본문 파일, 표준입력 = 지금 본문 → 바뀐 줄(최대 12줄, 앞에 -/+)
 rl_show_diff() {
@@ -303,6 +414,22 @@ rl_done_confirmed() { # $1 docs/refactor 폴더
   while IFS= read -r line || [ -n "$line" ]; do [ -n "${line//[[:space:]]/}" ] && last=$line; done < "$1/APPROVALS.log"
   case "$last" in *"| 마무리 |"*) rl_log_intact "$1" ;; *) return 1 ;; esac
 }
+# 0.4.0 자동 모드(보완 — 검사 A#4): 승인 기록의 그 묶음 마지막 "| 자동 | B<n> | - | <epoch> <가지> <방식>[ merge-only]" 줄(사람이 B<n> 자동 을 친 기록)
+#   → RL_AEP·RL_ABR·RL_AMTH. 없으면 1. 자동 허락 파일 ②④⑤ 와 대조해 허락 파일만 꾸며 낸 꼴을 거른다(봉인 확인은 부르는 쪽이 먼저 — rl_log_intact)
+rl_auto_rec() { # $1 docs/refactor 폴더 $2 B<n>
+  local x v=""
+  RL_AEP=""; RL_ABR=""; RL_AMTH=""
+  [ -f "$1/APPROVALS.log" ] || return 1
+  while IFS= read -r x || [ -n "$x" ]; do
+    x=${x%$'\r'}
+    case "$x" in *" KST | 자동 | $2 | - | "*) v=${x#*" KST | 자동 | $2 | - | "} ;; esac
+  done < "$1/APPROVALS.log"
+  [ -n "$v" ] || return 1
+  read -r RL_AEP RL_ABR RL_AMTH x <<RLAREC
+$v
+RLAREC
+  [ -n "$RL_AMTH" ]
+}
 
 # origin 의 기본 가지(0.3.4 — 새 가지·합치기): refs/remotes/origin/HEAD 가 가리키는 가지(그것이 refs/remotes/origin/ 아래일 때만)
 #   → 없으면 origin/main → origin/master(그 자체가 심볼릭이면 기준이 아님 — guard.sh br_judge_in 과 같은 규칙). 로컬 참조만 본다(네트워크 없음)
@@ -371,6 +498,151 @@ RLCH
   return 2
 }
 
+# 다음 묶음(0.4.0 — 새 가지 이름 · 자동 모드 verify 의 "남은 묶음"): $1 계획서 $2 승인 기록
+#   → RL_NBC(안 끝난·보류 아닌 카드 ID 들 — 같은 ID 카드 하나·승인 칸 있는 카드만) · RL_NBB(실행 대기의 실행 순서 첫 줄의 묶음 — 실행 대기가 없으면
+#   RL_NBC 로 짐작 · 첫 줄이 묶음 없는 카드거나 계획서가 없으면 "-"). 승인 스크립트의 cur_bundle 과 같은 계산(STATE 의 current_bundle 은 지난 승인 때 값이라 쓰지 않는다)
+rl_next_bundle() {
+  local kind_ n_ id t box done_ cnt k r h hv st nbr="" u=""
+  RL_NBB="-"; RL_NBC=""
+  [ -f "$1" ] || return 0
+  while IFS="$RL_US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
+    [ "$kind_" = CARD ] && [ "$done_" != 1 ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ] || continue
+    [ "$st" = approved ] && nbr="$nbr $id"
+    [ "$st" != held ] && RL_NBC="$RL_NBC $id"
+  done <<RLNB
+$(rl_cards "$1" "$2")
+RLNB
+  RL_NBC=${RL_NBC# }
+  if [ -n "$nbr" ]; then u=$(rl_ready_units "$1" "$nbr")
+  elif [ -n "$RL_NBC" ]; then u=$(rl_ready_units "$1" "$RL_NBC")
+  fi
+  u=${u%%"$RL_NL"*}; u=${u%%"$RL_US"*}
+  [ -n "$u" ] && RL_NBB=$u
+  return 0
+}
+
+# 새 작업 가지(0.3.4 /refactor:approve 새 가지 — 0.4.0 부터 자동 모드 verify 도 함께 쓴다): origin/<기본 가지>(로컬 참조 — 받아 오기는 부르는 쪽)에서
+#   새 가지를 만들어 옮긴다 — 지금 위치의 내용이 기본 가지에 다 들어 있을 때만. 커밋 안 된 변경은 막지 않는다(새 위치와 부딪히면 git 이 스스로 거절)
+#   $1 프로젝트 폴더 $2 붙인 이름(사람 길만 — 빈 값이면 refactor/<날짜>[-B<n>], 겹치면 -2 …) $3 기록 줄 끝 칸(사람 = "사용자가 /refactor:approve 로 실행" ·
+#   자동 = "자동 B<n> 으로 실행") $4 기록 시각(rl_now 꼴 — 비우면 지금) · 날짜는 RL_TODAY(없으면 오늘)
+#   → RL_NBOUT(보여 줄 글 — 줄마다 줄바꿈) · RL_NB(새 가지 이름). 반환 0 = 옮기고 기록 "| 새 가지 | <이름> <- origin/<기본>@<7자> | - | <$3>" + 봉인 ·
+#   1 = 만들지 않음(아무것도 안 바뀜) · 2 = 옮겼지만 확인(가지·STATE·봉인)이 맞지 않음(기록을 남기지 않음)
+rl_nbs() { RL_NBOUT="$RL_NBOUT$*$RL_NL"; }
+rl_new_branch() {
+  local proj=$1 nbname=${2:-} tail=$3 now=${4:-} rdir="$1/docs/refactor" today=${RL_TODAY:-} gp x bname boid bsh ob obs nb nbu ubn c lo up p j mrc nb0 have i sw src e1 cur dn dshow oldw
+  local G=(git --no-replace-objects -c core.fsmonitor=false -c merge.renormalize=false -C "$1")
+  local log="$rdir/APPROVALS.log" state="$rdir/STATE.md" no=" — 새 가지를 만들지 않았습니다(아무것도 바꾸지 않았습니다)."
+  RL_NBOUT=""; RL_NB=""
+  [ -n "$today" ] || today=$(rl_today)
+  command -v git >/dev/null 2>&1 || { rl_nbs "❓ git 을 찾지 못했습니다$no"; return 1; }
+  gp=$("${G[@]}" rev-parse --git-path MERGE_HEAD --git-path rebase-merge --git-path rebase-apply --git-path CHERRY_PICK_HEAD \
+       --git-path REVERT_HEAD --git-path BISECT_LOG 2>/dev/null) || { rl_nbs "❓ 이 폴더는 git 저장소가 아니라(또는 git 이 저장소 설정을 읽지 못해) 새 가지를 만들 수 없습니다: $proj$no"; return 1; }
+  while IFS= read -r x; do
+    [ -n "$x" ] || continue
+    case "$x" in /*|[A-Za-z]:*) ;; *) x="$proj/$x" ;; esac
+    [ -e "$x" ] && { rl_nbs "❓ 진행 중인 git 작업(합치기·rebase·cherry-pick·revert·bisect)이 있습니다 — 진행 중인 git 작업을 먼저 끝내세요$no"; return 1; }
+  done <<RLNB
+$gp
+RLNB
+  rl_origin_base "$proj" || { rl_nbs "❓ origin 의 기본 가지를 찾지 못했습니다(origin/HEAD·origin/main·origin/master 참조 없음)$no"; return 1; }
+  bname=$RL_BNAME; boid=$RL_BOID; bsh=${boid:0:7}
+  "${G[@]}" cat-file -e "$boid:./docs/refactor/STATE.md" 2>/dev/null \
+    || { rl_nbs "⛔ 기본 가지(origin/$bname)에 리팩토링 기록이 없습니다(옮기면 안전장치가 꺼짐)$no"; return 1; }
+  "${G[@]}" diff --quiet --no-ext-diff HEAD "$boid" -- docs/refactor/APPROVALS.log docs/refactor/approved 2>/dev/null \
+    || { rl_nbs "⛔ 기본 가지(origin/$bname)의 승인 기록이 지금 가지와 다릅니다$no"; return 1; }
+  ob=$("${G[@]}" symbolic-ref -q --short HEAD 2>/dev/null)
+  obs=${ob:-떨어진 HEAD}
+  # 붙인 이름은 판정 전에 본다(판정 불가 문구의 터미널 명령에 그 이름을 쓰므로)
+  nb=""
+  if [ -n "$nbname" ]; then
+    nb=$nbname
+    if ! [[ $nb =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || ! "${G[@]}" check-ref-format --branch "$nb" >/dev/null 2>&1; then
+      rl_nbs "❓ 가지 이름($nb)을 쓸 수 없습니다(영문·숫자·._/- 만, 첫 글자는 영문·숫자·_, git 가지 이름 규칙)$no"; return 1
+    fi
+    # 0.3.4 보완 F6: 참조 이름 꼴·기본 가지 이름은 거절 — 영문 대소문자는 가리지 않는다(맥·Windows 는 파일 이름 대소문자를
+    #   가리지 않아 main 이 있으면 git 이 Main 을 같은 이름으로 보고 실패한다 — 어느 OS 든 같은 안내로 미리 거절). 대문자로(외부 명령 없이 — 영문 소문자만)
+    lo=abcdefghijklmnopqrstuvwxyz; up=ABCDEFGHIJKLMNOPQRSTUVWXYZ
+    for x in nb bname; do
+      ubn=""; c=${!x}
+      for ((j = 0; j < ${#c}; j++)); do
+        i=${c:j:1}
+        case "$i" in [a-z]) p=${lo%%"$i"*}; i=${up:${#p}:1} ;; esac
+        ubn=$ubn$i
+      done
+      if [ "$x" = nb ]; then nbu=$ubn; fi
+    done
+    case "$nbu" in
+      REFS/*|ORIGIN/*|HEAD|MAIN|MASTER|"$ubn")
+        rl_nbs "❓ 가지 이름($nb)을 쓸 수 없습니다(refs/·origin/ 으로 시작하는 이름과 HEAD·main·master·기본 가지 이름 $bname 은 새 작업 가지 이름으로 쓰지 않습니다)$no"; return 1 ;;
+    esac
+  fi
+  rl_merged_into "$proj" "$boid"; mrc=$?
+  if [ "$mrc" = 1 ]; then
+    rl_nbs "⛔ 지금 가지($obs)의 내용이 아직 origin/$bname 에 다 들어 있지 않습니다 — PR 이 아직 안 합쳐졌거나, 합친 뒤 최신 내용을 안 받아 온 상태입니다. Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요."
+    rl_nbs "   (새 가지를 만들지 않았습니다 — 아무것도 바꾸지 않았습니다.)"
+    return 1
+  elif [ "$mrc" != 0 ]; then
+    # 판정 불가(0.3.4 보완 F3): 까닭 + 사람이 터미널에서 만드는 길
+    rl_nbs "❓ 지금 가지($obs)의 내용이 origin/$bname 에 다 들어 있는지 판정하지 못했습니다: ${RL_MERGED_WHY:-까닭 모름}."
+    # 사람이 터미널에 붙여 넣을 명령에는 글자 검사를 지난 이름만 싣는다(origin/HEAD 가 가리키는 이름은 git 이 $·;·괄호를 허용 — 재검사 R)
+    if [[ $bname =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]]; then
+      rl_nbs "   Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요. 받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서: git switch -c ${nb:-refactor/$today} origin/$bname"
+    else
+      rl_nbs "   Claude 에게 '최신 내용 받아 와'라고 한 뒤 다시 입력해 주세요. 받아 온 뒤에도 같으면 PR 이 합쳐진 것을 확인하고 사람이 터미널에서 새 작업 가지를 만들어 주세요(기본 가지 이름에 영문·숫자·._/- 밖의 글자가 있어 명령을 적지 않았습니다)."
+    fi
+    rl_nbs "   (새 가지를 만들지 않았습니다 — 아무것도 바꾸지 않았습니다.)"
+    return 1
+  fi
+  if [ -z "$nb" ]; then
+    # 0.4.0 묶음 하나 = 작업 가지 하나: 다음에 실행할 묶음이 있으면 이름 끝에 그 묶음 ID(refactor/<날짜>-B2 · 겹치면 -2 …) — rl_next_bundle.
+    #   묶음 칸이 없는 계획서면 예전 이름 그대로
+    rl_next_bundle "$rdir/REFACTOR_PLAN.md" "$log"
+    nb0="refactor/$today"
+    [[ $RL_NBB =~ ^B[0-9]+$ ]] && nb0="$nb0-$RL_NBB"
+    have=$("${G[@]}" for-each-ref --format='%(refname)' "refs/heads/$nb0*" "refs/remotes/origin/$nb0*" 2>/dev/null)
+    have="$RL_NL$have$RL_NL"
+    nb=$nb0; i=1
+    while case "$have" in *"${RL_NL}refs/heads/$nb$RL_NL"*|*"${RL_NL}refs/remotes/origin/$nb$RL_NL"*) true ;; *) false ;; esac; do
+      i=$((i + 1))
+      [ "$i" -gt 99 ] && { rl_nbs "❓ 오늘 날짜의 가지 이름($nb0 ~ $nb0-99)이 모두 쓰이고 있습니다 — 이름을 붙여 다시: /refactor:approve 새 가지 <이름>$no"; return 1; }
+      nb="$nb0-$i"
+    done
+  fi
+  sw=$("${G[@]}" switch --no-track -c "$nb" "$boid" 2>&1); src=$?
+  if [ "$src" != 0 ]; then
+    e1=""
+    while IFS= read -r x; do [ -n "${x//[[:space:]]/}" ] && { e1=$x; break; }; done <<RLNB
+$sw
+RLNB
+    rl_nbs "⛔ git 이 새 가지로 옮기지 못했습니다: ${e1:-(오류 문구 없음)}"
+    rl_nbs "   아무것도 바뀌지 않았습니다(지금 가지 $obs 그대로)."
+    return 1
+  fi
+  RL_NB=$nb
+  cur=$("${G[@]}" symbolic-ref -q --short HEAD 2>/dev/null)
+  if [ "$cur" != "$nb" ] || [ ! -f "$state" ] || ! rl_log_intact "$rdir"; then
+    rl_nbs "⚠️ 새 가지로 옮겼지만 확인이 맞지 않습니다(지금 가지: ${cur:-없음} · STATE.md $([ -f "$state" ] && echo 있음 || echo 없음) · 승인 기록 봉인 $(rl_log_intact "$rdir" && echo 일치 || echo 다름)) — 기록에 줄을 남기지 않았습니다. git status 로 확인해 주세요."
+    return 2
+  fi
+  # 따라온 커밋 안 된 변경(새 기록 줄을 쓰기 전에 센다)
+  dn=0; dshow=""
+  while IFS= read -r x; do
+    [ -n "$x" ] || continue
+    dn=$((dn + 1)); [ "$dn" -le 5 ] && dshow="$dshow, ${x:3}"
+  done <<RLNB
+$("${G[@]}" -c core.quotePath=false status --porcelain -- . 2>/dev/null)
+RLNB
+  printf '%s KST | 새 가지 | %s <- origin/%s@%s | - | %s\n' "${now:-$(rl_now)}" "$nb" "$bname" "$bsh" "$tail" >> "$log"
+  rl_log_seal "$rdir"
+  if [ -n "$ob" ]; then oldw="지난 가지 $ob 은 그대로 남아 있음"; else oldw="지난 위치(떨어진 HEAD)는 커밋으로 남아 있음"; fi
+  rl_nbs "🌿 새 작업 가지: $nb (origin/$bname $bsh 에서 · $oldw)"
+  if [ "$dn" -gt 0 ]; then
+    dshow=${dshow#, }; [ "$dn" -gt 5 ] && dshow="$dshow …"
+    rl_nbs "   커밋 안 된 변경 ${dn}개가 그대로 따라왔습니다: $dshow"
+  fi
+  return 0
+}
+
 # 시간 한도 안에서 명령 실행(0.3.4 — 합치기의 gh 호출): $1 = 초, 나머지 = 명령. 종료 코드는 명령의 것, 한도에 걸렸으면 124
 #   bash 만으로(외부 timeout·perl 에 기대지 않는다 — 맥에는 timeout 이 없고, gh(Go)는 perl alarm 의 SIGALRM 을 무시하며,
 #   Windows 는 System32 의 다른 timeout.exe 가 먼저 잡힐 수 있다). bash 3.2 에서도 돈다(bash 4.3 의 '아무 하나 끝나기를 기다리기' 옵션은 안 씀)
@@ -406,6 +678,22 @@ rl_bounded() {
   [ -f "$md/t" ] && rc=124
   rm -rf "$md"
   return "$rc"
+}
+
+# 합치기 입력 감시 경로 파일(0.3.7 .turn-mergetp.<세션ID>) 쓰기 — 승인 스크립트("합치기")와 자동 모드 스크립트(merge 단계)가 같이 쓴다(0.4.0).
+#   $1 = 쓸 파일, $2 = 대화 기록 파일 경로(훅 입력의 transcript_path). 먼저 $1 을 지우고, 경로에 줄바꿈·CR 이 없고 읽을 수 있는 파일일 때만
+#   세 줄을 쓴다: ① 경로 ② 지금 그 파일의 바이트 수 ③ 지금 시각 UTC 초(YYYY-MM-DDTHH:MM:SS) — 합치기 스크립트(S2b)가 그 크기·시각 뒤의 사람 입력을 본다.
+#   썼으면 0, 못 썼으면(경로 없음·파일 아님·쓰기 실패) 1 — 그때 입력 감시는 꺼짐(0.3.6 과 같은 동작)
+rl_mergetp_write() {
+  local f=$1 p=${2:-} sz ts
+  [ -f "$f" ] && rm -f "$f"
+  case "$p" in *"$RL_NL"*|*$'\r'*) p="" ;; esac
+  [ -n "$p" ] && [ -f "$p" ] && [ -r "$p" ] || return 1
+  sz=$(wc -c < "$p" 2>/dev/null) || sz=""
+  sz=${sz//[!0-9]/}
+  ts=$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null) || ts=""
+  { printf '%s\n%s\n%s\n' "$p" "$sz" "$ts" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"; } 2>/dev/null || { rm -f "$f.tmp.$$"; return 1; }
+  [ -f "$f" ]
 }
 
 # 기준선 허용 파일(docs/refactor/.allow-baseline-edit) 읽기(0.3.2 #10) — $1 docs/refactor 폴더. 표준출력 1줄째:
@@ -448,8 +736,8 @@ rl_allow_baseline() {
     done < "$rd/STATE.md"
   fi
   while [ "$i" -lt 26 ]; do cw=${cw//${lo:i:1}/${up:i:1}}; i=$((i + 1)); done
-  # 같은 묶음의 숫자 범위 "P1-1~P1-5"(물결 앞뒤 공백 허용 · 시작 ≤ 끝 · 99칸 이하)는 사이 단계까지 펼친다(검사 보완 F1).
-  #   묶음이 다르거나(P1-1~P2-3)·끝이 숫자가 아니거나(P1-3A)·거꾸로·너무 넓으면 펼치지 않는다(양 끝 낱말만 남는다)
+  # 같은 Phase 의 숫자 범위 "P1-1~P1-5"(물결 앞뒤 공백 허용 · 시작 ≤ 끝 · 99칸 이하)는 사이 단계까지 펼친다(검사 보완 F1).
+  #   Phase 가 다르거나(P1-1~P2-3)·끝이 숫자가 아니거나(P1-3A)·거꾸로·너무 넓으면 펼치지 않는다(양 끝 낱말만 남는다)
   local re_rng='([A-Z0-9_]+)-([0-9]{1,6})[[:space:]]*~[[:space:]]*([A-Z0-9_]+)-([0-9]{1,6})([^A-Z0-9_-]|$)' rs=$cw ro="" rm rb rc rj rx
   while [[ $rs =~ $re_rng ]]; do
     rm=${BASH_REMATCH[0]}; rm=${rm%"${BASH_REMATCH[5]}"}; rx=${BASH_REMATCH[1]}; rb=$((10#${BASH_REMATCH[2]})); rc=$((10#${BASH_REMATCH[4]}))

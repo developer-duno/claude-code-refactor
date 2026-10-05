@@ -107,7 +107,7 @@ if [ -n "$root" ] && [ -f "$lib" ]; then
           [ "$st" = "approved" ] && n_ap=$((n_ap + 1))
           if [ "$done_" = 1 ]; then n_done=$((n_done + 1)); continue; fi
           case "$st" in
-            approved) if [ "$intact" = 1 ]; then ready="$ready$line"$'\n'; else sealed_off="${sealed_off:-}$line"$'\n'; fi ;;
+            approved) if [ "$intact" = 1 ]; then ready="$ready$line"$'\n'; ready_ids="${ready_ids:-} $id"; else sealed_off="${sealed_off:-}$line"$'\n'; fi ;;
             changed) changed="$changed$line"$'\n'; changed_ids="${changed_ids:-} $id" ;;
             held) held="$held$line"$'\n' ;;
             *) if [ "$box" = "x" ]; then unlogged="$unlogged$line"$'\n'; else pending="$pending$line"$'\n'; fi ;;
@@ -126,7 +126,37 @@ RECS_END
       return 0
     }
     echo "  전체 ${n_total}단계 · 승인 ${n_ap} · 완료 ${n_done}"
-    show_list "▶ 실행 대기(승인됨 — 이 목록만 실행한다):" "$ready"
+    # 0.4.0 실행 대기를 묶음 단위·실행 순서로(Phase 순서 · 묶음의 자리는 그 안 가장 앞 Phase · Phase 0 맨 앞) — 묶음 줄 기준 8줄까지.
+    #   실행 대기 카드에 묶음 칸이 하나도 없으면 옛 꼴(계획서 순서 카드 줄) 그대로
+    units=""; [ -n "${ready_ids:-}" ] && units=$(rl_ready_units "$plan" "$ready_ids")
+    if [ -n "$units" ]; then
+      glines=""
+      while IFS="$US" read -r ub ud ui; do
+        [ -n "$ui" ] || continue
+        if [ -n "$ub" ]; then
+          un=0; for x in $ui; do un=$((un + 1)); done
+          glines="$glines  ▶ 실행 대기: [$ub${ud:+ $ud}] $ui ($un)"$'\n'
+        else
+          tl=${ready#*"     [$ui] "}; tl=${tl%%$'\n'*}
+          glines="$glines  ▶ 실행 대기: [$ui] $tl"$'\n'
+        fi
+      done <<UNITS_END
+$units
+UNITS_END
+      printf '%s' "$glines" | head -n 8
+      c=$(printf '%s' "$glines" | grep -c .)
+      [ "$c" -gt 8 ] && echo "     … 외 $((c - 8))개"
+      echo "     (이 목록만 위에서부터 실행한다 — 묶음 하나 = 작업 가지 하나 = PR 하나)"
+    else
+      show_list "▶ 실행 대기(승인됨 — 이 목록만 실행한다):" "$ready"
+    fi
+    # 묶음이 승인 때와 다름(0.4.0 — 정본 = 승인 기록의 "묶음 승인" 줄 · 안 끝난 카드만 대조)
+    while IFS="$US" read -r db da dc; do
+      [ -n "$db" ] || continue
+      echo "  ⚠️ 묶음이 승인 때와 다릅니다 — 다시 /refactor:approve $db (승인 때 안 끝난 카드: ${da:-없음} · 지금: ${dc:-없음})"
+    done <<DRIFT_END
+$(rl_bundle_drift "$plan" "$log")
+DRIFT_END
     show_list "⛔ 승인 기록 확인 전이라 실행하지 않음(승인 기록이 봉인과 다름):" "${sealed_off:-}"
     show_list "🔁 승인 뒤 카드 내용이 바뀜 — 실행하지 않음. 아래 바뀐 줄을 확인한 뒤 /refactor:approve <ID>로 다시 승인:" "$changed"
     shown=0
