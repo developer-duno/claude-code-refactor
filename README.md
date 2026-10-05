@@ -3,7 +3,7 @@
 운영 중인 서비스를 AI로 **안전하게** 리팩토링하는 Claude Code 플러그인입니다.
 누구나 쓸 수 있는 공개 플러그인(MIT)이고, 화면 문구와 문서는 모두 한국어입니다(**한국어 전용 플러그인**).
 
-![version](https://img.shields.io/badge/version-0.3.7-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+![version](https://img.shields.io/badge/version-0.4.0-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
 
 > **0.3.0에서 달라진 점**: 안전장치는 이제 리팩토링 중에만 켜집니다. 0.2.x처럼 평소 대화에서도 비밀값·위험 명령을 막으려면 [스위치](#6-안전장치)를 켜세요.
 > **0.3.2에서 달라진 점**: 기준선 허용 파일(`.allow-baseline-edit`)에 승인한 단계 ID 를 적으면 그 단계들 동안만 열리고 끝나면 저절로 닫힙니다([§6-3](#6-3-일부러-풀어야-할-때-사람만-가능)). 리팩토링 중 다른 가지로 옮기는 명령은 이제 안전장치가 막습니다.
@@ -12,6 +12,7 @@
 > **0.3.5에서 달라진 점**: `/refactor:approve 합치기`는 이제 합치기를 허락만 하고, 그 차례에 Claude 가 플러그인 스크립트로 PR 을 확인한 뒤 합칩니다 — 자동 검사가 도는 중이면 끝날 때까지 기다렸다 합칩니다(허락은 그 차례에만·30분 안·허락한 커밋일 때만, [§6-3](#6-3-일부러-풀어야-할-때-사람만-가능)).
 > **0.3.6에서 달라진 점**: 합치기 30분 경고를 실제 동작대로 고쳤습니다 — 입력만 하면 그때 돌던 확인 한 번이 끝난 뒤(최대 약 2분) 허락이 끝나므로, 바로 멈추려면 Claude 가 실행 중일 때 먼저 Esc 를 누르세요([§6-3](#6-3-일부러-풀어야-할-때-사람만-가능)).
 > **0.3.7에서 달라진 점**: 합치기 확인이 도는 동안 사람이 무엇이든 입력하면 대화 기록에서 바로 알아채 그 자리에서 멈춥니다(0.3.6 의 "최대 약 2분" 틈을 거의 없앴습니다(대부분 몇 초 안에 — 한계는 [§6-4](#6-4-한계)) — 대화 기록을 못 보는 환경은 0.3.6 과 같습니다). 리팩토링 중 저장소 설정 바꾸기(기본 가지·이름·보관·공개 여부·가지 보호)와 `heroku rollback`·`netlify rollback`, 히어독 본문의 인터프리터 쓰기를 막습니다([§6](#6-안전장치)). 기준선 알림은 이번 묶음 안만 보고, 하위 폴더 프로젝트의 보호 파일 감시 결함을 고쳤습니다.
+> **0.4.0에서 달라진 점**: 계획서 카드를 **묶음**(`B1`·`B2` — 함께 고칠 카드 몇 장 = 작업 가지 하나 = PR 하나)으로 나눠 `/refactor:approve B1` 한 번에 승인하고, 묶음 순서로 실행합니다([§5](#5-사용-순서)). 이미 진행 중인 계획서도 `/refactor:go 묶음` 으로 묶음만 덧붙일 수 있습니다(승인은 그대로). **자동 모드** `/refactor:approve B1 자동` — 그다음 `/refactor:go` 한 번이면 묶음 카드를 끝낸 뒤 Claude 가 푸시·PR·자동 검사 기다림·합치기·배포 끝 기다림·운영 화면 확인까지 혼자 합니다(사람이 아무 말이나 입력하면 합치기 전에 멈춤 · [§6-5](#6-5-자동-모드)).
 
 > **English summary**
 > - **What it is:** A Korean-only Claude Code plugin that refactors a live service in a fixed order — code map, 25-item health check, deep audit, rebuttal review, baseline tests, plan — and then changes code only for steps a human approved, one step at a time.
@@ -454,6 +455,15 @@ claude-code-refactor/
 ---
 
 ## 13. 변경점
+
+### 0.4.0 (2026-10-05)
+
+계획서를 묶음으로 나눠 승인·실행하고, 묶음 하나를 끝까지 맡기는 자동 모드를 더했습니다.
+
+- **묶음 계획** — 계획서 카드에 선택 칸 `- **묶음**: B1 결제 안전`·`- **우선**: 12.3 · 빠른 승리` 와 `## 묶음` 표를 둡니다. 같은 파일·앞 카드 의존·같은 영역의 카드를 묶고(카드 5장·파일 10개까지), 순서는 의존 > Phase > 계획서 순서(Phase 0 은 맨 앞). `/refactor:approve B1`(또는 `묶음 B1`) 한 번에 그 묶음의 안 끝난 카드를 승인하고, 실행은 묶음 순서로 이어 가다 다른 묶음이 오면 멈춥니다. 새 작업 가지 이름에 묶음이 붙습니다(`refactor/<날짜>-B2`). 두 칸은 승인 지문에서 빠지므로 **이미 승인된 카드에도** 덧붙일 수 있습니다 — 진행 중인 계획서는 `/refactor:go 묶음` 으로(코드·승인 칸은 그대로). 단 설명 글은 짧은 이름(64까지·`:`·백틱·괄호·`/`·대괄호 같은 기호 없음)이어야 지문 밖이고, 카드마다 첫 줄만 빠집니다(그 밖은 "승인 뒤 카드 바뀜").
+- **자동 모드** — `/refactor:approve B1 자동 [squash|rebase|merge]` 뒤 인자 없는 `/refactor:go` 한 번: 묶음 카드를 끝낸 뒤 같은 차례에 미리 확인(기준선 결과·묶음 밖 커밋·운영 주소·판 표지·확인할 화면) → 푸시 → PR → 자동 검사 초록 두 번 → 합치기 → 배포 끝 기다림(판 표지가 바뀔 때까지, 최대 30분) → 운영 화면 확인(GET 만 · playwright 가 있으면 화면도 열어 보되 쓰기 요청은 막음). 사람이 무엇이든 입력하거나 승인 뒤 2시간이 지나면 합치기 전에 멈추고, 합친 뒤의 확인 단계는 끝까지 합니다. 되돌리기는 사람(자동 되돌리기 없음). PROFILE 에 운영 주소·배포 끝 보는 법·판 표지·확인할 화면을 사람이 적어야 켜집니다. 배포가 수동인 저장소는 합치기까지만. 자세한 것은 [§6-5](#6-5-자동-모드).
+- **안전장치** — 자동 모드 허락 파일(`.turn-auto.*`·`.turn-merged.*`)은 기존 `.turn*` 보호를 그대로 받습니다. 자동 모드 스크립트는 그 묶음 허락이 살아 있을 때 정해진 한 줄 꼴로만 돌고, 자동 모드 중에도 강제 push·`gh pr merge` 직접·배포 명령은 막습니다. 배포 기록·워크플로 실행·릴리스 쓰기(`gh api …/deployments·dispatches·releases·pages/builds`, `gh workflow run`, `gh release create|delete|edit|upload`, `-R` 옵션 순서 포함), `netlify api` 의 쓰기 메서드(읽기 `get*`·`list*` 만 통과)를 막고, `vercel ls --prod` 같은 조회는 풉니다.
+- **낱말** — "묶음"은 이제 새 뜻 하나(함께 고칠 카드 몇 장)로만 씁니다. Phase 승인은 "Phase 전체", 건강검진 A~D 는 "영역"으로 바꿨습니다.
 
 ### 0.3.7 (2026-10-05)
 
