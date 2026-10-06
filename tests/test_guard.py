@@ -873,6 +873,8 @@ def main():
     check_pause_destroy_042b(res)
     check_pause_push_042b(res)
     check_msgs_042(res)
+    check_wrap_case_042b(res)
+    check_run_retry_042b(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -6107,6 +6109,85 @@ def check_msgs_042(res):
                    need=need)
     finally:
         rmtree_rw(proj)
+
+
+WRAP_TRUE_042B = ["sh -c 'x'", 'bash -c "x"', "eval 'x'", "cmd /c x", "su -c x", "A; sh -c x", '"sh -c x"', "powershell.exe -c x",
+                  "busybox sh x", "./sh x", "sh", "zsh -c x", "tcsh x", "ssh host x", "pwsh -c x", "x|sh", "sh;", "(sh -c x)", "SH -c x", "Bash.EXE -c x"]
+WRAP_FALSE_042B = ["x.sh", "my-sh", "rsh x", "sh_x", "sh.old", "nosh", "shsh", "sh.exe.old", "script.sh", "a_bash b", "cmd2 x", "evaluate x",
+                   "ssh-keygen x", "awk -F'|' '{print $2}' run.sh", ""]
+
+
+def check_wrap_case_042b(res):
+    """0.4.2 W4 B: 문자열을 명령으로 실행하는 조각(sh -c '…' 등) 판정을 정규식 없이 case 로(맥 bash 3.2 정규식 엔진 TRE 충돌).
+    함수만 떼어 참/거짓 예시를 돌리고(guard 와 같이 nocasematch 켬), 울타리 프로젝트에서 sh -c '… | sponge' 류 막힘이 그대로인지 본다."""
+    import re
+    src = (HOOKS / "guard.sh").read_text(encoding="utf-8")
+    m = re.search(r"^wrap_hit\(\) \{\n.*?^\}\n", src, re.S | re.M)
+    res["total"] += 1
+    if not m or "=~" in m.group(0) or "RE_PH_WRAP" in src or 'if wrap_hit "$seg"; then' not in src:
+        res["fails"].append(("0.4.2 W4 wrap_hit 정규식 없음", "함수·사용 1곳·=~ 0", bool(m), "guard.sh", "", ""))
+        return
+    script = m.group(0) + 'shopt -s nocasematch\nwhile IFS= read -r l; do if wrap_hit "$l"; then echo 1; else echo 0; fi; done\n'
+    cases = [(c, "1") for c in WRAP_TRUE_042B] + [(c, "0") for c in WRAP_FALSE_042B]
+    r = subprocess.run([BASH, "-c", script], input=("\n".join(c for c, _ in cases) + "\n").encode("utf-8"), capture_output=True, timeout=60)
+    got = r.stdout.decode("utf-8", "replace").split()
+    for i, (c, want) in enumerate(cases):
+        res["total"] += 1
+        g = got[i] if i < len(got) else "?"
+        if g != want:
+            res["fails"].append(("0.4.2 W4 wrap_hit 예시", want, g, "bash", c, r.stderr.decode("utf-8", "replace")[:200]))
+    # 끝까지: 울타리(읽기 전용 단계 · go 차례)에서 래퍼 조각 안 파이프로 쓰는 꼴은 막히고, 래퍼가 아닌 x.sh 류는 헛자르지 않는다
+    proj = make_project(phase="CHECKUP", allow=(".turn",))
+    try:
+        _cases_042(res, proj, "W4 래퍼 조각 막힘 유지", [(B, bash("sh -c 'cat x | sponge src/app.ts'")), (B, bash("bash -c \"cat x | tee src/app.ts\"")),
+                                                     (B, bash("eval 'a=1; touch src/app.ts'")), (B, bash("(sh -c 'cat x | sponge src/app.ts')")),
+                                                     (B, bash("busybox sh -c 'cat x | tee src/app.ts'")), (B, bash("./sh -c 'cat x | tee src/app.ts'")),
+                                                     (OK, bash("awk -F'|' '{print $2}' run.sh")), (OK, bash("grep -c 'a;b' my-sh.txt"))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_run_retry_042b(res):
+    """0.4.2 W4 A: run.sh 는 guard 가 신호로 죽으면(맥 bash 3.2 TRE 충돌 139 등, 감시 KILL 137 제외) 같은 입력으로 한 번 다시 판정하고,
+    다시도 죽으면 막는다(2 + 안내). problems.log 에 '판정 중 멈춤(신호 N) → 재시도 / → 차단' 한 줄씩(명령·값 없음)."""
+    tmpd = pathlib.Path(tempfile.mkdtemp(prefix="runretry-"))
+    shutil.copytree(ROOT / "plugins/refactor", tmpd / "refactor")
+    g = tmpd / "refactor/hooks/guard.sh"
+    mark = (tmpd / "first").as_posix()
+    run_sh = (tmpd / "refactor/hooks/run.sh").as_posix()
+    plog = pathlib.Path(TEST_DATA) / "problems.log"
+    proj = make_project()
+    pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": str(proj)}).encode()
+    need = "판정 중 안전장치가 멈춰(신호 11) 막았습니다"
+
+    def lines(word):
+        if not plog.exists():
+            return 0
+        return sum(1 for ln in plog.read_text(encoding="utf-8").splitlines() if "| run.sh |" in ln and "guard 판정 중 멈춤(신호 11) → " + word in ln)
+
+    # 둘째 호출은 입력을 그대로 받았는지까지 본다(같은 입력 재공급) — 다르면 9
+    once = "#!/usr/bin/env bash\nif [ ! -e '" + mark + "' ]; then : > '" + mark + "'; kill -SEGV $$; fi\nin=$(cat)\ncase \"$in\" in *'\"command\": \"ls\"'*) ;; *) exit 9 ;; esac\nexit %s\n"
+    rows = [("1회 신호 → 다시 막음(42)", once % "42", B, 1, 0, False),
+            ("1회 신호 → 다시 통과(0)", once % "0", OK, 1, 0, False),
+            ("늘 신호 → 막음", "#!/usr/bin/env bash\nkill -SEGV $$\n", B, 1, 1, True),
+            ("정상 통과 → 기록 없음", "#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n", OK, 0, 0, False)]
+    try:
+        for label, body, want, n_re, n_blk, msg in rows:
+            lf(g, body)
+            pathlib.Path(mark).unlink(missing_ok=True)
+            r0, b0 = lines("재시도"), lines("차단")
+            r = run_hook([BASH, run_sh, "guard"], input=pl, capture_output=True, env=env_for(proj))
+            err = r.stderr.decode("utf-8", "replace")
+            res["total"] += 1
+            if r.returncode != want or (msg and (need not in err or "우회하지 말고" not in err)) or (not msg and "멈춰" in err):
+                res["fails"].append(("0.4.2 W4 run.sh 재시도 " + label, want, r.returncode, "guard", "", err[:300]))
+            res["total"] += 1
+            got = (lines("재시도") - r0, lines("차단") - b0)
+            if got != (n_re, n_blk):
+                res["fails"].append(("0.4.2 W4 run.sh 기록 " + label, (n_re, n_blk), got, "problems.log", "", ""))
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
+        shutil.rmtree(tmpd, ignore_errors=True)
 
 
 if __name__ == "__main__":

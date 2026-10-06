@@ -3089,7 +3089,18 @@ MSG_RDOC2="다시 하려면 /refactor:go 다시 <단계> 를 쓰세요(이전 �
 #   (역슬래시가 이스케이프가 아니고 백틱이 이스케이프) · 원문에 \002 가 이미 있으면 아무것도 바꾸지 않는다.
 RE_PH_TOK='^([^"'"'"'\\$]+|[$]'"'"'([^'"'"'\\]|\\.)*'"'"'|'"'"'[^'"'"']*'"'"'|"([^"\\]|\\.)*"|\\.|[$])'
 # 따옴표 안 | 를 하나로 묶은 조각 중 문자열을 명령으로 실행하는 것(sh/bash/zsh -c '…' · eval · su -c · ssh · cmd /c · powershell -c …)은 옛 방식으로 한 번 더 자른다
-RE_PH_WRAP='(^|[^[:alnum:]_.-])(eval|(ba|z|da|k|fi|tc|c)?sh|su|cmd|powershell|pwsh|ssh|watch|parallel|script|busybox)([.]exe)?([[:space:]"'"'"']|$)'
+#   0.4.2 W4: 정규식([[ =~ ]]) 대신 case 로 — 맥 bash 3.2 의 정규식 엔진(TRE)이 이 판정(sh -c "…" 꼴)에서 간헐적으로 죽었다(종료 139).
+#   낱말 앞 = 조각 처음 또는 영숫자·_·.·- 가 아닌 글자 / 낱말(.exe 붙어도) 뒤 = 끝·공백·따옴표·; | & ( ) < > (옛 정규식보다 뒤 경계가 넓다 = 더 자른다 = 막는 쪽)
+wrap_hit() {
+  local w
+  for w in eval sh bash zsh dash ksh fish tcsh csh su cmd powershell pwsh ssh watch parallel script busybox; do
+    case "$1" in
+      "$w"|"$w".exe|"$w"[[:space:]\"\'\;\|\&\(\)\<\>]*|"$w".exe[[:space:]\"\'\;\|\&\(\)\<\>]*) return 0 ;;
+      *[![:alnum:]_.-]"$w"|*[![:alnum:]_.-]"$w".exe|*[![:alnum:]_.-]"$w"[[:space:]\"\'\;\|\&\(\)\<\>]*|*[![:alnum:]_.-]"$w".exe[[:space:]\"\'\;\|\&\(\)\<\>]*) return 0 ;;
+    esac
+  done
+  return 1
+}
 #   (보완 F1, 검사 C 🟠: 따옴표 안의 ; · & 도 같은 방식으로 \003 · \004 — awk '{a=1; print $2}' 의 ; 로 잘려 뒷조각이 "모르는 명령 + 인자"가 되던 헛막힘)
 pipe_hide() {
   PHD=$1
@@ -3129,7 +3140,7 @@ shell_targets1() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨) — cd·push
       seg=${seg//$'\002'/|}; seg=${seg//$'\003'/;}; seg=${seg//$'\004'/&}
       # 문자열을 명령으로 실행하는 조각(sh -c '…' 등)은 옛 방식(&& || ; |)으로 한 번 더 자른다 —
       #   되민 조각에 자리표시가 남아 있으면(되돌리기가 빠진 경우) 넣지 않는다(같은 조각을 끝없이 되밀지 않게, 검사 A 🟡3)
-      if has "$seg" "$RE_PH_WRAP"; then
+      if wrap_hit "$seg"; then
         rs=${seg//&&/$NL}; rs=${rs//||/$NL}; rs=${rs//;/$NL}; rs=${rs//|/$NL}
         case "$rs" in *$'\002'*|*$'\003'*|*$'\004'*) ;; *) s="$rs$NL$s" ;; esac
       fi ;;
