@@ -469,7 +469,7 @@ claude plugin validate --strict plugins/refactor; claude plugin validate --stric
 ```
 
 - Windows에서는 시험이 Git Bash를 자동으로 찾습니다(PATH의 WSL bash 대신). 못 찾으면 `GUARD_BASH`에 Git Bash 절대경로를 지정하세요. `python3`은 Windows 스토어 안내 프로그램일 수 있으니 `python`을 쓰세요.
-- 0.4.2 기준 결과(로컬 — CI 숫자는 머지 뒤 갱신): 안전장치 시험 5307/5307 · 스크립트 시험 1529/1529 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
+- 0.4.2 기준 결과(로컬 — CI 숫자는 머지 뒤 갱신): 안전장치 시험 5318/5318 · 스크립트 시험 1529/1529 통과. 안전장치 시험은 시간이 오래 걸리니 동시에 여러 개를 돌리지 마세요.
 - CI 는 두 시험을 한 잡 안에서 동시에 돌립니다(로컬 PC 에서는 위 안내대로 하나씩).
 - 배포할 때는 판 번호 네 곳을 함께 올립니다 — `plugins/refactor/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 `version`, 이 README 맨 위 배지(`version-x.y.z`), `.github/ISSUE_TEMPLATE/bug.yml`의 판 칸 `placeholder`. 넷이 다르면 스크립트 시험(판 번호 일치)이 실패합니다.
 
