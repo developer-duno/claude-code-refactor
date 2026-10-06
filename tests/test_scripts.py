@@ -1055,6 +1055,11 @@ def main():
     check_auto_newbranch_040(check)
     check_auto_041(check)
     check_auto_docs_040(check)
+    check_card_042(check)
+    check_card_auto_042(check)
+    check_pause_042(check)
+    check_pause_expire_042(check)
+    check_deploy_env_042(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -3147,6 +3152,8 @@ case "$1 $2" in
   *) k=other ;;
 esac
 n=0; [ -f "$d/$k.n" ] && n=$(cat "$d/$k.n"); n=$((n + 1)); printf '%s\\n' "$n" > "$d/$k.n"
+# 0.4.2 F6 시험: $k.envq 가 있으면 그 글자가 든 호출만 아래 출력을 낸다 — 아니면 빈 배열([])에 --jq 를 건 결과를 흉내(식에 // empty 가 있으면 빈 출력, 없으면 "null null")
+if [ -f "$d/$k.envq" ]; then case "$*" in *"$(cat "$d/$k.envq")"*) ;; *) case "$*" in *"// empty"*) ;; *) echo "null null" ;; esac; exit 0 ;; esac; fi
 # 0.4.1 R4 시험: n 번째 호출 때 그 종류의 .hook 을 돌린다(되풀이 사이에 허락 파일을 시험이 적어 둔 값으로 바꾸는 등)
 [ -f "$d/$k.hook" ] && [ "$n" = "$(cat "$d/$k.hookn")" ] && bash "$d/$k.hook"
 if [ "$k" = merge ] && [ -n "${FAKE_GH_GRANT:-}" ]; then if [ -e "$FAKE_GH_GRANT" ]; then echo yes; else echo no; fi >> "$d/merge.grant"; fi
@@ -5876,16 +5883,16 @@ def check_auto_stage_fail_040(check):
         out, rc = _auto040(dw, "deploy-wait", [fgw, noplay, rail])
         check("0.4.0 A8 cloudflare · 판 표지 그대로 → 3 ⏳(판 표지 그대로)", rc == 3 and "판 표지 그대로" in out, out)
         gd = _fake035(made)
-        (gd / "deploy.out").write_text("55 production 2026-10-05T01:00:00Z\n", newline="")
+        (gd / "deploy.out").write_text("55\tproduction\t2026-10-05T01:00:00Z\n", newline="")   # 0.4.2 F6: 조회 결과는 탭 구분(jq 식이 탭으로 냄)
         (gd / "dstat.out").write_text("success\n", newline="")
-        (gd / "denv.out").write_text(f"{_SHA040} 2026-10-05T01:00:00Z\n", newline="")
+        (gd / "denv.out").write_text(f"{_SHA040}\t2026-10-05T01:00:00Z\n", newline="")
         _mf040(dw, site.url, host="github")
         out, rc = _auto040(dw, "deploy-wait", [gd, noplay])
         cl = _calls035(gd)
         check("0.4.0 A8 github: deployments?sha=<합친 커밋> → statuses success + 같은 환경 최신 = 이 커밋 → 0",
               rc == 0 and any(f"deployments?sha={_SHA040}" in c for c in cl) and any("/deployments/55/statuses" in c for c in cl)
               and any("deployments?environment=production" in c for c in cl), out + str(cl))
-        (gd / "denv.out").write_text(f"{'cd' * 20} 2026-10-05T02:00:00Z\n", newline="")
+        (gd / "denv.out").write_text(f"{'cd' * 20}\t2026-10-05T02:00:00Z\n", newline="")
         _mf040(dw, site.url, host="github")
         out, rc = _auto040(dw, "deploy-wait", [gd, noplay])
         check("0.4.0 A8 github: 같은 환경에 더 새 커밋 배포 → 1 · ⚠ 다른 배포가 덮음 · 허락 지움",
@@ -6676,6 +6683,406 @@ def check_auto_041(check):
         for m_ in made:
             shutil.rmtree(m_, ignore_errors=True)
 
+
+
+# ── 0.4.2 ── 잔치 실사용 신고 S1·S2·S7·S8 (계획서 plan-0.4.2 §2 F1·F4·F5·F6 — 스크립트 몫) ────────────────
+# probe_s.py S2 의 잔치 카드 글 그대로(2026-10-05 신고 원문 — 깨질 기준선 칸 "없음(… 백틱 …)")
+_S2_CARDS042 = {
+    "p785": "### [P2-30] x\n- **종류**: 🔧\n- **깨질 것으로 예상되는 기준선**: 없음. 대조(2026-10-04): 기록 줄을 `console.warn` 으로 내므로, `console.error` 횟수를 세는 기준선(`tests/baseline/b-bl06-retention.test.ts` `:331`·`:350` · `tests/baseline/b-bl06-retention-suspect.test.ts` `:111` — 모두 표시가 켜지는 경로)에 안 걸린다.\n- **승인**: [ ]\n",
+    "p901": "### [P2-8] x\n- **종류**: 🔧\n- **깨질 것으로 예상되는 기준선**: 없음(시험 추가만 — 2026-10-06 대조: 기준선 폴더의 `tests/baseline/d-bl09-hq-order-urls.test.ts:217` 는 이 함수를 읽기만 하고 고치지 않음)\n- **승인**: [ ]\n",
+    "p933": "### [P2-37] x\n- **종류**: 🔧\n- **깨질 것으로 예상되는 기준선**: 없음(2026-10-06 대조: `tests/baseline/` 에 `instrumentation`·`retention-enabled`·`health` 글자 0)\n- **승인**: [ ]\n",
+    "plain": "### [P2-1] x\n- **종류**: 🔧\n- **깨질 것으로 예상되는 기준선**: 없음\n- **승인**: [ ]\n",
+    "real": "### [P2-2] x\n- **종류**: 🔧\n- **깨질 것으로 예상되는 기준선**: `tests/baseline/b-bl05-delete.test.ts`(호출 순서)\n- **승인**: [ ]\n",
+}
+
+PLAN_042 = """# 계획서
+
+### [P2-37] 운영 조건
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: 없음(2026-10-06 대조: `tests/baseline/` 에 `instrumentation`·`retention-enabled`·`health` 글자 0)
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+
+### [P2-2] 삭제 순서
+- **종류**: 🛠 개선
+- **깨질 것으로 예상되는 기준선**: `tests/baseline/b-bl05-delete.test.ts`(호출 순서)
+- **승인**: [ ] 승인
+- **완료**: [ ] 완료
+"""
+_EXTRA042 = "- **추가 시험**: `lib/p2-6.test.ts` · `lib/bot-sweep.test.ts`\n"
+_TS042 = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
+
+
+def _cards042(d):
+    return _lib033(d, 'rl_cards "$R/REFACTOR_PLAN.md" "$R/APPROVALS.log"')[0]
+
+
+def _cardline042(c, cid):
+    return next((l for l in c.splitlines() if l.startswith("CARD\x1f") and l.split("\x1f")[2] == cid), "")
+
+
+def check_card_042(check):
+    """0.4.2 F1(S2) 기준선 칸이 '없음' 으로 시작하면 경로 0 · 백틱 값은 경로 꼴만 / F4(S1) 카드 '추가 시험' 칸 — 꼴이 맞으면 지문 밖(CT 줄) ·
+    꼴 밖이면 지문(승인 뒤 카드 바뀜) · 소비처(approve·status·board·turn·lib·auto)가 CT 줄에 흔들리지 않음."""
+    made = []
+    try:
+        # ── F1 ──────────────────────────────────────────────────────────────────────────────────
+        d = project(plan=PLAN_042)
+        made.append(str(d))
+        rd = d / "docs/refactor"
+        cd = d / "cards"
+        cd.mkdir()
+        for k, v in _S2_CARDS042.items():
+            lf(cd / k, v)
+        files = " ".join(f'"$P/cards/{k}"' for k in _S2_CARDS042)
+        out, err = _lib033(d, "rl_card_bl_paths -n " + files)
+        check("0.4.2 F1 -n: '없음(… 백틱 …)' 세 카드(p785·p901·p933)·'없음' → 줄 없음 · real 그대로",
+              out == "real\ttests/baseline/b-bl05-delete.test.ts\n", repr(out) + err)
+        out, err = _lib033(d, "rl_card_bl_paths " + files)
+        check("0.4.2 F1 기본 모드(-n 아님): 같은 입력 → real 경로 하나", out == "tests/baseline/b-bl05-delete.test.ts\n", repr(out) + err)
+        lf(cd / "odd", "### [P2-9] x\n- **깨질 것으로 예상되는 기준선**: 호출 `:331` 과 `instrumentation` · `console.warn` · `a.json` · `tests/baseline/c.test.ts:12` · `../x/y.ts`\n- **승인**: [ ]\n")
+        out, err = _lib033(d, 'rl_card_bl_paths -n "$P/cards/odd"; rl_card_bl_paths "$P/cards/odd"; echo end')
+        check("0.4.2 F1 '없음' 아닌 칸의 경로 꼴 아닌 백틱(:331·instrumentation·console.warn·/ 없는 a.json·…:12·../)만 → -n 은 ? · 기본은 빈 출력", out == "odd\t?\nend\n", repr(out) + err)
+        lf(cd / "p785n", _S2_CARDS042["p785"].replace("**: 없음. 대조", "**: 대조"))
+        out, err = _lib033(d, 'rl_card_bl_paths -n "$P/cards/p785n"')
+        check("0.4.2 F1 p785 에서 '없음' 을 뺀 글 → / 든 경로 둘만(console.warn·console.error·:331·:350·:111 탈락)",
+              out == "p785n\ttests/baseline/b-bl06-retention.test.ts\np785n\ttests/baseline/b-bl06-retention-suspect.test.ts\n", repr(out) + err)
+        out = approve(d, "P2-37")
+        check("0.4.2 F1 🛠 카드 '없음(… 백틱 …)' 승인 → 기준선 허용 안 열림(🔓·'백틱 경로가 없어' 없음 · 허용 파일 없음)",
+              "✅ 승인함: [P2-37]" in out and "🔓" not in out and "백틱 경로가 없어" not in out and not (rd / ".allow-baseline-edit").exists(), out)
+        out = approve(d, "허용")
+        check("0.4.2 F1 p933 카드만 승인된 채 /refactor:approve 허용 → '허용 파일을 만들지 않았습니다' · 파일 없음",
+              "허용 파일을 만들지 않았습니다" in out and not (rd / ".allow-baseline-edit").exists(), out)
+        out = approve(d, "허용 P2-37")
+        check("0.4.2 F1 허용 P2-37 → 기준선을 바꾸지 않는 단계 · 파일 없음",
+              "기준선을 바꾸지 않는 단계라 허용이 필요 없습니다" in out and not (rd / ".allow-baseline-edit").exists(), out)
+        out = approve(d, "P2-2")
+        check("0.4.2 F1 반대: real 카드 승인 → 허용 열림(P2-2 · 경로 그대로)",
+              "🔓 고칠 기준선: `tests/baseline/b-bl05-delete.test.ts`" in out and (rd / ".allow-baseline-edit").exists()
+              and (rd / ".allow-baseline-edit").read_text(encoding="utf-8").split() == ["P2-2"], out)
+
+        # ── F4 지문 ─────────────────────────────────────────────────────────────────────────────
+        d2 = project(plan=PLAN_042)
+        made.append(str(d2))
+        pp = d2 / "docs/refactor/REFACTOR_PLAN.md"
+        approve(d2, "P2-2")
+        base = pp.read_text(encoding="utf-8")
+        c0 = _cards042(d2)
+        l0 = _cardline042(c0, "P2-2")
+        check("0.4.2 F4 준비: P2-2 승인됨 · CT 줄 없음", l0.endswith("\x1fapproved") and "CT\x1f" not in c0, c0)
+        lf(pp, add_fields040(base, {"P2-2": _EXTRA042}))
+        c1 = _cards042(d2)
+        ln1 = c1.splitlines()
+        check("0.4.2 F4 추가 시험(꼴 맞음 · 백틱 · 가운뎃점) → CARD 줄 그대로(지문·승인됨) · CT 줄이 그 CARD 바로 뒤에 값 원문으로",
+              [l for l in ln1 if l.startswith("CARD")] == [l for l in c0.splitlines() if l.startswith("CARD")]
+              and ln1[ln1.index(l0) + 1] == "CT\x1f2\x1f`lib/p2-6.test.ts` · `lib/bot-sweep.test.ts`", c1)
+        many = " · ".join(f"lib/t{i}.test.ts" for i in range(20))
+        long200 = "lib/" + "a" * (200 - 4 - 8) + ".test.ts"
+        for title, val in [("백틱 없이", "lib/a.test.ts"), ("./ 앞 · 쉼표", "./lib/a.spec.js, tests/test_x.py"),
+                           ("이름 꼴 넷", "`pkg/a_test.go` · `b_test.py` · `src/FooTest.java` · `db/x.t.sql`"),
+                           ("20개", many), ("한 값 200자", long200), ("tests/ 아래 기준선 아닌 폴더", "`tests/unit/a.test.ts`")]:
+            lf(pp, add_fields040(base, {"P2-2": f"- **추가 시험**: {val}\n"}))
+            c = _cards042(d2)
+            check(f"0.4.2 F4 꼴 맞음({title}) → 지문 그대로 · CT 줄", _cardline042(c, "P2-2") == l0 and f"CT\x1f2\x1f{val}" in c.splitlines(), c)
+        bad = [("코드 파일", "`src/a.ts`"), ("기준선 폴더", "`tests/baseline/x.test.ts`"), ("기준선 폴더 대문자", "`Tests/Baseline/x.test.ts`"),
+               ("__tests__ 기준선", "`a/__tests__/b/baseline/x.test.ts`"), ("../", "`../x.test.ts`"), ("중간 ..", "`lib/x.test.ts/../y.ts`"),
+               ("폴더만", "`tests/`"), ("/ 로 시작", "`/abs/x.test.ts`"), ("21개", many + " · lib/u.test.ts"), ("한 값 201자", long200[:4] + "a" + long200[4:]),
+               ("글 섞임", "`lib/a.test.ts` 와 범위 넓힘"), ("빈 칸", ""), ("끝 쉼표", "`lib/a.test.ts`,"), ("이름 꼴 아님(.test 만)", "`lib/a.test`")]
+        for title, val in bad:
+            lf(pp, add_fields040(base, {"P2-2": f"- **추가 시험**: {val}\n"}))
+            c = _cardline042(_cards042(d2), "P2-2")
+            check(f"0.4.2 F4 반대: 꼴 밖({title}) → 지문 바뀜(changed) · CT 줄 없음", c != l0 and c.endswith("\x1fchanged") and "CT\x1f" not in _cards042(d2), c)
+        lf(pp, add_fields040(base, {"P2-2": _EXTRA042 + "- **추가 시험**: `lib/c.test.ts`\n"}))
+        c = _cards042(d2)
+        check("0.4.2 F4 둘째 추가 시험 줄 → 지문에 들어감(changed) · CT 는 첫 줄 값", _cardline042(c, "P2-2").endswith("\x1fchanged")
+              and "CT\x1f2\x1f`lib/p2-6.test.ts` · `lib/bot-sweep.test.ts`" in c.splitlines(), c)
+        # 기준선 경로로 내지 않음: 기준선 칸 바로 뒤의 추가 시험 줄(꼴 맞음 · 꼴 밖 기준선 경로) 둘 다
+        for title, add in [("꼴 맞음", "- **추가 시험**: `lib/p2-6.test.ts`\n"), ("꼴 밖 기준선 경로", "- **추가 시험**: `tests/baseline/x.test.ts`\n")]:
+            lf(pp, add_fields040(base, {"P2-2": add}, after="- **깨질 것으로 예상되는 기준선**:"))
+            blp = _lib033(d2, 't=$(mktemp -d); rl_card_text "$R/REFACTOR_PLAN.md" P2-2 > "$t/c1"; rl_card_bl_paths "$t/c1"; rm -rf "$t"')[0]
+            check(f"0.4.2 F4 rl_card_bl_paths 가 추가 시험 값({title})을 기준선 경로로 내지 않음", blp == "tests/baseline/b-bl05-delete.test.ts\n", blp)
+
+        # ── F4 소비처: CT 줄이 있어도 출력이 같다(approve 승인·status·board·turn go·lib rl_next_bundle·rl_allow_baseline) ──────
+        da, db = project(plan=PLAN_042), project(plan=PLAN_042)
+        made += [str(da), str(db)]
+        for x in (da, db):
+            approve(x, "P2-2")
+        pb = db / "docs/refactor/REFACTOR_PLAN.md"
+        lf(pb, add_fields040(pb.read_text(encoding="utf-8"), {"P2-2": _EXTRA042}))
+        norm = lambda s, x: _TS042.sub("T", s).replace(str(x), "D").replace(x.name, "N")
+        oa, ob = norm(approve(da, "P2-37"), da), norm(approve(db, "P2-37"), db)
+        check("0.4.2 F4 소비처 approve: CT 줄 있는 계획서도 승인 출력 같음 · P2-2 실행 대기 그대로", oa == ob and "P2-2" in ob.split("▶ 실행 대기")[-1], oa + "\n---\n" + ob)
+        sa, sb = norm(sh("refactor-status", da), da), norm(sh("refactor-status", db), db)
+        check("0.4.2 F4 소비처 status: 카드 줄에 '추가 시험 2개' · 그 밖 출력 같음",
+              "[P2-2] 삭제 순서 · 추가 시험 2개" in sb and sb.replace(" · 추가 시험 2개", "") == sa and "추가 시험" not in sa, sa + "\n---\n" + sb)
+        ba = norm(subprocess.run([BASH, str(RUN), "refactor-board", str(da)], input=str(da).encode(), capture_output=True, env=env(), timeout=90).stdout.decode("utf-8", "replace"), da)
+        bb = norm(subprocess.run([BASH, str(RUN), "refactor-board", str(db)], input=str(db).encode(), capture_output=True, env=env(), timeout=90).stdout.decode("utf-8", "replace"), db)
+        check("0.4.2 F4 소비처 board: 출력 같음", ba == bb and "N" in ba, ba + "\n---\n" + bb)
+        for x in (da, db):
+            _go040(x)
+        ta, tb = ((x / "docs/refactor/.turn.s1").read_text(encoding="utf-8") for x in (da, db))
+        check("0.4.2 F4 소비처 turn(/refactor:go 실행 대기 계산): go 표시 같음", ta == tb and "P2-2" in ta and "P2-37" in ta, ta + "|" + tb)
+        expr = 'rl_next_bundle "$R/REFACTOR_PLAN.md" "$R/APPROVALS.log"; echo "$RL_NBB|$RL_NBC"; printf "P2-2\\n" > "$R/.allow-baseline-edit"; rl_allow_baseline "$R" approved'
+        la, lb = _lib033(da, expr)[0], _lib033(db, expr)[0]
+        check("0.4.2 F4 소비처 lib(rl_next_bundle·rl_allow_baseline): 같음", la == lb and "tests/baseline/b-bl05-delete.test.ts" in lb, la + "|" + lb)
+    finally:
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
+def check_card_auto_042(check):
+    """0.4.2 F4 소비처 auto: 자동 마감 preflight 가 CT 줄 있는 계획서(끝난 카드에 추가 시험 칸)에서도 같은 결과."""
+    made = []
+    site = _Site040()
+    try:
+        _site_old040(site)
+        noplay = _bin040(made, npx="exit 1")
+        d, _ = _mkauto040(made, site.url)
+        fg = _fake035(made)
+        _ready040(d, fg)
+        o1, r1 = _auto040(d, "preflight", [fg, noplay])
+        pp = d / "docs/refactor/REFACTOR_PLAN.md"
+        lf(pp, add_fields040(pp.read_text(encoding="utf-8"), {"P1-1": _EXTRA042}))
+        check("0.4.2 F4 auto 준비: P1-1 카드에 CT 줄", "CT\x1f" in _cards042(d), _cards042(d))
+        o2, r2 = _auto040(d, "preflight", [fg, noplay])
+        check("0.4.2 F4 소비처 auto preflight: CT 줄 있어도 같은 결과(0 · 같은 출력)", r1 == 0 and r2 == 0 and o1 == o2, o1 + "\n---\n" + o2)
+    finally:
+        site.close()
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
+def _mk042(made, plan=None):
+    """git 저장소(main 한 커밋 — 기준선 tests/baseline/money.test.ts 포함) + 계획서(PLAN_035)."""
+    g = _git034
+    d = project(plan=plan or PLAN_035)
+    made.append(str(d))
+    g(d, "init", "-q"); g(d, "symbolic-ref", "HEAD", "refs/heads/main")
+    (d / "tests/baseline").mkdir(parents=True)
+    lf(d / "tests/baseline/money.test.ts", "a\n")
+    lf(d / "a.txt", "a\n")
+    g(d, "add", "--", "a.txt", "tests", "docs"); g(d, "commit", "-qm", "i")
+    return d
+
+
+_PZLINE042 = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2} KST \| 잠깐 멈춤 \| - \| - \| until=(\d+) (\d+)시간 head=([0-9a-f]{7}) \| 사용자가 /refactor:approve 로 실행$")
+_RSLINE042 = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2} KST \| 다시 시작 \| - \| - \| - \| 사용자가 /refactor:approve 로 실행$")
+_PZREF042 = "`/refactor:approve 다시 시작` 뒤에"
+
+
+def check_pause_042(check):
+    """0.4.2 F5(S7) /refactor:approve 잠깐 멈춤 [N시간] · 다시 시작 — 만들기(파일·기록·봉인)·시간 꼴·거절 8가지·멈춤 중 다른 모드 거절·
+    다시 시작(지움·기록·멈춤 중 바뀐 보호 파일 알림) · 마무리 때 지움."""
+    made = []
+    try:
+        g = _git034
+        intact = lambda x: _lib033(x, 'rl_log_intact "$R" && echo yes')[0] == "yes\n"
+        d = _mk042(made)
+        rd = d / "docs/refactor"
+        pf = rd / ".allow-pause"
+        head = g(d, "rev-parse", "HEAD")
+        out, _ = _ap034(d, "잠깐 멈춤", from_hook=False)
+        check("0.4.2 F5 --from-hook 없이(스킬의 ! 명령) → 아무것도 안 바꿈", not pf.exists() and "아무것도 바꾸지 않았습니다" in out, out)
+        t0 = int(time.time())
+        out, _ = _ap034(d, "잠깐 멈춤")
+        m = _PZLINE042.match(_log033(d).splitlines()[-1]) if _log033(d) else None
+        body = pf.read_text(encoding="utf-8") if pf.exists() else ""
+        fm = re.fullmatch(r"(\d+) 1 ([0-9a-f]{40})\n", body)
+        check("0.4.2 F5 잠깐 멈춤(기본 1시간) → .allow-pause 1줄 '<만료 epoch> 1 <HEAD 40자>' · 만료 ≈ 지금+3600",
+              fm is not None and fm.group(2) == head and abs(int(fm.group(1)) - (t0 + 3600)) <= 120, body + out)
+        check("0.4.2 F5 기록 줄 '| 잠깐 멈춤 | - | - | until=<epoch> 1시간 head=<7자> | 사용자가 /refactor:approve 로 실행' · 봉인 그대로",
+              m is not None and fm is not None and m.group(1) == fm.group(1) and m.group(2) == "1" and m.group(3) == head[:7] and intact(d), _log033(d))
+        check("0.4.2 F5 만들기 안내 문구", "⏸ 잠깐 멈춤:" in out and "까지(1시간)" in out and "/refactor:approve 다시 시작" in out, out)
+        check("0.4.2 F5 lib rl_pause_state → on(안전장치와 같은 조건)", _lib033(d, 'rl_pause_state "$R" && echo "$RL_PST $RL_PN"')[0] == "on 1\n", "")
+        before = rdir_files(d)
+        out, _ = _ap034(d, "잠깐 멈춤 2시간")
+        check("0.4.2 F5 거절: 이미 멈춤 중 → 남은 시간 안내 · 아무것도 안 바뀜", "이미 잠깐 멈춤 중입니다" in out and "남은 " in out and rdir_files(d) == before, out)
+        for args in ("P1-1", "승인 P1-1", "보류 P1-1", "baseline", "허용 P1-1", "허용", "푸시", "합치기", "새 가지", "B1", "B1 자동"):
+            out, _ = _ap034(d, args)
+            check(f"0.4.2 F5 멈춤 중 '{args}' → ⏸ 잠깐 멈춤 중(HH:MM 까지) — 다시 시작 뒤에 · 아무것도 안 바뀜",
+                  re.search(r"⏸ 잠깐 멈춤 중\(\d\d:\d\d 까지\)", out) is not None and _PZREF042 in out and rdir_files(d) == before, out)
+        out, _ = _ap034(d, "")
+        check("0.4.2 F5 반대: 멈춤 중 현황 보기(인자 없음) → 거절 없음", "잠깐 멈춤 중(" not in out and "계획서 현황" in out, out)
+        out, _ = _ap034(d, "확인")
+        check("0.4.2 F5 반대: 멈춤 중 '확인' → 받음(이미 봉인과 일치)", "이미 봉인과 일치" in out and rdir_files(d) == before, out)
+        st = sh("refactor-status", d)
+        check("0.4.2 F5 status 첫 줄 '⏸ 잠깐 멈춤: HH:MM 까지(남은 N분)'", re.match(r"⏸ 잠깐 멈춤: \d\d:\d\d 까지\(남은 (\d+)분\)", st) is not None
+              and 55 <= int(re.match(r"⏸ 잠깐 멈춤: \d\d:\d\d 까지\(남은 (\d+)분\)", st).group(1)) <= 60, st[:300])
+        so, _, rc, _ = hook("session-start", d, {"session_id": "s1"})
+        check("0.4.2 F5 session-start: '⏸ 잠깐 멈춤 중 — HH:MM 에 안전장치가 다시 켜집니다' · .allow-pause 를 '허용 파일 남음'으로 알리지 않음",
+              rc == 0 and re.search(r"⏸ 잠깐 멈춤 중 — \d\d:\d\d 에 안전장치가 다시 켜집니다", so) is not None and ".allow-pause" not in so, so)
+        to, _, rc, _ = _go040(d)
+        check("0.4.2 F5 turn: 멈춤 중 /refactor:go → go 표시 안 만듦 · 안내(다시 시작 뒤에)",
+              rc == 0 and not (rd / ".turn.s1").exists() and "⏸ 잠깐 멈춤 중(" in to and _PZREF042 in to, to)
+        # post-check: 멈춤 중 기준선을 바꿔도 조용 · 마이그레이션을 커밋해도 조용
+        _go040(d, prompt="기준선 고쳐 줘")   # 턴 시작 스냅숏(.turn-dirty.s1)
+        lf(d / "tests/baseline/money.test.ts", "b\n")
+        (d / "supabase/migrations").mkdir(parents=True)
+        lf(d / "supabase/migrations/001_x.sql", "select 1;\n")
+        g(d, "add", "--", "supabase"); g(d, "commit", "-qm", "mig")
+        rc0, se0 = _pc040(d)
+        check("0.4.2 F5 post-check: 멈춤 중 기준선 변경 → 알림 없음(0)", rc0 == 0 and "보호된 파일" not in se0, se0)
+        out, _, _, _ = _go040(d, prompt="/refactor:approve 다시 시작")   # 사람이 입력창에 친 것처럼(입력 훅이 승인 스크립트를 부르고 스냅숏)
+        lines = _log033(d).splitlines()
+        check("0.4.2 F5 다시 시작 → 파일 지움 · 기록 '| 다시 시작 | - | - | - |' · 봉인 그대로",
+              not pf.exists() and _RSLINE042.match(lines[-1]) is not None and intact(d) and "▶ 잠깐 멈춤을 끝냈습니다" in out, out + lines[-1])
+        check("0.4.2 F5 다시 시작 → 멈춤 중 바뀐 보호 파일 알림 1번(기준선 커밋 안 됨 + 마이그 커밋됨 = 2개)",
+              "⚠️ 멈춤 중 바뀐 보호 파일 2개" in out and "   tests/baseline/money.test.ts" in out and "   supabase/migrations/001_x.sql" in out and out.count("멈춤 중 바뀐") == 1, out)
+        rc1, se1 = _pc040(d)
+        check("0.4.2 F5 다시 시작 차례의 post-check → 멈춤 중 변경은 이미 알렸으니 조용(스냅숏)", rc1 == 0, se1)
+        lf(d / "tests/baseline/money.test.ts", "c\n")
+        rc1, se1 = _pc040(d)
+        check("0.4.2 F5 반대: 다시 시작 뒤 기준선을 또 바꿈 → post-check 알림(2)", rc1 == 2 and "보호된 파일" in se1, se1)
+        out, _ = _ap034(d, "다시 시작")
+        check("0.4.2 F5 다시 시작(멈춤 아님) → 안내만 · 기록 그대로", "잠깐 멈춤 중이 아닙니다" in out and _log033(d).splitlines() == lines, out)
+        to, _, _, _ = _go040(d)
+        check("0.4.2 F5 반대: 다시 시작 뒤 /refactor:go → go 표시 만듦", (rd / ".turn.s1").exists() and "잠깐 멈춤" not in to, to)
+
+        # 시간 꼴
+        d2 = _mk042(made)
+        pf2 = d2 / "docs/refactor/.allow-pause"
+        for args in ("잠깐 멈춤 13시간", "잠깐 멈춤 0시간", "잠깐 멈춤 2", "잠깐 멈춤 2시간 3시간", "잠깐 멈춤 P1-1", "잠깐", "다시", "다시 시작 2시간", "잠깐 멈춤 확인", "멈춤"):
+            out, _ = _ap034(d2, args)
+            check(f"0.4.2 F5 꼴 밖 '{args}' → ❓ · 파일 없음", out.count("❓") >= 1 and "아무것도 바꾸지 않았습니다" in out and not pf2.exists() and _log033(d2) == "", out)
+        out, _ = _ap034(d2, "잠깐 멈춤 12시간")
+        check("0.4.2 F5 '12시간'(최대) → N=12 · 만료 ≈ 지금+12시간", pf2.exists() and pf2.read_text(encoding="utf-8").split()[1] == "12"
+              and abs(int(pf2.read_text(encoding="utf-8").split()[0]) - int(time.time()) - 43200) <= 120 and "(12시간)" in out, out)
+        _ap034(d2, "다시 시작")
+        out, _ = _ap034(d2, "잠깐멈춤 3시간")
+        check("0.4.2 F5 '잠깐멈춤 3시간'(붙여 씀) → N=3", pf2.exists() and pf2.read_text(encoding="utf-8").split()[1] == "3", out)
+        _ap034(d2, "다시시작")
+        check("0.4.2 F5 '다시시작'(붙여 씀) → 지움", not pf2.exists(), "")
+
+        # 거절 8가지(아무것도 안 바뀜)
+        def refused(x, args="잠깐 멈춤"):
+            b = rdir_files(x)
+            o, _ = _ap034(x, args)
+            return o, (not (x / "docs/refactor/.allow-pause").exists()) and rdir_files(x) == b
+        d3 = _mk042(made)
+        r3 = d3 / "docs/refactor"
+        lf(r3 / ".allow-baseline-edit", "P1-1\n")
+        o, ok = refused(d3)
+        check("0.4.2 F5 거절: 기준선 허용 열림 → 먼저 허용 닫기", ok and "허용 닫기" in o, o)
+        (r3 / ".allow-baseline-edit").unlink()
+        for nm in (".turn-auto.B1", ".turn-nextok.B1", ".turn-merged.B1", ".turn-mergetp.s2", ".turn-merge.s2", ".turn-push.s2"):
+            lf(r3 / nm, "x\n")
+            o, ok = refused(d3)
+            check(f"0.4.2 F5 거절: {nm} 있음(자동 모드·허락 진행 — 남의 세션 포함) → 아무것도 안 바뀜", ok and nm in o, o)
+            (r3 / nm).unlink()
+        stp = r3 / "STATE.md"
+        st0 = stp.read_text(encoding="utf-8")
+        lf(stp, st0.replace("next: \"x\"\n", "current_step: \"P1-1 (진행 중)\"\nnext: \"x\"\n"))
+        o, ok = refused(d3)
+        check("0.4.2 F5 거절: STATE current_step '(진행 중)' → 단계 실행 중", ok and "단계를 실행하는 중" in o, o)
+        lf(stp, st0.replace("next: \"x\"\n", "current_step: \"P1-1 (완료)\"\nnext: \"x\"\n"))
+        o, _ = _ap034(d3, "잠깐 멈춤")
+        check("0.4.2 F5 반대: current_step '(완료)' → 멈춤 만듦", (r3 / ".allow-pause").exists(), o)
+        _ap034(d3, "다시 시작")
+        lg = r3 / "APPROVALS.log"
+        lf(lg, _log033(d3) + "2026-10-06 09:00 KST | 승인 | P1-1 | card=1.2 | 손으로\n")
+        o, ok = refused(d3)
+        check("0.4.2 F5 거절: 승인 기록 봉인 깨짐 → 처리 안 함", ok and "처리하지 않았습니다" in o, o)
+        _ap034(d3, "확인")
+        d4 = _mk042(made)
+        _ap034(d4, "마무리")
+        o, ok = refused(d4)
+        check("0.4.2 F5 거절: 마무리 확인 뒤 → '이미 마무리' 안내만 · 마지막 줄 = 마무리 그대로", ok and "이미 마무리되어" in o
+              and "| 마무리 |" in _log033(d4).splitlines()[-1], o)
+        d5 = project()
+        made.append(str(d5))
+        o, ok = refused(d5)
+        check("0.4.2 F5 거절: git 저장소 아님(커밋 못 읽음) → ❓", ok and "커밋을 읽지 못했습니다" in o, o)
+        # 마무리 때 멈춤 파일도 지움
+        d6 = _mk042(made)
+        _ap034(d6, "잠깐 멈춤")
+        o, _ = _ap034(d6, "마무리")
+        check("0.4.2 F5 멈춤 중 마무리 → 받음 · .allow-pause 지움 · 마지막 줄 = 마무리", "리팩토링을 마무리했습니다" in o
+              and not (d6 / "docs/refactor/.allow-pause").exists() and "| 마무리 |" in _log033(d6).splitlines()[-1], o)
+    finally:
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
+def check_pause_expire_042(check):
+    """0.4.2 F5 turn.sh: 입력마다 만료된 .allow-pause 를 지우고 한 번 알림(기록 줄 없음 · 멈춤 중 바뀐 보호 파일 포함) · 기록과 어긋난 파일은 멈춤 아님."""
+    made = []
+    try:
+        d = _mk042(made)
+        rd = d / "docs/refactor"
+        pf = rd / ".allow-pause"
+        _ap034(d, "잠깐 멈춤")
+        ep, n, h = pf.read_text(encoding="utf-8").split()
+        # 기록과 어긋남(파일의 epoch 를 바꿈) → 멈춤 아님(go 표시 만듦)
+        lf(pf, f"{int(ep) + 60} {n} {h}\n")
+        check("0.4.2 F5 파일과 기록의 until 이 다름 → rl_pause_state bad", _lib033(d, 'rl_pause_state "$R"; echo "$RL_PST"')[0] == "bad\n", "")
+        to, _, _, _ = _go040(d)
+        check("0.4.2 F5 반대: 기록과 어긋난 멈춤 파일 → /refactor:go 막지 않음(go 표시)", (rd / ".turn.s1").exists() and "잠깐 멈춤 중" not in to, to)
+        # 만료: 파일의 epoch 를 지난 시각으로(기록도 같은 값으로 맞춘 뒤 봉인 — 만료만 다르게)
+        past = int(time.time()) - 30
+        lf(pf, f"{past} {n} {h}\n")
+        lg = rd / "APPROVALS.log"
+        lf(lg, lg.read_text(encoding="utf-8").replace(f"until={ep} ", f"until={past} "))
+        _lib033(d, 'rl_log_seal "$R"')
+        lf(d / "tests/baseline/money.test.ts", "changed\n")
+        n0 = len(_log033(d).splitlines())
+        to, _, rc, _ = _go040(d, prompt="계속해 줘")
+        check("0.4.2 F5 turn: 만료된 멈춤 파일 → 지움 · 알림 1번(멈춤 중 바뀐 보호 파일 포함) · 기록 줄 없음",
+              rc == 0 and not pf.exists() and "잠깐 멈춤 시간(" in to and "지나 안전장치가 다시 켜졌습니다" in to
+              and "멈춤 중 바뀐 보호 파일 1개" in to and "tests/baseline/money.test.ts" in to and len(_log033(d).splitlines()) == n0, to)
+        to2, _, _, _ = _go040(d, prompt="또")
+        check("0.4.2 F5 turn: 다음 입력에는 다시 알리지 않음", "잠깐 멈춤" not in to2, to2)
+        # 알림 입력(<task-notification>)은 만료 정리를 하지 않는다(사람 입력만)
+        _ap034(d, "잠깐 멈춤")
+        ep2, n2, h2 = pf.read_text(encoding="utf-8").split()
+        lf(pf, f"{past} {n2} {h2}\n")
+        _go040(d, prompt="<task-notification>끝</task-notification>")
+        check("0.4.2 F5 turn: 알림 입력은 만료 파일을 건드리지 않음", pf.exists(), "")
+    finally:
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
+def check_deploy_env_042(check):
+    """0.4.2 F6(S8) 자동 deploy-wait github 갈래: 환경 이름 띄어쓰기·빗금 → 탭 구분·URL 인코딩 · 같은 환경 조회가 비면 덮음 아님 ·
+    진짜 덮음(다른 커밋·더 늦은 시각)은 그대로 · 시각 비교는 ISO 꼴일 때만."""
+    made = []
+    site = _Site040()
+    try:
+        _site_old040(site)
+        noplay = _bin040(made, npx="exit 1")
+        d, _ = _mkauto040(made, site.url)
+        fg = _fake035(made)
+        _ready040(d, fg)
+        site.set("/version.txt", "build-new-2\n")
+        T1, T2 = "2026-10-05T01:00:00Z", "2026-10-05T02:00:00Z"
+
+        def run(envname, envq, denv):
+            gd = _fake035(made)
+            (gd / "deploy.out").write_text(f"55\t{envname}\t{T1}\n", newline="")
+            (gd / "dstat.out").write_text("success\n", newline="")
+            (gd / "denv.out").write_text(denv, newline="")
+            (gd / "denv.envq").write_text(envq, newline="")
+            _mf040(d, site.url, host="github")
+            out, rc = _auto040(d, "deploy-wait", [gd, noplay])
+            return out, rc, _calls035(gd)
+
+        for envname, q in (("janchi-commerce / production", "environment=janchi-commerce%20%2F%20production&"), ("x production", "environment=x%20production&")):
+            out, rc, cl = run(envname, q, f"{_SHA040}\t{T1}\n")
+            check(f"0.4.2 F6 환경 '{envname}' · success · 같은 환경 최신 = 이 커밋 → 0(덮음 아님) · 환경 이름 URL 인코딩",
+                  rc == 0 and "다른 배포가 덮었습니다" not in out and any(q in c for c in cl), out + str(cl))
+        out, rc, cl = run("janchi-commerce / production", "environment=janchi-commerce%20%2F%20production&", f"{'cd' * 20}\t{T2}\n")
+        check("0.4.2 F6 반대: 띄어쓰기 환경에서 진짜 덮음(다른 커밋·더 늦은 시각) → 1 · ⚠ 다른 배포가 덮음",
+              rc == 1 and out.startswith("⚠️ 다른 배포가 덮었습니다") and "cdcdcdc" in out, out)
+        out, rc, cl = run("production", "no-such-query", "")
+        check("0.4.2 F6 같은 환경 조회가 빈 배열(빈 출력) → 0(덮음 아님) · jq 에 // empty", rc == 0 and "다른 배포가 덮었습니다" not in out
+              and any("environment=production&" in c and "// empty" in c for c in cl), out + str(cl))
+        for title, denv in (("sha null", f"null\t{T2}\n"), ("시각 ISO 아님", f"{'cd' * 20}\tnull\n")):
+            out, rc, cl = run("production", "environment=production&", denv)
+            check(f"0.4.2 F6 같은 환경 결과 {title} → 0(덮음 아님)", rc == 0 and "다른 배포가 덮었습니다" not in out, out)
+    finally:
+        site.close()
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
 
 
 if __name__ == "__main__":
