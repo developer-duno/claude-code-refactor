@@ -1063,6 +1063,7 @@ def main():
     check_pause_e2e_042(check)
     check_docs_fix_042(check)
     check_deploy_env_042(check)
+    check_docs_043(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -7144,6 +7145,26 @@ def check_pause_fix_042(check):
     finally:
         for m_ in made:
             shutil.rmtree(m_, ignore_errors=True)
+
+
+def check_docs_043(check):
+    """0.4.3 문서: 판 번호 네 곳(0.4.3) · §6-3(원문은 §6-1 막힘/통과 예) 되돌리기·복사 예시 추가 · §6-4 33 한계 한 줄 · §11 0.4.3 변경 이력 절."""
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
+    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
+    check("0.4.3 판 번호: plugin.json", '"version": "0.4.3"' in pj, "")
+    check("0.4.3 판 번호: marketplace.json", '"version": "0.4.3"' in mk, "")
+    check("0.4.3 판 번호: bug.yml placeholder", 'placeholder: "0.4.3"' in bg, "")
+    check("0.4.3 판 번호: README 배지", "version-0.4.3-blue" in rd, "")
+    check("0.4.3 문구 README 달라진 점 줄 존재", "> **0.4.3에서 달라진 점**:" in rd and "git checkout" in rd.split("> **0.4.3에서 달라진 점**:")[1][:200], "")
+    check("0.4.3 문구 README §6-1 막힘 예 추가(git restore·checkout·shutil.copytree)",
+          "`git restore docs/refactor` · `git checkout HEAD~1 -- docs/refactor` · `python -c \"shutil.copytree('/tmp/x','docs/refactor')\"`" in rd, "")
+    check("0.4.3 문구 README §6-1 통과 예 추가(REPORT.md 되돌리기·--staged)",
+          "`git restore docs/refactor/REPORT.md` · `git restore --staged docs/refactor/REPORT.md`" in rd, "")
+    check("0.4.3 문구 README §6-4 33 한계 한 줄",
+          "지난 묶음에서 완료·커밋된 카드 ID 가 허용 파일에 남아 있고 이번 묶음에서 그 기준선이 바뀌면 알리지 않습니다(알림 범위 = 이번 묶음, 0.3.7)." in rd, "")
+    check("0.4.3 문구 README §11 0.4.3 변경 이력 절 존재", "### 0.4.3 (2026-10-06)" in rd, "")
 
 
 def check_docs_fix_042(check):
