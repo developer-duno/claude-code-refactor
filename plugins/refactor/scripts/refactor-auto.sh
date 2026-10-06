@@ -568,9 +568,20 @@ deploy-wait)
     fi
   fi
   [ -n "$MMARK" ] || [ -n "$MSHA" ] || nom "⛔ 합친 커밋을 몰라 배포 끝을 볼 수 없고 판 표지도 없습니다 — 사람이 배포를 확인한 뒤 Claude 에게 검증을 부탁하세요"
+  # 0.4.2 F6: GitHub 환경 이름을 주소에 넣을 때 — 영문·숫자·-._~ 밖은 바이트마다 %XX(공백·/·&·?·#·%·+ 포함 · LC_ALL=C 라 한 글자 = 한 바이트) → UE
+  urlenc() {
+    local s=$1 i c
+    UE=""
+    for ((i = 0; i < ${#s}; i++)); do
+      c=${s:i:1}
+      case "$c" in [A-Za-z0-9._~-]) UE=$UE$c ;; *) printf -v c '%%%02X' "'$c"; UE=$UE$c ;; esac
+    done
+  }
   # host_state → HS: ready / wait / none(호스팅으로는 못 가림 — 판 표지만) / fail / over
+  #   github(0.4.2 F6 — 잔치 신고 S8): 조회 결과는 탭으로 나눈다(환경 이름에 띄어쓰기·빗금이 있어도 칸이 밀리지 않게) · 환경 조회는 이름을 URL 인코딩 ·
+  #   같은 환경의 최신 배포가 없으면(빈 배열 → 빈 출력) over 아님 · 시각 비교는 둘 다 ISO 시각(20YY-MM-DDT…)일 때만
   host_state() {
-    local o did denv dat s2 at2 st_
+    local o did denv dat s2 at2 st_ re_iso='^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T'
     HS=none; HWHY=""
     case "$MHOST" in
       vercel)
@@ -581,17 +592,18 @@ deploy-wait)
       github)
         [ -n "$MSHA" ] || return 0
         command -v gh >/dev/null 2>&1 || { HWHY="gh 없음"; return 0; }
-        (cd "$proj" && rl_bounded "$GL" gh api "repos/{owner}/{repo}/deployments?sha=$MSHA&per_page=5" --jq '.[0] | "\(.id) \(.environment) \(.created_at)"') >"$TD/g" 2>/dev/null || { HS=wait; return 0; }
-        read -r did denv dat < "$TD/g" || :
+        (cd "$proj" && rl_bounded "$GL" gh api "repos/{owner}/{repo}/deployments?sha=$MSHA&per_page=5" --jq '.[0] // empty | "\(.id)\t\(.environment)\t\(.created_at)"') >"$TD/g" 2>/dev/null || { HS=wait; return 0; }
+        IFS=$'\t' read -r did denv dat < "$TD/g" || :
         [[ ${did:-} =~ ^[0-9]+$ ]] || { HS=wait; return 0; }
         (cd "$proj" && rl_bounded "$GL" gh api "repos/{owner}/{repo}/deployments/$did/statuses?per_page=1" --jq '.[0].state // "-"') >"$TD/g" 2>/dev/null || { HS=wait; return 0; }
         read -r st_ < "$TD/g" || :
         case "${st_:-}" in
           success)
             HS=ready
-            denv=${denv// /%20}
-            (cd "$proj" && rl_bounded "$GL" gh api "repos/{owner}/{repo}/deployments?environment=$denv&per_page=1" --jq '.[0] | "\(.sha) \(.created_at)"') >"$TD/g" 2>/dev/null \
-              && read -r s2 at2 < "$TD/g" && [ -n "${s2:-}" ] && [ "$s2" != "$MSHA" ] && [[ "${at2:-}" > "${dat:-}" ]] && { HS=over; HWHY="더 새 커밋 ${s2:0:7} 의 배포가 뒤에 올라옴"; } ;;
+            urlenc "${denv:-}"
+            (cd "$proj" && rl_bounded "$GL" gh api "repos/{owner}/{repo}/deployments?environment=$UE&per_page=1" --jq '.[0] // empty | "\(.sha)\t\(.created_at)"') >"$TD/g" 2>/dev/null \
+              && IFS=$'\t' read -r s2 at2 < "$TD/g" && [ -n "${s2:-}" ] && [ "$s2" != null ] && [ "$s2" != "$MSHA" ] \
+              && [[ ${at2:-} =~ $re_iso ]] && [[ ${dat:-} =~ $re_iso ]] && [[ "$at2" > "$dat" ]] && { HS=over; HWHY="더 새 커밋 ${s2:0:7} 의 배포가 뒤에 올라옴"; } ;;
           failure|error) HS=fail; HWHY="GitHub 배포 상태 $st_" ;;
           inactive) HS=over; HWHY="이 배포가 다른 배포로 바뀜(inactive)" ;;
           *) HS=wait ;;

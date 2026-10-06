@@ -43,7 +43,12 @@ eval "$(tr -d '\r' < "$lib")"
 # 사용자가 마무리를 확인한 DONE이면 끝(AI가 STATE만 DONE으로 바꾼 것은 아직 진행 중으로 본다)
 [ "$phase" = "DONE" ] && rl_done_confirmed "$rdir" && exit 0
 
-cur=$(rl_protected_dirty "$proj" "$rdir")
+# 0.4.2 F5: 잠깐 멈춤 중이면(안전장치와 같은 조건) 보호된 파일(기준선·마이그레이션) 알림을 내지 않는다 — 다시 시작·만료 때 한 번에 알린다.
+#   승인 기록 알림(1)과 허용 파일 정리 알림(4)은 그대로
+pz=0
+[ -f "$rdir/.allow-pause" ] && rl_pause_state "$rdir" && pz=1
+cur=""
+[ "$pz" = 1 ] || cur=$(rl_protected_dirty "$proj" "$rdir")
 snap=""
 [ -n "$sid" ] && [ -f "$rdir/.turn-dirty.$sid" ] && snap=$(tr -d '\r' < "$rdir/.turn-dirty.$sid")
 NL=$'\n'; TAB=$'\t'
@@ -122,9 +127,9 @@ case "$NL$snap" in
     if [ "$before" != "$now_sum" ]; then log_alarm=1; auto_only_lines && log_alarm=""; fi ;;
 esac
 
-# 2) 보호된 파일 중 턴 시작 때와 달라진 것
-changed=""; n=0
-while IFS= read -r l; do
+# 2) 보호된 파일 중 턴 시작 때와 달라진 것 (3 과 함께 — 잠깐 멈춤 중이면 둘 다 건너뜀)
+changed=""; n=0; reverted=""; m=0
+[ "$pz" = 1 ] || while IFS= read -r l; do
   [ -z "$l" ] && continue
   case "$NL$snap$NL" in *"$NL$l$NL"*) continue ;; esac   # 턴 시작 때와 똑같은 상태면 사용자의 기존 작업
   n=$((n + 1)); [ "$n" -le 10 ] && changed="$changed    ${l%%"$TAB"*}$NL"
@@ -132,8 +137,7 @@ done <<EOF
 $cur
 EOF
 # 3) 턴 시작 때 바뀌어 있던 파일이 지금은 목록에서 사라짐(사용자가 하던 작업이 되돌려졌을 수 있음)
-reverted=""; m=0
-while IFS= read -r l; do
+[ "$pz" = 1 ] || while IFS= read -r l; do
   [ -z "$l" ] && continue
   case "$l" in APPROVALS"$TAB"*|APPROVALS_N"$TAB"*) continue ;; esac
   p=${l%%"$TAB"*}

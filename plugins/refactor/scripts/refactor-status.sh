@@ -23,6 +23,16 @@ if [ ! -f "$state" ]; then
   exit 0
 fi
 
+root=${REFACTOR_ROOT:-}
+[ -z "$root" ] && case "${BASH_SOURCE[0]}" in */*) root="${BASH_SOURCE[0]%/*}/.." ;; esac
+lib="$root/scripts/refactor-lib.sh"
+# 0.4.2 F5: 잠깐 멈춤 중(안전장치와 같은 조건)이면 첫 줄에
+if [ -f "$dir/.allow-pause" ] && [ -n "$root" ] && [ -f "$lib" ]; then
+  eval "$(tr -d '\r' < "$lib")"
+  if pnow=$(date +%s) && RL_PNOW=$pnow rl_pause_state "$dir"; then
+    echo "⏸ 잠깐 멈춤: $(rl_hm "$RL_PUNTIL") 까지(남은 $(( (RL_PUNTIL - pnow + 59) / 60 ))분) — 평소 작업을 막지 않음 · 일찍 끝내기: /refactor:approve 다시 시작"
+  fi
+fi
 echo "== 진행 상황 요약칸 (docs/refactor/STATE.md) =="
 awk 'NR == 1 && /^---/ { fm = 1; next } fm && /^---/ { exit } fm { sub(/\r$/, ""); print "  " $0 }' "$state"
 
@@ -51,9 +61,6 @@ awk '
   t && NF { sub(/\r$/, ""); if (++c <= 10) print "  " $0 }
   END { if (!c) print "  (없음)" }' "$state"
 
-root=${REFACTOR_ROOT:-}
-[ -z "$root" ] && case "${BASH_SOURCE[0]}" in */*) root="${BASH_SOURCE[0]%/*}/.." ;; esac
-lib="$root/scripts/refactor-lib.sh"
 if [ -n "$root" ] && [ -f "$lib" ]; then
   eval "$(tr -d '\r' < "$lib")"
   US=$RL_US
@@ -95,12 +102,23 @@ if [ -n "$root" ] && [ -f "$lib" ]; then
     echo
     echo "== 계획서 (docs/refactor/REFACTOR_PLAN.md) — 승인 근거: APPROVALS.log =="
     recs=$(rl_cards "$plan" "$log")
+    # 0.4.2 F4: 카드의 "추가 시험" 칸(지문 밖 — rl_cards 의 CT 줄) → 카드 순번마다 값 수(가운뎃점·쉼표로 나눔) " <순번>=<수> "
+    ctn=" "
+    while IFS="$US" read -r kind_ n_ v_; do
+      [ "$kind_" = CT ] || continue
+      v_=${v_//\`/}; v_=${v_//·/,}; c_=0
+      while [ -n "$v_" ]; do x_=${v_%%,*}; [ -n "${x_//[[:space:]]/}" ] && c_=$((c_ + 1)); case "$v_" in *,*) v_=${v_#*,} ;; *) v_="" ;; esac; done
+      ctn="$ctn$n_=$c_ "
+    done <<CT_END
+$recs
+CT_END
     n_total=0; n_ap=0; n_done=0; ready=""; changed=""; unlogged=""; pending=""; held=""; dups=""; nobox=""; fence_warn=""
     while IFS="$US" read -r kind_ n_ id t box done_ cnt k r h hv st; do
       case "$kind_" in
         WARN) [ "$n_" = "fence" ] && fence_warn=$id ;;
         CARD)
           line="     [$id] $t"
+          case "$ctn" in *" $n_="*) c_=${ctn#*" $n_="}; line="$line · 추가 시험 ${c_%% *}개" ;; esac
           if [ "${cnt:-1}" -gt 1 ]; then dups="$dups$line"$'\n'; continue; fi
           if [ "$box" = "none" ]; then nobox="$nobox$line"$'\n'; continue; fi
           n_total=$((n_total + 1))
