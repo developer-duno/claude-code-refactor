@@ -7148,7 +7148,7 @@ def check_pause_fix_042(check):
 
 
 def check_docs_043(check):
-    """0.4.3 문서: 판 번호 네 곳(0.4.3) · §6-3(원문은 §6-1 막힘/통과 예) 되돌리기·복사 예시 추가 · §6-4 33 한계 한 줄 · §11 0.4.3 변경 이력 절."""
+    """0.4.3 문서: 판 번호 네 곳(0.4.3) · §6-1 되돌리기·복사 예시 추가 · §6-4 33 기존 문장(중복 없음) · §13 0.4.3 변경 이력 절(보강 글머리·알려진 빈틈)."""
     rd = (ROOT / "README.md").read_text(encoding="utf-8")
     pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
     mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
@@ -7157,14 +7157,25 @@ def check_docs_043(check):
     check("0.4.3 판 번호: marketplace.json", '"version": "0.4.3"' in mk, "")
     check("0.4.3 판 번호: bug.yml placeholder", 'placeholder: "0.4.3"' in bg, "")
     check("0.4.3 판 번호: README 배지", "version-0.4.3-blue" in rd, "")
-    check("0.4.3 문구 README 달라진 점 줄 존재", "> **0.4.3에서 달라진 점**:" in rd and "git checkout" in rd.split("> **0.4.3에서 달라진 점**:")[1][:200], "")
+    check("0.4.3 문구 README 달라진 점 줄 존재 + 이웃 꼴 구절(X-4)",
+          "> **0.4.3에서 달라진 점**:" in rd
+          and "되돌리기·복사 판정의 이웃 꼴(경로 하나·와일드카드·pathspec-from-file·python -m zipfile 등)도 함께 막습니다." in rd, "")
     check("0.4.3 문구 README §6-1 막힘 예 추가(git restore·checkout·shutil.copytree)",
           "`git restore docs/refactor` · `git checkout HEAD~1 -- docs/refactor` · `python -c \"shutil.copytree('/tmp/x','docs/refactor')\"`" in rd, "")
     check("0.4.3 문구 README §6-1 통과 예 추가(REPORT.md 되돌리기·--staged)",
           "`git restore docs/refactor/REPORT.md` · `git restore --staged docs/refactor/REPORT.md`" in rd, "")
-    check("0.4.3 문구 README §6-4 33 한계 한 줄",
-          "지난 묶음에서 완료·커밋된 카드 ID 가 허용 파일에 남아 있고 이번 묶음에서 그 기준선이 바뀌면 알리지 않습니다(알림 범위 = 이번 묶음, 0.3.7)." in rd, "")
-    check("0.4.3 문구 README §11 0.4.3 변경 이력 절 존재", "### 0.4.3 (2026-10-06)" in rd, "")
+    check("0.4.3 문구 README §6-4 33 기존 문장(0.3.7 부터)만, 중복 문장 없음",
+          "지난 묶음에서 완료·커밋된 카드가 기준선 허용 파일에 남아 있을 때(같은 허용에 아직 안 끝난 카드가 함께 있음) 이번 묶음에서 그 기준선이 바뀌면 알리지 않습니다(이번 묶음 안의 커밋만 보기 때문)." in rd
+          and "지난 묶음에서 완료·커밋된 카드 ID 가 허용 파일에 남아 있고 이번 묶음에서 그 기준선이 바뀌면 알리지 않습니다(알림 범위 = 이번 묶음, 0.3.7)." not in rd, "")
+    check("0.4.3 문구 README §13 0.4.3 변경 이력 절 존재", "### 0.4.3 (2026-10-06)" in rd, "")
+    check("0.4.3 문구 README §13 0.4.3 절에 '기준선 알림의 한계 문서화' 글머리 없음(중복 제거)",
+          "기준선 알림의 한계 문서화" not in rd, "")
+    check("0.4.3 문구 README §13 0.4.3 절 되돌리기 판정 보강 글머리(X-2)",
+          "**되돌리기 판정 보강** — `--` 없이 경로 하나만 적은 `git checkout <경로>` · 와일드카드(`'docs/refactor/*'`) · 홑 `&` 로 이은 명령 · `--pathspec-from-file` · ruby/php/perl/pwsh 복사 함수 · `python -m zipfile/tarfile -e` · 문자열 50개 초과 안내도 R1·R2 와 같은 문구로 막습니다." in rd, "")
+    check("0.4.3 문구 README §13 '알려진 빈틈(0.4.3 기준)' 줄(X-3)",
+          "- **알려진 빈틈(0.4.3 기준 — 신고 오면 우선)** —" in rd and "`git -C <폴더> checkout -- …`" in rd, "")
+    check("0.4.3 문구 README 0.4.1 절 528행 '다음 판' 구절이 '0.4.3 에서 고침'으로 닫힘(X-3)",
+          "**0.4.3 에서 고침(R1·R2)**:" in rd and "**다음 판(0.4.3" not in rd, "")
 
 
 def check_docs_fix_042(check):
