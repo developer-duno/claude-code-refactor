@@ -95,6 +95,26 @@ function bline(s,   t, d) {
   if (sub(/^-[ \t]+\*\*우선\*\*:[ \t]*/, "", t)) { if (t ~ /^[0-9]+(\.[0-9])? · (빠른 승리|계획된 큰 공사|틈날 때|하지 말 것)$/) { BVAL = t; return "P" } return "" }
   return ""
 }
+# 0.4.2 F4 카드의 선택 칸 "- **추가 시험**: `lib/a.test.ts` · `lib/b.test.ts`" — 실행 중 카드 밖 기존 시험 파일을 고쳐야 할 때 재승인 없이 더한다.
+#   값을 가운뎃점(·)·쉼표로 나눠 전부 아래 꼴이면 "T"(지문 밖 — 값 원문은 TVAL), 하나라도 어긋나면 ""(보통 줄 → 지문에 들어가 "승인 뒤 카드 바뀜"):
+#   백틱은 뗌 · 앞 ./ 뗌 · 글자 [A-Za-z0-9_./-] · .. 없음 · / 로 시작 안 함 · 값 1~20개 · 한 값 200자까지 ·
+#   끝 이름이 시험 꼴(*.test.* · *.spec.* · test_*.py · *_test.go · *_test.py · *Test.java · *.t.sql — 폴더만으로는 안 됨) ·
+#   기준선 폴더 아님(guard.sh RE_BASELINE_DIR 과 같은 글자, 대소문자 무시)
+function tline(s,   t, n, a, i, v, nm) {
+  TVAL = ""; t = s; sub(/[ \t\r]+$/, "", t)
+  if (!sub(/^-[ \t]+\*\*추가 시험\*\*:[ \t]*/, "", t)) return ""
+  TVAL = t; gsub(/`/, "", t); gsub(/[ \t]*·[ \t]*/, ",", t)
+  n = split(t, a, ",")
+  if (n < 1 || n > 20) return ""
+  for (i = 1; i <= n; i++) {
+    v = a[i]; sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); sub(/^(\.\/)+/, "", v)
+    if (v == "" || length(v) > 200 || v !~ /^[A-Za-z0-9_.\/-]+$/ || index(v, "..") || v ~ /^\//) return ""
+    if (tolower(v) ~ /(^|\/)(tests?|__tests__|specs?)\/([^\/]+\/)*baseline\//) return ""
+    nm = v; sub(/.*\//, "", nm)
+    if (nm !~ /^.+\.(test|spec)\..+$/ && nm !~ /^test_.+\.py$/ && nm !~ /^.+_test\.(go|py)$/ && nm !~ /^.+Test\.java$/ && nm !~ /^.+\.t\.sql$/) return ""
+  }
+  return "T"
+}
 function readlog(   line, f, k, act, id, hv, x) {
   if (LOG == "") return
   while ((getline line < LOG) > 0) {
@@ -154,6 +174,7 @@ BEGIN {
         if (bk == "B") { BUND[cur] = BVAL; HAVEB[cur] = 1 } else { PRIO[cur] = BVAL; HAVEP[cur] = 1 }
         continue
       }
+      if (!INF[i] && !HAVET[cur] && tline(s) == "T") { TEST[cur] = TVAL; HAVET[cur] = 1; continue }   # 0.4.2 F4 추가 시험 칸(꼴에 맞는 첫 줄만 — 지문 밖)
       if (!INF[i]) {
         if ((v = field(s, "종류")) != "") KIND[cur] = v
         if ((v = field(s, "위험도")) != "") RISK[cur] = v
@@ -173,6 +194,7 @@ BEGIN {
       f = DIR "/c" c; printf "%s", TXT[c] > f; close(f)
       if (ALT) { f = DIR "/a" c; printf "%s", TXT["a" c] > f; close(f) }
       print "CARD" US c US ID[c] US TITLE[c] US BOX[c] US DONE[c] US CNT[ID[c]] US KIND[c] US RISK[c] US HUMAN[c]
+      if (HAVET[c]) print "CT" US c US TEST[c]
     }
     if (UNCLOSED) print "WARN" US "fence" US UNCLOSED
     exit
@@ -225,6 +247,8 @@ MODE == "join" { print }
 
 # 계획서 카드 목록(표준출력, 칸 구분 = \037):
 #   CARD 순번 ID 제목 체크(x/o/?/none) 완료(0/1) 같은ID개수 종류 위험도 사람할일 지문(card=…) 기록상태(approved/changed/held/pending)
+#   CT 순번 <추가 시험 칸 값 원문>   0.4.2 F4 — 꼴에 맞는 "추가 시험" 칸이 있는 카드만, 그 CARD 줄 바로 뒤에(CARD 줄의 칸 수는 그대로 —
+#                                  소비처는 모두 kind 가 CARD 인 줄만 읽는다)
 #   WARN fence <닫히지 않은 코드 블록 수>
 #   RL_CARDDIR(빈 임시 폴더)를 주면 그 폴더를 쓰고 지우지 않는다 — c<순번>(카드 본문)·sums(지문)를 다시 쓸 수 있게.
 #   RL_ALT=1 이면 a<순번>(승인 줄을 표준 모양으로 다시 쓴 뒤의 본문 = 승인 줄 덧붙임 제외)과 그 지문도 남긴다(승인 직후 상태를 다시 읽지 않고 알려고)
@@ -862,25 +886,108 @@ rl_allow_ids() {
 #   경로는 \ → /, 앞뒤 공백·앞의 ./ 와 / 를 뗀다. 기본 = 한 줄에 경로 하나(전체 중복 제거)
 #   -n = "<파일 이름(폴더 뺀 끝 이름)><TAB><경로>" 를 파일마다(그 파일 안에서만 중복 제거). 칸에 글이 있는데(공백 뗀 글이 "없음" 으로
 #        시작하지 않음) 백틱 경로가 0개인 파일은 "<파일 이름><TAB>?" 한 줄. 칸이 없거나 "없음" 이면 그 파일은 줄 없음
+#   0.4.2 F1: 칸 본문(공백 뗀 글)이 "없음" 으로 시작하면 두 모드 모두 경로 0(뒤 괄호 설명의 백틱은 경로가 아님 — 잔치 신고 S2).
+#        그 밖에도 백틱 값 중 경로 꼴만 낸다: 글자 [A-Za-z0-9_./-] · / 포함(기준선 경로는 늘 폴더 안) · .. 없음(`:331`·`console.warn`·`instrumentation` 탈락).
+#        그래서 경로는 파일마다 모아 두었다가 파일 끝에서 낸다("없음" 판정은 칸 글이 다 모인 뒤에 정해진다)
 rl_card_bl_paths() { # [-n] <카드 본문 파일…>
   local nm=0
   [ "${1:-}" = -n ] && { nm=1; shift; }
   [ "$#" -gt 0 ] || return 0
   LC_ALL=C awk -v NM="$nm" '
-    function fl() { if (NM == 1 && cur != "" && txt != "" && index(txt, "없음") != 1 && np == 0) print cur "\t?" }
+    function isp(p) { return (p ~ /^[A-Za-z0-9_.\/-]+$/ && index(p, "/") && index(p, "..") == 0) }
+    function fl(   i) {
+      if (cur == "" || index(txt, "없음") == 1) return
+      for (i = 1; i <= np; i++) { if (NM == 1) print cur "\t" P[i]; else if (!(P[i] in S)) { S[P[i]] = 1; print P[i] } }
+      if (NM == 1 && txt != "" && np == 0) print cur "\t?"
+    }
     FNR == 1 { fl(); on = 0; fi++; cur = FILENAME; sub(/.*\//, "", cur); txt = ""; np = 0 }
     /^[ \t>]*([-+*][ \t]+)?\*\*/ { on = ($0 ~ /^[ \t>]*([-+*][ \t]+)?\*\*[^*]*깨질[^*]*기준선/); hd = on }
     /^#/ { on = 0 }
     on { s = $0
-      if (NM == 1) { u = s; if (hd) sub(/^[ \t>]*([-+*][ \t]+)?\*\*[^*]*\*\*[ \t]*:?/, "", u); hd = 0; gsub(/[[:space:]]/, "", u); txt = txt u }
+      u = s; if (hd) sub(/^[ \t>]*([-+*][ \t]+)?\*\*[^*]*\*\*[ \t]*:?/, "", u); hd = 0; gsub(/[[:space:]]/, "", u); txt = txt u
       while (match(s, /`[^`]+`/)) {
         p = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
         gsub(/\\/, "/", p); sub(/^[ \t]+/, "", p); sub(/[ \t]+$/, "", p); sub(/^(\.?\/)+/, "", p)
-        if (p == "") continue
-        if (NM == 1) { if (!((fi, p) in S)) { S[fi, p] = 1; np++; print cur "\t" p } }
-        else if (!(p in S)) { S[p] = 1; print p }
+        if (p == "" || !isp(p)) continue
+        if (!((fi, p) in SF)) { SF[fi, p] = 1; P[++np] = p }
       } }
     END { fl() }' "$@" 2>/dev/null
+}
+# 0.4.2 F5 잠깐 멈춤(/refactor:approve 잠깐 멈춤 [N시간] — 사람만): docs/refactor/.allow-pause = 1줄 "<만료 epoch> <N> <시작 HEAD 40자>"
+#   $1 docs/refactor 폴더 → RL_PST · RL_PUNTIL(만료 epoch) · RL_PN(시간) · RL_PHEAD(시작 HEAD). 반환 0 = 멈춤 중(RL_PST=on)
+#   RL_PST = none(파일 없음) · on(안전장치 guard.sh 와 같은 조건: 꼴 맞음 · 지금 < 만료 · 승인 기록 봉인 그대로 · 기록의 마지막
+#            "잠깐 멈춤"/"다시 시작" 줄이 "| 잠깐 멈춤 | - | - | until=<만료 epoch> …" — 파일과 같은 epoch) · expired(꼴은 맞고 만료가 지남) · bad(그 밖 — 쉬지 않음)
+#   지금 시각 = RL_PNOW(부른 쪽이 정해 둔 epoch)가 있으면 그 값, 없으면 date +%s (bash 5 전용 epoch 변수는 쓰지 않는다 — 맥 bash 3.2)
+rl_pause_state() {
+  local rd=$1 l="" ep n h rest x="" r1 r2 last="" re_n='^([1-9]|1[0-2])$'
+  RL_PST=none; RL_PUNTIL=""; RL_PN=""; RL_PHEAD=""
+  [ -f "$rd/.allow-pause" ] || return 1
+  RL_PST=bad
+  # 꼭 1줄(approve 는 1줄만 쓴다 — 둘째 줄이 있으면 빈 줄이어도 멈춤 아님, 0.4.2 검사 A)
+  { IFS= read -r l; r1=$?; IFS= read -r x; r2=$?; } < "$rd/.allow-pause"
+  [ "$r1" = 0 ] || [ -n "$l" ] || return 1
+  [ "$r2" != 0 ] && [ -z "$x" ] || return 1
+  l=${l%$'\r'}
+  read -r ep n h rest <<RLPA
+$l
+RLPA
+  [[ $ep =~ ^[0-9]{1,12}$ ]] && [[ $n =~ $re_n ]] && [[ $h =~ ^[0-9a-f]{40}$ ]] && [ -z "$rest" ] || return 1
+  RL_PUNTIL=$((10#$ep)); RL_PN=$n; RL_PHEAD=$h
+  x=${RL_PNOW:-}; [ -n "$x" ] || x=$(date +%s)
+  [ "$x" -lt "$RL_PUNTIL" ] || { RL_PST=expired; return 1; }
+  rl_log_intact "$rd" && [ -f "$rd/APPROVALS.log" ] || return 1
+  while IFS= read -r x || [ -n "$x" ]; do
+    case "$x" in *" KST | 잠깐 멈춤 | "*|*" KST | 다시 시작 | "*) last=${x%$'\r'} ;; esac
+  done < "$rd/APPROVALS.log"
+  case "$last" in *" KST | 잠깐 멈춤 | - | - | until=$ep "*) RL_PST=on; return 0 ;; esac
+  return 1
+}
+# epoch → "HH:MM"(KST · GNU date -d · 맥 date -r)
+rl_hm() { TZ=KST-9 date -d "@$1" '+%H:%M' 2>/dev/null || TZ=KST-9 date -r "$1" '+%H:%M' 2>/dev/null; }
+# 멈춤 중 바뀐 보호 파일(기준선·마이그레이션) 알림(0.4.2 F5 — 사장님 S7-2): $1 프로젝트 폴더 $2 시작 HEAD(40자)
+#   커밋된 변경(git diff <시작 HEAD> HEAD) + 커밋 안 된 변경(git status — 새 파일 포함)을 rl_protected_dirty 와 같은 경로 범위·정규식으로 골라
+#   있으면 "⚠️ 멈춤 중 바뀐 보호 파일 N개 …" 와 목록(10줄까지)을 표준출력으로. 없으면 빈 출력
+rl_pause_changes() {
+  local proj=$1 h=$2 x k n=0 show="" seen="$RL_NL" cl="" sl=""
+  local re_bl='(^|/)(tests?|__tests__|specs?)/([^/]+/)*baseline/'
+  local re_mig='(^|/)(supabase/migrations|prisma/migrations|alembic/versions|db/migrate|database/migrations|migrations)/[^/]+|^drizzle/([^/]+[.]sql|meta/)'
+  local specs=('*baseline/*' '*supabase/migrations/*' '*prisma/migrations/*' '*alembic/versions/*' '*db/migrate/*' '*database/migrations/*' 'migrations/*' '*/migrations/*' 'drizzle/*.sql' 'drizzle/meta/*')
+  local G=(git --no-replace-objects -c core.fsmonitor=false -c core.quotePath=false -C "$proj")
+  command -v git >/dev/null 2>&1 || return 0
+  [[ $h =~ ^[0-9a-f]{40}$ ]] && cl=$("${G[@]}" diff --name-only --no-renames "$h" HEAD -- "${specs[@]}" 2>/dev/null)
+  sl=$("${G[@]}" status --porcelain --untracked-files=all -- "${specs[@]}" 2>/dev/null)
+  for k in c s; do
+    while IFS= read -r x; do
+      x=${x%$'\r'}
+      [ "$k" = s ] && { x=${x:3}; x=${x##*" -> "}; }   # 상태 두 글자 + 공백 · 이름 바꾸기는 새 경로
+      [ -n "$x" ] || continue
+      case "$x" in docs/refactor/*) continue ;; esac
+      [[ $x =~ $re_bl ]] || [[ $x =~ $re_mig ]] || continue
+      case "$seen" in *"$RL_NL$x$RL_NL"*) continue ;; esac
+      seen="$seen$x$RL_NL"; n=$((n + 1)); [ "$n" -le 10 ] && show="$show   $x$RL_NL"
+    done <<RLPC
+$(if [ "$k" = c ]; then printf '%s' "$cl"; else printf '%s' "$sl"; fi)
+RLPC
+  done
+  [ "$n" -gt 0 ] || return 0
+  printf '%s\n' "⚠️ 멈춤 중 바뀐 보호 파일 ${n}개(기준선·마이그레이션 — 안전장치가 쉬는 동안 바뀜):"
+  printf '%s' "$show"
+  [ "$n" -gt 10 ] && printf '%s\n' "   … 외 $((n - 10))개"
+  printf '%s\n' "   → 일부러 바꾼 것이 아니면 git diff 로 확인해 주세요(되돌릴지는 사람이 정합니다)."
+}
+# 멈춤 중 가지 바뀜 알림(0.4.2 F5 — 다시 시작·만료 때): $1 프로젝트 폴더 $2 시작 HEAD(40자)
+#   지금 HEAD 가 시작 HEAD 를 품고 있으면(같은 가지에서 이어 커밋 · 거기서 딴 가지) 빈 출력. 아니면(다른 가지로 옮김) 한 줄 —
+#   x = 시작 HEAD 를 품은 가지(3개까지) · y = 지금 가지(가지 없음이면 커밋 7자). 시작 HEAD 를 못 읽으면(지워진 커밋 등) 빈 출력
+#   (.allow-pause 칸은 늘리지 않는다 — 안전장치 guard.sh 가 같은 1줄 세 칸을 읽는다)
+rl_pause_branch() {
+  local proj=$1 h=$2 x y rc
+  local G=(git --no-replace-objects -c core.fsmonitor=false -c core.quotePath=false -C "$proj")
+  command -v git >/dev/null 2>&1 && [[ $h =~ ^[0-9a-f]{40}$ ]] || return 0
+  "${G[@]}" merge-base --is-ancestor "$h" HEAD >/dev/null 2>&1; rc=$?
+  [ "$rc" = 1 ] || return 0
+  x=$("${G[@]}" branch --contains "$h" --format='%(refname:short)' 2>/dev/null | head -n 3 | tr '\n' ',' ); x=${x%,}; x=${x//,/, }
+  y=$("${G[@]}" symbolic-ref --short -q HEAD 2>/dev/null) || y="가지 없음 $("${G[@]}" rev-parse --short=7 HEAD 2>/dev/null)"
+  printf '%s\n' "⚠️ 멈춤 중 가지가 바뀌었습니다(${x:-?} → ${y:-?}) — 리팩토링 기록이 있는 가지로 돌아가야 안전장치가 다시 켜집니다."
 }
 # 경로($1, 프로젝트 폴더 기준 상대경로)가 허용 경로 목록($2, 줄마다 하나)의 하나와 정확히 같은가
 rl_abl_hit() {

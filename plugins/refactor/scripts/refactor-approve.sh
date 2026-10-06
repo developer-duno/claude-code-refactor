@@ -7,7 +7,8 @@
 # Claude가 직접 부르는 것은 안전장치 훅이 막는다. 사용자가 입력한 인자는 표준입력으로 받는다(셸 주입 방지).
 #   $1 = 프로젝트 폴더, $2 = --from-hook (입력 훅이 부를 때만)
 #   표준입력 = 인자 (예: "P0-1 P1-2" / "P1" / "baseline" / "보류 P1-2" / "확인" / "마무리" / "허용 P1-1" / "허용 닫기" / "푸시" /
-#              "새 가지" / "새 가지 refactor/hotfix-1" / "합치기" / "합치기 68 rebase" / "B1"·"묶음 B1" / "보류 B1" / 비움=현황)
+#              "새 가지" / "새 가지 refactor/hotfix-1" / "합치기" / "합치기 68 rebase" / "B1"·"묶음 B1" / "보류 B1" /
+#              "잠깐 멈춤"·"잠깐 멈춤 2시간"(0.4.2 — docs/refactor/.allow-pause) / "다시 시작" / 비움=현황)
 # "B1"(0.4.0 묶음)은 계획서 카드의 "- **묶음**: B1 …" 칸으로 그 묶음의 안 끝난 카드를 펼쳐 카드마다 승인(기존 승인 루틴)하고, 그 앞에
 #   "| 묶음 승인 | B1 | - | 카드 N개: … |" 한 줄을 남긴다(지문 칸 "-" — 승인 상태 계산은 이 줄을 건너뜀 · 이 카드 목록이 그 묶음의 정본).
 #   STATE.md 앞머리 current_bundle 도 여기서만 쓴다(칸이 없으면 넣는다).
@@ -99,6 +100,9 @@ nbw=0; nbname=""; nbn=0; mprn=""; mth=""; mnn=0; mmn=0
 bundles=""; bkw=0; bzero=""; BUNDLE_AUTO=0
 # 0.4.0 자동 모드 합치기 방식('B1 자동 squash' — 묶음 이름과 '자동' 뒤에서만 받는다): amth = 방식, amn = 방식 낱말 수
 amth=""; amn=0
+# 0.4.2 F5 '잠깐 멈춤 [N시간]'(mode=pause — pzw=1 은 '잠깐' 다음 '멈춤'을 기다림) · '다시 시작'(mode=resume — rsw=1 은 '다시' 다음 '시작'을 기다림)
+#   pargs·pargn = 그 뒤에 붙은 낱말(멈춤은 'N시간' 하나만 · 다시 시작은 없음)
+pzw=0; rsw=0; pargs=""; pargn=0
 # 영문 소문자만 대문자로(tr '[:lower:]' '[:upper:]' 를 LC_ALL=C 에서 쓴 것과 같게, 외부 명령 없이)
 upper_ascii() {
   local s=$1 o="" c lo=abcdefghijklmnopqrstuvwxyz UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ p i
@@ -137,13 +141,26 @@ for tok in $raw; do
       elif [ "$mode" = "merge" ] && [ "$up" = MERGE ]; then mth=merge; mmn=$((mmn + 1))
       elif [ "$BUNDLE_AUTO" = 1 ] && [ -n "$bundles" ] && [ "$up" = MERGE ]; then amth=merge; amn=$((amn + 1))
       else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다(예: /refactor:approve 합치기)"; fi ;;
+    잠깐)
+      if [ "$pos" = 1 ]; then pzw=1; else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다(예: /refactor:approve 잠깐 멈춤 2시간)"; fi ;;
+    멈춤)
+      if [ "$pos" = 2 ] && [ "$pzw" = 1 ]; then mode="pause"; pzw=0; else conflict="'$tok'은(는) '잠깐' 바로 뒤에만 쓸 수 있습니다(예: /refactor:approve 잠깐 멈춤 2시간)"; fi ;;
+    잠깐멈춤)
+      if [ "$pos" = 1 ]; then mode="pause"; else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다(예: /refactor:approve 잠깐 멈춤 2시간)"; fi ;;
+    다시)
+      if [ "$pos" = 1 ]; then rsw=1; else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다(예: /refactor:approve 다시 시작)"; fi ;;
+    시작)
+      if [ "$pos" = 2 ] && [ "$rsw" = 1 ]; then mode="resume"; rsw=0; else conflict="'$tok'은(는) '다시' 바로 뒤에만 쓸 수 있습니다(예: /refactor:approve 다시 시작)"; fi ;;
+    다시시작)
+      if [ "$pos" = 1 ]; then mode="resume"; else conflict="'$tok'은(는) 맨 앞에만 쓸 수 있습니다(예: /refactor:approve 다시 시작)"; fi ;;
     확인|CONFIRM|SEAL) special=confirm ;;
     마무리|DONE|FINISH|끝|완료) special=done ;;
     ALL|전체|모두) bad="$bad $tok(전체 승인은 지원하지 않음 — P0·P1 같은 Phase 전체나 단계 번호, B1 같은 묶음으로)" ;;
     묶음|BUNDLE) bkw=$((bkw + 1)) ;;
     자동|AUTO) BUNDLE_AUTO=1 ;;
     *)
-      if [[ $up =~ ^P[0-9]+-[0-9]+[A-Z]?$ ]]; then case " $ids " in *" $up "*) ;; *) ids="$ids $up" ;; esac
+      if [ "$mode" = "pause" ] || [ "$mode" = "resume" ]; then pargs="$pargs $tok"; pargn=$((pargn + 1))
+      elif [[ $up =~ ^P[0-9]+-[0-9]+[A-Z]?$ ]]; then case " $ids " in *" $up "*) ;; *) ids="$ids $up" ;; esac
       elif [[ $up =~ ^P[0-9]+$ ]]; then phases="$phases $up"
       elif [ "$mode" = "branch" ]; then nbname=$tok; nbn=$((nbn + 1))   # 이름은 원문 그대로(대문자로 바꾸거나 .;()[] 를 지우기 전)
       elif [ "$mode" = "merge" ]; then
@@ -161,6 +178,20 @@ for tok in $raw; do
       fi ;;
   esac
 done
+# 0.4.2 F5: '잠깐 멈춤'은 'N시간'(1~12) 하나까지만, '다시 시작'은 단독으로(다른 것과 섞지 않음)
+pzn=1
+if [ -z "$conflict" ]; then
+  if [ "$pzw" = 1 ]; then conflict="'잠깐'은 '잠깐 멈춤'으로만 씁니다(예: /refactor:approve 잠깐 멈춤 2시간)"
+  elif [ "$rsw" = 1 ]; then conflict="'다시'는 '다시 시작'으로만 씁니다(예: /refactor:approve 다시 시작)"
+  elif { [ "$mode" = "pause" ] || [ "$mode" = "resume" ]; } && { [ -n "$ids$phases$bundles$bzero" ] || [ "$want_base" = 1 ] || [ -n "$special" ] || [ "$bkw" -gt 0 ] || [ "$BUNDLE_AUTO" = 1 ]; }; then
+    conflict="'잠깐 멈춤'·'다시 시작'은 다른 것과 섞지 않습니다(예: /refactor:approve 잠깐 멈춤 2시간 · /refactor:approve 다시 시작)"
+  elif [ "$mode" = "resume" ] && [ "$pargn" -gt 0 ]; then conflict="'다시 시작' 뒤에는 아무것도 붙이지 않습니다"
+  elif [ "$mode" = "pause" ] && [ "$pargn" -gt 0 ]; then
+    pzt=${pargs# }; re_pzh='^([1-9]|1[0-2])시간$'
+    if [ "$pargn" = 1 ] && [[ $pzt =~ $re_pzh ]]; then pzn=${BASH_REMATCH[1]}
+    else conflict="'잠깐 멈춤' 뒤에는 시간 하나만 붙입니다(1시간~12시간 — 예: /refactor:approve 잠깐 멈춤 2시간 · 붙이지 않으면 1시간)"; fi
+  fi
+fi
 # '푸시'는 단독으로만, '허용 닫기'는 뒤에 아무것도 없이, '허용'은 단계 번호하고만(기준선 계획·확인·마무리와 섞지 않음)
 if [ -z "$conflict" ]; then
   if [ "$mode" = "push" ] && [ "$pos" -gt 1 ]; then conflict="'푸시'는 단독으로 입력하세요(뒤에 아무것도 붙이지 않습니다)"
@@ -191,12 +222,20 @@ if [ -n "$conflict" ]; then
   say "   묶음 승인: /refactor:approve B1    ·    묶음 승인 취소: /refactor:approve 보류 B1    ·    자동 모드: /refactor:approve B1 자동"
   say "   기준선 허용: /refactor:approve 허용 P1-1    ·    허용 닫기: /refactor:approve 허용 닫기    ·    올리기 허락: /refactor:approve 푸시"
   say "   PR 합치기: /refactor:approve 합치기 68 rebase    ·    합친 뒤 새 작업 가지: /refactor:approve 새 가지"
+  say "   잠깐 멈춤: /refactor:approve 잠깐 멈춤 2시간    ·    다시 켜기: /refactor:approve 다시 시작"
   exit 0
 fi
 [ -n "$bad" ] && say "❓ 알아듣지 못한 입력:$bad"
 if [ "$mode" = "approve" ]; then act_word="승인"; else act_word="보류"; fi
 if [ -n "$special" ] && { [ -n "$ids$phases" ] || [ "$want_base" = 1 ] || [ "$mode" = "hold" ]; }; then
   say "❓ '확인'·'마무리'는 단독으로 입력하세요(예: /refactor:approve 확인). 아무것도 바꾸지 않았습니다."
+  exit 0
+fi
+# 0.4.2 F5: 잠깐 멈춤 중에는 단계·묶음·보류·baseline·허용·푸시·합치기·자동·새 가지 입력을 받지 않는다
+#   (현황 보기·마무리·다시 시작·확인·허용 닫기만 — 멈춤 판정은 안전장치와 같은 조건 rl_pause_state)
+if [ "$rw" = 1 ] && [ -f "$dir/.allow-pause" ] && [ "$mode" != "pause" ] && [ "$mode" != "resume" ] && [ "$close" != 1 ] \
+   && [ "$special" != "done" ] && [ "$special" != "confirm" ] && rl_pause_state "$dir"; then
+  say "⏸ 잠깐 멈춤 중($(rl_hm "$RL_PUNTIL") 까지) — \`/refactor:approve 다시 시작\` 뒤에 다시 입력하세요(아무것도 바꾸지 않았습니다)."
   exit 0
 fi
 
@@ -303,6 +342,29 @@ if [ "$close" = 1 ]; then
   exit 0
 fi
 
+# ── 다시 시작(0.4.2 F5): 멈춤 파일을 지워 안전장치를 다시 켠다 — 켜는 쪽(안전한 방향)이라 봉인이 깨져 있어도 지운다 ──
+#   기록 줄 "| 다시 시작 | - | - | - |" + 봉인은 봉인이 그대로일 때만(밖에서 바뀐 기록을 이 줄로 덮어 인정하지 않게) ·
+#   마무리 확인 뒤면 줄을 남기지 않는다(마무리는 기록의 마지막 줄이어야 인정된다). 그다음 멈춤 중 바뀐 기준선·마이그레이션을 한 번 알린다
+if [ "$mode" = "resume" ]; then
+  pf="$dir/.allow-pause"
+  if [ ! -f "$pf" ]; then say "ℹ️ 잠깐 멈춤 중이 아닙니다(.allow-pause 없음) — 안전장치는 켜져 있습니다(아무것도 바꾸지 않았습니다)."; exit 0; fi
+  rl_pause_state "$dir"; phd=$RL_PHEAD
+  rm -f "$pf"
+  if [ -f "$pf" ]; then say "⚠️ 멈춤 파일(.allow-pause)을 지우지 못했습니다 — 터미널에서 rm \"$pf\""; exit 0; fi
+  if rl_done_confirmed "$dir"; then
+    :
+  elif rl_log_intact "$dir"; then
+    printf '%s KST | 다시 시작 | - | - | - | 사용자가 /refactor:approve 로 실행\n' "$now" >> "$log"
+    rl_log_seal "$dir"
+  else
+    say "   (승인 기록이 봉인과 달라 기록에 '다시 시작' 줄을 남기지 않았습니다 — /refactor:approve 확인 먼저)"
+  fi
+  say "▶ 잠깐 멈춤을 끝냈습니다 — 안전장치가 다시 켜졌습니다. 이어 하려면 /refactor:go"
+  rl_pause_changes "$proj" "$phd"
+  rl_pause_branch "$proj" "$phd"
+  exit 0
+fi
+
 # ── 승인 기록 봉인 확인 ──────────────────────────────────────────────────────
 intact=1
 rl_log_intact "$dir" || intact=0
@@ -322,7 +384,59 @@ if [ "$intact" = 0 ]; then
     say "$chg"
     say "   👤 직접 한 승인이 아니면 그 줄을 지운 뒤 /refactor:approve 확인 을 입력하세요."
   fi
-  if [ -n "$ids$phases$special$bundles" ] || [ "$want_base" = 1 ] || [ "$mode" = "allow" ] || [ "$mode" = "push" ] || [ "$mode" = "branch" ] || [ "$mode" = "merge" ]; then say "   (그래서 이번 요청은 처리하지 않았습니다.)"; exit 0; fi
+  if [ -n "$ids$phases$special$bundles" ] || [ "$want_base" = 1 ] || [ "$mode" = "allow" ] || [ "$mode" = "push" ] || [ "$mode" = "branch" ] || [ "$mode" = "merge" ] || [ "$mode" = "pause" ]; then say "   (그래서 이번 요청은 처리하지 않았습니다.)"; exit 0; fi
+fi
+
+# ── 잠깐 멈춤(0.4.2 F5 — /refactor:approve 잠깐 멈춤 [N시간], 사람만): 리팩토링 중 같은 폴더의 평소 작업을 N시간(기본 1 · 최대 12) 막지 않게 한다 ──
+#   만들기 = docs/refactor/.allow-pause 1줄 "<만료 epoch> <N> <시작 HEAD 40자>" + 기록 "| 잠깐 멈춤 | - | - | until=<epoch> <N>시간 head=<7자> |" + 봉인.
+#   안전장치(guard.sh)는 파일·기록이 맞고 만료 전일 때만 건너뛸 규칙 목록을 건너뛴다(승인 위조 방어·사람 전용 파일·비밀값·설정 보호는 그대로).
+#   거절(아무것도 안 바꿈): 마무리 뒤 · 이미 멈춤 중 · 단계 실행 중(STATE current_step "(진행 중)") · 자동 모드·허락 진행 신호(.turn-auto·.turn-nextok·
+#   .turn-merged·.turn-mergetp·.turn-merge·.turn-push — 남의 세션 것 포함) · 기준선 허용 열림 · git 커밋을 못 읽음 (봉인 깨짐·--from-hook 아님은 위에서)
+if [ "$mode" = "pause" ]; then
+  pz_no() { say "$1"; [ -n "${2:-}" ] && say "   $2"; say "   (아무것도 바꾸지 않았습니다 — 잠깐 멈춤을 켜지 않았습니다.)"; exit 0; }
+  if rl_done_confirmed "$dir"; then say "ℹ️ 이미 마무리되어 안전장치가 꺼져 있습니다 — 잠깐 멈춤이 필요 없습니다(아무것도 바꾸지 않았습니다)."; exit 0; fi
+  pnow=$(date +%s); RL_PNOW=$pnow
+  if rl_pause_state "$dir"; then
+    pz_no "ℹ️ 이미 잠깐 멈춤 중입니다($(rl_hm "$RL_PUNTIL") 까지 · 남은 $(( (RL_PUNTIL - pnow + 59) / 60 ))분)." "시간을 바꾸려면 /refactor:approve 다시 시작 → /refactor:approve 잠깐 멈춤 <N>시간"
+  fi
+  pcs=""; pfm=0
+  if [ -f "$state" ]; then
+    while IFS= read -r x || [ -n "$x" ]; do
+      x=${x%$'\r'}
+      if [ "$pfm" = 0 ]; then case "$x" in ---*) pfm=1; continue ;; *) break ;; esac; fi
+      case "$x" in ---*) break ;; current_step:*) pcs=${x#current_step:}; break ;; esac
+    done < "$state"
+  fi
+  case "$pcs" in *"(진행 중)"*)
+    pcs=${pcs#"${pcs%%[![:space:]]*}"}
+    pz_no "⛔ 단계를 실행하는 중입니다(STATE current_step: $pcs) — 단계 실행 중에는 잠깐 멈출 수 없습니다." "단계가 끝나 보고를 받은 뒤 다시 입력하세요" ;;
+  esac
+  set +f
+  for x in "$dir"/.turn-auto.* "$dir"/.turn-nextok.* "$dir"/.turn-merged.* "$dir"/.turn-mergetp.* "$dir"/.turn-merge.* "$dir"/.turn-push.*; do
+    [ -e "$x" ] || continue
+    set -f
+    # .turn-merged.* 는 사람 입력으로 안 지워진다(합친 뒤 읽기 단계가 끝나거나 하루 정리 때 — turn.sh) → 문구 따로
+    case "${x##*/}" in .turn-merged.*)
+      pz_no "⛔ 합친 뒤 확인 차례가 진행 중입니다(docs/refactor/${x##*/})." "합친 뒤 읽기 단계가 끝나거나 하루 정리 뒤에 다시 입력하세요" ;;
+    esac
+    pz_no "⛔ 자동 모드나 푸시·합치기 허락이 진행 중입니다(docs/refactor/${x##*/})." "그 차례가 끝난 뒤(아무 말이나 입력하면 허락이 끝납니다 — 다른 대화의 것이면 그 대화에서) 다시 입력하세요"
+  done
+  set -f
+  [ -f "$af" ] && pz_no "⛔ 기준선 허용이 열려 있습니다(.allow-baseline-edit)." "먼저 /refactor:approve 허용 닫기 → 그다음 /refactor:approve 잠깐 멈춤"
+  phd=$(git --no-replace-objects -c core.fsmonitor=false -C "$proj" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null)
+  [[ $phd =~ ^[0-9a-f]{40}$ ]] || pz_no "❓ 지금 커밋을 읽지 못했습니다(git 저장소가 아니거나 커밋이 없음)." "잠깐 멈춤은 커밋이 있는 git 저장소에서만 씁니다"
+  puntil=$((pnow + pzn * 3600)); pf="$dir/.allow-pause"
+  if [ -d "$pf" ] || ! { printf '%s %s %s\n' "$puntil" "$pzn" "$phd" > "$pf.tmp.$$" && mv -f "$pf.tmp.$$" "$pf"; }; then
+    rm -f "$pf.tmp.$$"; pz_no "⚠️ 멈춤 파일(.allow-pause)을 쓰지 못했습니다."
+  fi
+  if ! { printf '%s KST | 잠깐 멈춤 | - | - | until=%s %s시간 head=%s | 사용자가 /refactor:approve 로 실행\n' "$now" "$puntil" "$pzn" "${phd:0:7}" >> "$log"; } 2>/dev/null; then
+    rm -f "$pf"; pz_no "⚠️ 승인 기록을 쓰지 못했습니다."
+  fi
+  rl_log_seal "$dir"
+  say "⏸ 잠깐 멈춤: $(rl_hm "$puntil") 까지(${pzn}시간) — 이 폴더의 평소 작업(푸시·stash·가지 바꾸기·배포·포맷터·기준선·마이그레이션)을 안전장치가 막지 않습니다."
+  say "   승인 위조 방어·사람 전용 파일(승인 기록·허용 파일)·비밀값 읽기·설정 파일 보호는 그대로입니다 · PR 합치기와 되돌릴 수 없는 지우기(DB 초기화·앱·릴리스·원격 가지 삭제)도 멈춤 중에 막힙니다 · 리팩토링(/refactor:go)은 멈춤이 끝난 뒤에."
+  say "   일찍 끝내려면 /refactor:approve 다시 시작 · 시간이 지나면 저절로 다시 켜집니다(그때 멈춤 중 바뀐 기준선·마이그레이션을 한 번 알립니다)."
+  exit 0
 fi
 
 # ── 자동 모드(0.4.0 — /refactor:approve B1 자동 [방식]): 묶음 승인 전에 켤 수 있는지 먼저 본다(하나라도 안 되면 ❓ — 아무것도 안 바꿈) ──
@@ -737,6 +851,14 @@ RECS_DONE
   if [ -f "$dir/.allow-baseline-edit" ]; then
     rm -f "$dir/.allow-baseline-edit"
     [ -f "$dir/.allow-baseline-edit" ] || say "🔒 리팩토링이 끝나 기준선 허용 파일(.allow-baseline-edit)을 지웠습니다."
+  fi
+  # 0.4.2 F5: 잠깐 멈춤 파일도 지운다(다음 주기 /refactor:go 다시 때 남은 멈춤이 이어지지 않게 — 기록에는 줄을 더하지 않는다)
+  #   지우기 전에 멈춤 중 바뀐 기준선·마이그레이션을 한 번 알린다(다시 시작·만료와 같게 — 사장님 S7-2)
+  if [ -f "$dir/.allow-pause" ]; then
+    rl_pause_state "$dir"
+    rl_pause_changes "$proj" "$RL_PHEAD"
+    rm -f "$dir/.allow-pause"
+    [ -f "$dir/.allow-pause" ] || say "▶ 잠깐 멈춤 파일(.allow-pause)도 지웠습니다."
   fi
   [ -f "$dir/.allow-migration-edit" ] && say "⚠️ 마이그레이션 허용 파일(.allow-migration-edit)이 남아 있습니다 — 작업을 커밋했으면 터미널에서 rm \"$dir/.allow-migration-edit\" 로 지우세요(CLI 라면 입력창에 ! rm … 도 됨)."
   exit 0

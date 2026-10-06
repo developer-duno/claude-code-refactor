@@ -474,7 +474,7 @@ ROUND2 = [  # 3차 재검증에서 나온 오탐·빈틈
 ]
 GO_TURN_EXECUTE = [  # EXECUTE + /refactor:go 턴: 프로젝트 코드 실행은 안전 실행기로만
     (B, bash("npm test")), (B, bash("npx vitest run tests/baseline")), (B, bash("node scripts/report.js")),
-    (B, bash("python3 -c \"print(1)\"")), (B, bash("cd app && npm run build")), (B, bash("pnpm dev")),
+    (OK, bash("python3 -c \"print(1)\"")), (B, bash("python3 -c \"import random; print(1)\"")), (B, bash("cd app && npm run build")), (B, bash("pnpm dev")),   # 0.4.2 F3: 문서·출력만 하는 한 줄은 통과
     (B, bash("npx vitest run 2>&1 | tail -20")), (B, bash("timeout 600 npm test")), (B, bash("./scripts/seed.sh")),
     (OK, bash("bash /x/hooks/run.sh refactor-safe-run -- npm test")),
     (OK, bash("bash /x/hooks/run.sh refactor-safe-run -- npx vitest run tests/baseline 2>&1 | tail -20")),
@@ -866,6 +866,15 @@ def main():
     check_readme_040(res)
     check_fg_040(res)
     check_copy_dir_040(res)
+    check_pipe_quote_042(res)
+    check_sed_write_042(res)
+    check_doc_edit_042(res)
+    check_pause_042(res)
+    check_pause_destroy_042b(res)
+    check_pause_push_042b(res)
+    check_msgs_042(res)
+    check_wrap_case_042b(res)
+    check_run_retry_042b(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -5762,6 +5771,423 @@ def check_copy_dir_040(res):
                 res["fails"].append(("0.4.0 WC 평소(STATE 없음) 통과", OK, code, "Bash", c, err.strip()[:200]))
     finally:
         rmtree_rw(plain)
+
+
+# ── 0.4.2 잔치 신고(S4 F2 · S3 F3 · S7 F5) ─────────────────────────────────────
+def _cases_042(res, proj, label, rows, need=None, extra=None):
+    """0.4.2 시험 공용: rows = [(기대, (도구, 입력))]. need = 차단일 때 문구에 꼭 있어야 할 글자"""
+    for want, call in rows:
+        code, err = run(proj, *call, extra=extra)
+        res["total"] += 1
+        if code != want or (need and want == B and need not in err):
+            res["fails"].append(("0.4.2 " + label, want, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+
+
+# 잔치 S4 원문(probe_s.py 와 같은 글자) — 따옴표 안 ; 로 잘려 헛막혔다(검사 C 🟠)
+S4_042 = """grep -n "### \\[P2-37\\]" docs/refactor/REFACTOR_PLAN.md; grep -c 'bot-sweep.test.ts:116-120' docs/refactor/REFACTOR_PLAN.md; grep -c '기준선 폴더에 retention-enabled 글자 0' docs/refactor/REFACTOR_PLAN.md; echo "== 판"; grep -o '"version": *"[0-9.]*"' ~/.claude/plugins/cache/vibe-consulting/refactor/0.4.0/.claude-plugin/plugin.json; echo "== 자동 줄"; grep -c '| 자동 |' docs/refactor/APPROVALS.log; echo "== 24h"; grep -E '^2026-10-0[56]' docs/refactor/APPROVALS.log | awk -F'|' '{gsub(/ /,"",$2); print $2}' | sort | uniq -c; echo "== 10-05 06:20 이후"; awk -F'|' '$1 >= "2026-10-05 06:20" {gsub(/ /,"",$2); print $2}' docs/refactor/APPROVALS.log | sort | uniq -c; echo "== 전체"; awk -F'|' '/^20/{gsub(/ /,"",$2); print $2}' docs/refactor/APPROVALS.log | sort | uniq -c"""
+
+
+def check_pipe_quote_042(res):
+    """F2(S4): 따옴표 안 | · 역슬래시 \\| 는 파이프가 아니다 — 읽기만 하는 awk·cut 이 사람 전용 파일 보호에 헛막히지 않는다.
+    진짜 파이프(따옴표 밖 · sh -c '…' 안 · "$( … )" 안)로 사람 전용 파일에 쓰는 꼴은 그대로 막힌다. dd of= · sponge 도 쓰기"""
+    passes = ["awk -F'|' '{print $2}' docs/refactor/APPROVALS.log", "awk -F '|' '{print $2}' docs/refactor/APPROVALS.log",
+              "awk -F\\| '{print $2}' docs/refactor/APPROVALS.log", "cut -d'|' -f2 docs/refactor/APPROVALS.log",
+              "awk -F'|' '{print $2}' docs/refactor/approved/P1-2.md", "awk -F'|' '{print $2}' docs/refactor/APPROVALS.log | sort",
+              "grep '|' docs/refactor/APPROVALS.log", "tr '|' ',' < docs/refactor/APPROVALS.log", "sed 's/|/,/' docs/refactor/APPROVALS.log",
+              "awk -F: '{print $2}' docs/refactor/APPROVALS.log", "grep -c '| 승인 |' docs/refactor/APPROVALS.log", "tail -5 docs/refactor/APPROVALS.log",
+              "awk '{print}' docs/refactor/APPROVALS.log > /tmp/x",
+              # 보완(검사 C 🟠·🟡②): 따옴표 안 ; · && 도 명령 구분자가 아니다(S4 원문 포함)
+              S4_042, "awk '{a=1; print $2}' docs/refactor/APPROVALS.log",
+              "awk '{gsub(/ /,\"\",$2); print $2}' docs/refactor/APPROVALS.log | sort | uniq -c",
+              "grep -c 'a;b' docs/refactor/APPROVALS.log", "awk -F'|' '{x=$2; print x}' docs/refactor/APPROVALS.log",
+              "awk '$1==\"x\" && $2==\"y\" {print}' docs/refactor/APPROVALS.log", "grep -E 'a&&b' docs/refactor/APPROVALS.log"]
+    blocked = ["awk -i inplace '{print}' docs/refactor/APPROVALS.log", "awk '{print}' docs/refactor/APPROVALS.log > docs/refactor/APPROVALS.log",
+               "tee docs/refactor/APPROVALS.log", "cp x docs/refactor/APPROVALS.log",
+               "sh -c 'cat x | dd of=docs/refactor/APPROVALS.log'", "sh -c 'cat x | sponge docs/refactor/APPROVALS.log'",
+               "cat x | tee docs/refactor/APPROVALS.log", "cat x | dd of=docs/refactor/APPROVALS.log", "cat x | sponge docs/refactor/APPROVALS.log",
+               "dd if=/tmp/x of=docs/refactor/.allow-baseline-edit", "bash -c \"cat x | tee docs/refactor/APPROVALS.log\"",
+               "echo \"$(cat x | tee docs/refactor/APPROVALS.log)\"", "eval 'cat x | tee docs/refactor/APPROVALS.log'",
+               "awk -F'|' '{print $2}' x | tee docs/refactor/APPROVALS.log", "cut -d'|' -f2 x > docs/refactor/.turn.t",
+               "awk '{print \"x\" > \"docs/refactor/APPROVALS.log\"}' f", "sh -c 'a=1; echo x > docs/refactor/APPROVALS.log'",
+               "echo 'a;b' > docs/refactor/.allow-x", "cat x; echo y > docs/refactor/APPROVALS.log",
+               "sh -c 'a=1 && cp x docs/refactor/APPROVALS.log'", "bash -c \"a=1; cat x | tee docs/refactor/APPROVALS.log\""]
+    for go in (False, True):
+        proj = make_project(phase="EXECUTE", allow=(".turn",) if go else ())
+        try:
+            tag = " (go 차례)" if go else ""
+            _cases_042(res, proj, "F2 따옴표 안 | 는 파이프 아님 → 통과" + tag, [(OK, bash(c)) for c in passes])
+            _cases_042(res, proj, "F2 진짜 파이프·쓰기 → 막음" + tag, [(B, bash(c)) for c in blocked])
+        finally:
+            rmtree_rw(proj)
+    # 반대 방향: 읽기 전용 단계 울타리(go 차례) — 히어독 본문의 ' 로 짝을 어긋나게 해 진짜 파이프를 따옴표 안처럼 보이게 하는 꼴도 막힌다
+    proj = make_project(phase="CHECKUP", allow=(".turn",))
+    try:
+        _cases_042(res, proj, "F2 울타리 그대로", [(B, bash("cat x | tee src/app.ts")), (B, bash("cat 'x' | tee src/app.ts")), (B, bash("echo 'a|b' | tee src/app.ts")),
+                                                (B, bash("cat 'a b' | tee src/app.ts")), (B, bash("awk -F'|' '{print $2}' x | sponge src/app.ts")),
+                                                (B, bash("tr a b <<'EOF'\nit's\nEOF\ncat x | tee src/app.ts; ls 'a'")),
+                                                (B, bash("cat <<EOF\nit's\nEOF\ncat x | tee src/app.ts; echo 'done'")),
+                                                (B, bash("tr a b <<'EOF'\n# it's\nEOF\ncat x | tee src/app.ts; echo 'done'")),
+                                                (B, bash("ls # it's\ncat x | tee src/app.ts; ls 'a'")),
+                                                (B, bash("sh -c 'cat x | sponge src/app.ts'")), (B, bash("bash -c \"cat x | tee src/app.ts\"")),
+                                                (B, bash("sh -c 'a=1; touch src/app.ts'")), (B, bash("eval 'a=1 && touch src/app.ts'")),
+                                                (B, bash("cat 'a;b'; touch src/app.ts")), (B, bash("cat 'a&&b' && touch src/app.ts")),
+                                                (OK, bash("awk '{a=1; print $2}' src/app.ts")),
+                                                (OK, bash("awk -F'|' '{print $2}' src/app.ts"))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_sed_write_042(res):
+    """보완(검사 A 🔴2): sed 의 파일 쓰기(w·W 명령 · s///w 플래그)와 e(명령 실행)는 쓰기 — 읽기만 하는 sed 는 그대로 통과"""
+    blocked = ["sed 's/a\\|b/c/w docs/refactor/approved/.log-sum' x", "sed 's/a\\|b/c/w docs/refactor/.allow-pause' x",
+               "sed -n 'w docs/refactor/APPROVALS.log' x", "sed 's/x/y/W docs/refactor/.allow-baseline-edit' x",
+               "sed 's|x|y|w docs/refactor/APPROVALS.log' x", "sed '1w docs/refactor/APPROVALS.log' x",
+               "sed -n '1,3 w docs/refactor/APPROVALS.log' x", "sed 's/x/y/wdocs/refactor/APPROVALS.log' x",
+               "sed '1e rm -f docs/refactor/APPROVALS.log' x", "sed 's/.*/echo hi/e' x",
+               # 재검사 A2 🟡4: 정규식 주소 뒤 w
+               "sed '/x/w docs/refactor/APPROVALS.log' f", "sed -n '/^2026/,/^2027/w docs/refactor/.allow-pause' f",
+               "sed 's/a\\/b/c/w docs/refactor/approved/.log-sum' f", "sed -n \"/x/w docs/refactor/APPROVALS.log\" f"]
+    passes = ["sed 's/\\|/,/' docs/refactor/APPROVALS.log", "sed -n '1,3p' x > /tmp/o", "sed -e 's/a/b/' -e 's/c/d/' docs/refactor/APPROVALS.log",
+              "sed '/w/d' docs/refactor/APPROVALS.log", "sed -n '/x/w /tmp/out' docs/refactor/APPROVALS.log",
+              # 재검사 C2 🟡1: 정규식·치환문 속 e 는 실행이 아니다
+              "sed 's/^e //' src/app.ts", "sed -E 's/(a|b)e /x/' src/app.ts",
+              "sed -n '/승인/p' docs/refactor/APPROVALS.log | wc -l", "sed 's/x/y/w /tmp/out' docs/refactor/APPROVALS.log",
+              "sed -E 's/(a|b)e/x/' docs/refactor/APPROVALS.log", "sed -ne 's/a/b/p' docs/refactor/APPROVALS.log"]
+    proj = make_project(phase="EXECUTE")
+    try:
+        _cases_042(res, proj, "sed 쓰기·실행 → 막음", [(B, bash(c)) for c in blocked])
+        _cases_042(res, proj, "sed 읽기 → 통과", [(OK, bash(c)) for c in passes])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_doc_edit_042(res):
+    """F3(S3): /refactor:go 차례에도 docs/refactor 문서만 다루는 파이썬·노드 한 줄/히어독은 안전 실행기 없이 통과.
+    조건 ①경로 ②불러오기 허용 목록 ③위험 낱말 중 하나라도 어긋나거나 명령이 인터프리터 호출 하나가 아니면 지금처럼 막는다"""
+    S3 = "python - <<'EOF'\np='docs/refactor/STATE.md'\ns=open(p,encoding='utf-8').read()\ns=s.replace('gate: G3-step\\n','gate: ask-user\\n',1)\nopen(p,'w',encoding='utf-8').write(s)\nEOF"
+    passes = [S3,
+              "python - <<EOF\np='docs/refactor/REFACTOR_PLAN.md'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF",
+              "python -c \"print('hi')\"",
+              "node -e \"const fs=require('fs');fs.writeFileSync('docs/refactor/STATE.md','x')\"",
+              "python3 - <<'EOF'\nimport json, re\nfrom pathlib import Path\nt = Path('docs/refactor/STATE.md').read_text(encoding='utf-8')\nprint(json.dumps(re.findall('gate: (.*)', t)))\nEOF",
+              "python - <<'EOF'\n# it's a doc edit\nimport os\nif os.path.exists('docs/refactor/STATE.md'):\n    print(open('docs/refactor/STATE.md').read().count('run shell'))\nEOF",
+              "node -e \"require('fs').appendFileSync('./docs/refactor/NOTES.md','x')\"",
+              "python -c \"import json; print(json.dumps({'a':1}))\"", "python -c \"from os.path import join; print(join('docs/refactor','STATE.md'))\"",
+              "python -c \"from datetime import datetime; print(datetime.now())\"", "python -c \"from os.path import exists, isfile; print(exists('x'))\""]
+    path_bad = ["python -c \"open('src/app.ts','w').write('x')\"", "python -c \"open('docs/refactor/../../.env').read()\"",
+                "python -c \"open('docs/refactor/APPROVALS.log','w').write('x')\"", "python -c \"open('docs/refactor/notes.txt','w')\"",
+                "python - <<'EOF'\np='docs/refactor/STATE.md'\nq=p\nopen(q,'w').write('x')\nEOF",
+                "python - <<'EOF'\np='docs/refactor/STATE.md'\np, q = 'src/app.ts', 1\nopen(p,'w').write('x')\nEOF",
+                "python - <<'EOF'\no=open\no('src/app.ts','w').write('x')\nEOF",
+                "python - <<'EOF'\nfrom pathlib import Path\nx=Path('docs/refactor/STATE.md')\nx.replace('Makefile')\nEOF",
+                "node -e \"const w=require('fs').writeFileSync; w('src/a.ts','x')\"",
+                "node -e \"const {writeFileSync}=require('fs');writeFileSync('src/a.ts','x')\""]
+    import_bad = ["python -c \"import random; print(random.random())\"", "python -c \"import subprocess; subprocess.run(['ls'])\"",
+                  "python -c \"import requests; requests.get('http://x')\"", "python -c \"import shutil; shutil.rmtree('src')\"",
+                  "python -c \"__import__('os').system('ls')\"", "node -e \"require('child_process')\"", "python -c \"import os as o; o.system('ls')\"",
+                  # 보완(검사 A 🔴1): from … import 이름도 좁게 — 허용 모듈을 거쳐 os·sys 꺼내기 · as 별명
+                  "python -c \"from os.path import os as q; q.posix_spawnp('sh',['sh','-c','npm test'],{})\"",
+                  "python -c \"from os.path import os as q; q.replace('src/app.ts','src/b.ts')\"", "python -c \"from os.path import os; os.getcwd()\"",
+                  "python -c \"from typing import sys; sys.exit(0)\"", "python -c \"from datetime import datetime as d; print(d)\"",
+                  "python -c \"from os.path import abspath; print(abspath('x'))\""]
+    word_bad = ["python -c \"import os; os.system('ls')\"", "python -c \"requests.get('http://x')\"", "python -c \"shutil.rmtree('src')\"",
+                "python - <<'EOF'\nimport sys\nsys.modules['os'].system('ls')\nEOF", "python - <<'EOF'\nimport os\nos.path.os.system('ls')\nEOF",
+                "py -c \"exec('import os')\"", "node -e \"arguments[1]('child_'+'process')\"", "node -e \"const fs=require('fs');fs['writeFileSync']('src/a.ts','x')\"",
+                "python - <<'EOF'\nprint(f'{1}')\nEOF",
+                # 보완(검사 A 🔴1): _ 로 시작하는 이름·._ 접근 · modules·posix·spawn 부분 글자
+                "python -c \"import collections; collections._sys.modules['posix'].posix_spawnp('sh',['sh','-c','rm -rf src'],{})\"",
+                "python -c \"import json; print(json._default_decoder)\"", "python -c \"import json; json.decoder.sys.exit(0)\"",
+                "python -c \"import os; print(os.path.posixpath)\"", "python -c \"import json; print(json.modules_x)\"", "python -c \"import json; json.x_spawnp('sh')\"",
+                # 보완(검사 C 🟡②): 위험 꼴마다 1건
+                "python -c \"import os; os.execv('/bin/sh',['sh'])\"", "python -c \"import os; os.posix_spawn('/bin/sh',['sh'],{})\"",
+                "python -c \"import importlib; importlib.import_module('os')\"", "node -e \"import('child_process').then(m=>m.execSync('ls'))\"",
+                "node -e \"process.dlopen(module,'x.node')\"", "python -c \"__import__('os').getcwd()\""]
+    form_bad = ["python scripts/x.py", "node -r x -e \"console.log(1)\"", "NODE_OPTIONS=--require=x node -e \"console.log(1)\"",
+                "python -c \"print(1)\" ; python -c \"print(2)\"", "python -X dev -c \"print(1)\"", "python -I -c \"print(1)\"",
+                "node --import x -e \"console.log(1)\"", "NODE_OPTIONS=--import=x node -e \"console.log(1)\"",
+                "python - <<EOF\nprint('$(rm -rf src)')\nEOF", "python -c \"print('$(rm -rf src)')\"", "python - <<'EOF'\nprint(1)\nEOF\nrm -rf src",
+                "python - <<'EOF'\nprint(1)\nEOF\nnpm test\nEOF", "cd docs/refactor && python -c \"print(1)\""]
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        _cases_042(res, proj, "F3 문서 편집만 → 통과(go 차례)", [(OK, bash(c)) for c in passes])
+        _cases_042(res, proj, "F3 ① 경로가 문서 밖·다른 꼴 → 막음", [(B, bash(c)) for c in path_bad])
+        _cases_042(res, proj, "F3 ② 불러오기 허용 목록 밖 → 막음", [(B, bash(c)) for c in import_bad])
+        _cases_042(res, proj, "F3 ③ 위험 낱말 → 막음", [(B, bash(c)) for c in word_bad])
+        _cases_042(res, proj, "F3 꼴(호출 하나가 아님·셸이 펼침) → 막음", [(B, bash(c)) for c in form_bad])
+        _cases_042(res, proj, "F3 막힐 때 둘째 줄 안내", [(B, bash("python scripts/x.py"))], need="docs/refactor 문서만 다루는 파이썬 한 줄로")
+        _cases_042(res, proj, "F3 하위 폴더에서는 아님", [(B, bash(passes[2]))], extra={"cwd": str(proj / "src")})
+    finally:
+        rmtree_rw(proj)
+    proj = make_project(phase="EXECUTE")
+    try:
+        _cases_042(res, proj, "F3 go 차례 아님 → 그대로 통과", [(OK, bash(c)) for c in passes])
+    finally:
+        rmtree_rw(proj)
+
+
+def _pause_proj_042(until, n=2, log_until=None, extra_log="", seal=True, go=False, last_resume=False, tail=""):
+    """잠깐 멈춤 시험 재료: EXECUTE 프로젝트 + .allow-pause 1줄 + 승인 기록의 잠깐 멈춤 줄(봉인은 lib rl_log_seal 로)"""
+    proj = make_project(phase="EXECUTE", allow=(".turn",) if go else ())
+    head = subprocess.run(["git", "-C", str(proj), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    rd = proj / "docs/refactor"
+    with open(rd / ".allow-pause", "w", encoding="utf-8", newline="") as fh:
+        fh.write(f"{until} {n} {head}\n{tail}")
+    lu = until if log_until is None else log_until
+    log = (f"2026-10-06 09:00 KST | 잠깐 멈춤 | - | - | until={lu} {n}시간 head={head[:7]} | 사용자가 /refactor:approve 로 실행\n")
+    if last_resume:
+        log += "2026-10-06 09:30 KST | 다시 시작 | - | - | - | 사용자가 /refactor:approve 로 실행\n"
+    with open(rd / "APPROVALS.log", "w", encoding="utf-8", newline="") as fh:
+        fh.write(log)
+    if seal:
+        lib = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
+        subprocess.run([BASH, "-c", 'LC_ALL=C; export LC_ALL; eval "$(tr -d \'\\r\' < "$1")"; rl_log_seal "$2"', "x", lib, rd.as_posix()],
+                       capture_output=True, env=dict(env_for(proj), LC_ALL="C"), timeout=60)
+    if extra_log:
+        with open(rd / "APPROVALS.log", "a", encoding="utf-8", newline="") as fh:
+            fh.write(extra_log)
+    return proj
+
+
+def check_pause_042(res):
+    """F5(S7): 잠깐 멈춤 중(.allow-pause + 봉인된 기록의 마지막 잠깐 멈춤 줄 until= 같음 + 만료 전 + go 차례 아님)에는
+    pause_skips 목록(push·stash·가지 바꾸기·배포·포맷터·기준선·마이그)만 풀리고 나머지는 그대로 막힌다"""
+    fut = int(time.time()) + 3600
+    edit = lambda p: ("Edit", {"file_path": p, "old_string": "1", "new_string": "2"})
+    open_rows = [bash("git push origin x"), bash("git stash"), bash("git switch other"), bash("vercel --prod"), bash("prettier --write ."),
+                 bash("echo x > tests/baseline/x.test.ts"), bash("echo x > supabase/migrations/x.sql"),
+                 bash("git push -u origin feat/x"), bash("supabase db push"), bash("npx vitest run -u"), bash("railway up"), bash("gh pr create --title x --body y"),
+                 bash("gh release create v2"), bash("gh api -X PUT repos/o/r/contents/a.txt -f message=x -f content=eA=="),
+                 edit("tests/baseline/money.test.ts"), ("Edit", {"file_path": "supabase/migrations/0001_init.sql", "old_string": "x", "new_string": "y"})]
+    keep_rows = [bash("bash /x/hooks/run.sh refactor-approve \"$proj\" --from-hook <<<'P1-1 승인'"), bash("bash /x/scripts/refactor-approve.sh /p"),
+                 bash("claude -p '/refactor:approve P1-1'"), bash("python -c \"open('docs/refactor/APPROVALS.log','a').write('x')\""),
+                 bash("echo {} > .claude/settings.json"), bash("claude plugin disable refactor"),
+                 ("Write", {"file_path": "docs/refactor/.allow-pause", "content": "9999999999 12 x"}),
+                 ("Write", {"file_path": ".claude/settings.local.json", "content": "{}"}), bash("cat .env"), ("Read", {"file_path": ".env"}),
+                 bash("git push --force origin x"), bash("git remote set-url origin https://example.com/x.git"),
+                 bash("gh api -X PATCH repos/o/r -f default_branch=x"), bash("gh alias set pm 'pr merge'"), bash("rm -rf docs/refactor"),
+                 # 재검사 A2 🟡1: 사람 전용 파일에 셸 리다이렉트 쓰기도 멈춤 중 그대로
+                 bash("printf x >> docs/refactor/APPROVALS.log"), bash("echo x > docs/refactor/.allow-pause"),
+                 # 보완(사장님 결정 S7-3): 멈춤 중에도 PR 합치기·원격 가지 참조 바꾸기
+                 bash("gh pr merge 5"), bash("gh pr merge 5 --squash"), bash("gh api -X PUT repos/o/r/pulls/5/merge"),
+                 bash("gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc"), bash("gh api -X DELETE repos/o/r/git/refs/heads/x"),
+                 bash("gh api graphql -f query='mutation{updateRef(input:{refId:\"x\",oid:\"y\",force:true}){clientMutationId}}'"),
+                 # 보완(사장님 결정 S7-4): 멈춤 중에도 되돌릴 수 없는 지우기(검사 A 가 "통과"로 적은 10꼴 + 릴리스 REST DELETE · "막힘" 7꼴)
+                 bash("npm run db:drop"), bash("npm run db:reset"), bash("docker compose down -v"), bash("heroku pg:reset DATABASE_URL"),
+                 bash("heroku apps:destroy myapp"), bash("netlify sites:delete abc"), bash("kubectl delete namespace prod"),
+                 bash("wrangler pages deployment delete abc"), bash("gh release delete v1"),
+                 bash("gh api graphql -f query='mutation{deleteRef(input:{refId:\"r\"}){clientMutationId}}'"), bash("git push --prune origin"),
+                 bash("gh api -X DELETE repos/o/r/releases/12"),
+                 bash("supabase db reset"), bash("prisma migrate reset"), bash("rails db:drop"), bash("terraform destroy"), bash("drizzle-kit drop"),
+                 bash("git push --delete origin x")]
+    proj = _pause_proj_042(fut)
+    try:
+        _cases_042(res, proj, "F5 멈춤 중 풀리는 규칙 → 통과", [(OK, c) for c in open_rows])
+        _cases_042(res, proj, "F5 멈춤 중에도 그대로 → 막음", [(B, c) for c in keep_rows])
+    finally:
+        rmtree_rw(proj)
+    closed = [bash("git push origin x"), bash("echo x > tests/baseline/x.test.ts"), bash("vercel --prod")]
+    for label, kw in [("만료 뒤(과거 epoch)", dict(until=int(time.time()) - 1)),
+                      ("파일 epoch ≠ 기록 until", dict(until=fut, log_until=fut + 60)),
+                      ("기록 봉인 깨짐", dict(until=fut, extra_log="2026-10-06 09:10 KST | 승인 | P1-1 | - | - | 꾸민 줄\n")),
+                      ("봉인 없음", dict(until=fut, seal=False)),
+                      ("마지막 줄이 다시 시작", dict(until=fut, last_resume=True)),
+                      ("go 차례", dict(until=fut, go=True)),
+                      ("N 이 13(꼴 밖)", dict(until=fut, n=13)),
+                      ("파일이 두 줄(lib rl_pause_state 와 같게)", dict(until=fut, tail="x\n")),
+                      ("파일 둘째 줄이 빈 줄", dict(until=fut, tail="\n"))]:
+        proj = _pause_proj_042(**kw)
+        try:
+            _cases_042(res, proj, "F5 안 쉼: " + label, [(B, c) for c in closed])
+        finally:
+            rmtree_rw(proj)
+
+
+def check_pause_destroy_042b(res):
+    """보완(사장님 결정 S7-5·S7-6): 되돌릴 수 없는 지우기 8꼴과 이웃은 리팩토링 중(EXECUTE·CHECKUP)·멈춤 중 모두 막고 리팩토링 밖은 그대로 ·
+    멈춤 중 ssh 는 풀리되 원격 명령에 지우기 꼴이 있으면 막는다(문구 = S7-4 의 둘째 줄)"""
+    fut = int(time.time()) + 3600
+    destroy = ["fly apps destroy app -y", "aws s3 rb s3://bucket --force", "firebase hosting:disable", "netlify api deleteSite",
+               "terraform apply -destroy", "pnpm run db:fresh", "npm run db:push -- --force-reset", "kubectl -n prod delete deploy app",
+               "kubectl --context y delete pod x",
+               "flyctl apps destroy app", "aws s3 rm s3://b --recursive", "yarn db:fresh", "npx prisma db push --force-reset",
+               "firebase hosting:channel:delete x"]
+    open_pause = ["fly deploy", "aws s3 cp a s3://b/a", "firebase deploy", "netlify deploy --prod", "terraform apply", "pnpm run db:seed",
+                  "npm run db:push", "kubectl -n prod get pods", "kubectl -n prod rollout status deploy app"]
+    ssh_bad = ["ssh prod 'rm -rf /srv/app'", "ssh user@h \"cd /srv && rm -rf releases/*\"", "ssh h 'psql -c \"DROP DATABASE app\"'",
+               "ssh h docker compose down -v"]
+    ssh_ok = ["ssh prod 'systemctl restart app'", "ssh h 'tail -100 /var/log/app.log'", "scp build.tgz h:/srv/", "ssh h 'git pull && pm2 reload app'"]
+    need = "꼭 필요하면 사람이 터미널에서 직접 실행하게 안내하세요"
+    # 리팩토링 밖에서도 원래 막히던 두 꼴(DB 초기화·DROP — 앞선 규칙의 문구로 막힘)은 문구를 보지 않는다
+    always = {"npx prisma db push --force-reset", "ssh h 'psql -c \"DROP DATABASE app\"'"}
+    for ph in ("EXECUTE", "CHECKUP"):
+        proj = make_project(phase=ph)
+        try:
+            _cases_042(res, proj, "S7-5 리팩토링 중(%s) 지우기 → 막음" % ph, [(B, bash(c)) for c in destroy if c not in always], need=need)
+            _cases_042(res, proj, "S7-5 리팩토링 중(%s) 지우기(원래 막힘) → 막음" % ph, [(B, bash(c)) for c in destroy if c in always])
+        finally:
+            rmtree_rw(proj)
+    proj = _pause_proj_042(fut)
+    try:
+        _cases_042(res, proj, "S7-5 멈춤 중 지우기 → 막음", [(B, bash(c)) for c in destroy if c not in always], need=need)
+        _cases_042(res, proj, "S7-5 멈춤 중 지우기(원래 막힘) → 막음", [(B, bash(c)) for c in destroy if c in always])
+        _cases_042(res, proj, "S7-5 멈춤 중 배포·조회 → 통과", [(OK, bash(c)) for c in open_pause])
+        _cases_042(res, proj, "S7-6 멈춤 중 ssh 지우기 → 막음", [(B, bash(c)) for c in ssh_bad])
+        _cases_042(res, proj, "S7-6 멈춤 중 ssh·scp → 통과", [(OK, bash(c)) for c in ssh_ok])
+    finally:
+        rmtree_rw(proj)
+    # 리팩토링 밖(STATE 없음)은 기존과 같게 — 원래 어디서든 막히던 DB 초기화·DROP 두 꼴(always)만 빼고 통과
+    proj = make_project()
+    try:
+        _cases_042(res, proj, "S7-5·S7-6 리팩토링 밖 → 기존과 같게",
+                   [(B if c in always else OK, bash(c)) for c in destroy + open_pause + ssh_bad + ssh_ok])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_pause_push_042b(res):
+    """보완(사장님 결정 S7-7): 멈춤 중 push 는 풀리되 기본 가지로 들어가는 꼴(<무엇>:main · 기본 가지 이름 지정 · --all · --mirror)은
+    지금 가지와 상관없이 막는다. 기본 가지 = main·master + 저장소의 판정(origin/HEAD → …) · 저장소가 아닌 작업 폴더는 main·master 만 ·
+    보완(재검사 A2 X18): 받는 쪽을 적지 않은 꼴·HEAD·@ 는 지금 가지가 기본 가지 집합이면 막고, 작업 가지(feat/x)면 통과"""
+    fut = int(time.time()) + 3600
+    bad = ["git push origin HEAD:main", "git push origin feat/x:main", "git push origin HEAD:refs/heads/main", "git push --all origin",
+           "git push --mirror origin", "git push origin main", "git push origin master", "git push origin +HEAD:main", "git push origin :",
+           "git push origin \"HEAD:$B\"", "git push --branches origin", "git push origin HEAD:master"]
+    bare = ["git push", "git push origin", "git push -u origin HEAD", "git push origin HEAD", "git push origin @"]
+    good = ["git push origin feat/x", "git push origin HEAD:feat/y", "git push origin feat/x:feat/x", "git push origin feat/y"]
+    # 지금 가지 = 작업 가지(feat/x) → 이름 없는 꼴은 통과 / 지금 가지 = main(git init 기본값과 상관없이 이름을 main 으로) → 이름 없는 꼴도 막음
+    for label, br, bare_want in (("지금 가지 feat/x", "feat/x", OK), ("지금 가지 main", "main", B)):
+        proj = _pause_proj_042(fut)
+        try:
+            if br == "main":
+                git(proj, "branch", "-M", "main")
+            else:
+                git(proj, "checkout", "-qb", br)
+            _cases_042(res, proj, "S7-7 멈춤 중 기본 가지 직행(%s) → 막음" % label, [(B, bash(c)) for c in bad])
+            _cases_042(res, proj, "S7-7 멈춤 중 작업 가지 push(%s) → 통과" % label, [(OK, bash(c)) for c in good])
+            _cases_042(res, proj, "S7-7 멈춤 중 받는 쪽 없는 push(%s)" % label, [(bare_want, bash(c)) for c in bare])
+        finally:
+            rmtree_rw(proj)
+    # 저장소가 판정한 기본 가지(origin/HEAD → origin/develop)도 막는다
+    proj = _pause_proj_042(fut)
+    try:
+        git(proj, "remote", "add", "origin", "https://example.com/o/r.git")
+        git(proj, "update-ref", "refs/remotes/origin/develop", "HEAD")
+        git(proj, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+        _cases_042(res, proj, "S7-7 판정된 기본 가지(develop)", [(B, bash("git push origin HEAD:develop")), (B, bash("git push origin develop")),
+                                                         (OK, bash("git push origin HEAD:feat/y"))])
+    finally:
+        rmtree_rw(proj)
+    # 저장소가 아닌 작업 폴더 → main·master 글자만으로
+    proj = _pause_proj_042(fut)
+    other = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-norepo-"))
+    try:
+        _cases_042(res, proj, "S7-7 저장소 아닌 작업 폴더", [(B, bash("git push origin HEAD:main")), (B, bash("git push origin HEAD:master")),
+                                                       (OK, bash("git push origin HEAD:feat/y"))],
+                   extra={"cwd": str(other)})
+    finally:
+        rmtree_rw(proj)
+        rmtree_rw(other)
+
+
+def check_msgs_042(res):
+    """안내 3곳(새 대화 → 잠깐 멈춤 부탁): 울타리 차단 문구(파일 도구·셸 대상·코드 바꾸는 명령)"""
+    proj = make_project(phase="CHECKUP", allow=(".turn",))
+    try:
+        need = "/refactor:approve 잠깐 멈춤 1시간` 을 부탁하세요 — 새 대화를 열어도 이 폴더는 막힙니다"
+        _cases_042(res, proj, "안내 잠깐 멈춤", [(B, ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "x"})),
+                                              (B, bash("touch src/new.ts")), (B, bash("git commit -m x"))], need=need)
+    finally:
+        rmtree_rw(proj)
+    # 보완(검사 C 🟡): 멈춤으로 풀리는 일곱 규칙의 차단 문구 둘째 줄에도(리팩토링 중 · go 차례 아님)
+    proj = make_project(phase="EXECUTE")
+    try:
+        need = "평소 작업이면 사용자에게 `/refactor:approve 잠깐 멈춤 1시간` 을 부탁하세요(새 대화를 열어도 이 폴더는 막힙니다)."
+        _cases_042(res, proj, "안내 잠깐 멈춤(일곱 규칙)", [(B, bash("git push origin x")), (B, bash("git stash")), (B, bash("git switch other")),
+                                                       (B, bash("vercel --prod")), (B, bash("supabase db push")), (B, bash("prettier --write .")),
+                                                       (B, bash("echo x > tests/baseline/x.test.ts")), (B, bash("echo x > supabase/migrations/x.sql")),
+                                                       (B, ("Edit", {"file_path": "tests/baseline/money.test.ts", "old_string": "1", "new_string": "2"}))],
+                   need=need)
+    finally:
+        rmtree_rw(proj)
+
+
+WRAP_TRUE_042B = ["sh -c 'x'", 'bash -c "x"', "eval 'x'", "cmd /c x", "su -c x", "A; sh -c x", '"sh -c x"', "powershell.exe -c x",
+                  "busybox sh x", "./sh x", "sh", "zsh -c x", "tcsh x", "ssh host x", "pwsh -c x", "x|sh", "sh;", "(sh -c x)", "SH -c x", "Bash.EXE -c x"]
+WRAP_FALSE_042B = ["x.sh", "my-sh", "rsh x", "sh_x", "sh.old", "nosh", "shsh", "sh.exe.old", "script.sh", "a_bash b", "cmd2 x", "evaluate x",
+                   "ssh-keygen x", "awk -F'|' '{print $2}' run.sh", ""]
+
+
+def check_wrap_case_042b(res):
+    """0.4.2 W4 B: 문자열을 명령으로 실행하는 조각(sh -c '…' 등) 판정을 정규식 없이 case 로(맥 bash 3.2 정규식 엔진 TRE 충돌).
+    함수만 떼어 참/거짓 예시를 돌리고(guard 와 같이 nocasematch 켬), 울타리 프로젝트에서 sh -c '… | sponge' 류 막힘이 그대로인지 본다."""
+    import re
+    src = (HOOKS / "guard.sh").read_text(encoding="utf-8")
+    m = re.search(r"^wrap_hit\(\) \{\n.*?^\}\n", src, re.S | re.M)
+    res["total"] += 1
+    if not m or "=~" in m.group(0) or "RE_PH_WRAP" in src or 'if wrap_hit "$seg"; then' not in src:
+        res["fails"].append(("0.4.2 W4 wrap_hit 정규식 없음", "함수·사용 1곳·=~ 0", bool(m), "guard.sh", "", ""))
+        return
+    script = m.group(0) + 'shopt -s nocasematch\nwhile IFS= read -r l; do if wrap_hit "$l"; then echo 1; else echo 0; fi; done\n'
+    cases = [(c, "1") for c in WRAP_TRUE_042B] + [(c, "0") for c in WRAP_FALSE_042B]
+    r = subprocess.run([BASH, "-c", script], input=("\n".join(c for c, _ in cases) + "\n").encode("utf-8"), capture_output=True, timeout=60)
+    got = r.stdout.decode("utf-8", "replace").split()
+    for i, (c, want) in enumerate(cases):
+        res["total"] += 1
+        g = got[i] if i < len(got) else "?"
+        if g != want:
+            res["fails"].append(("0.4.2 W4 wrap_hit 예시", want, g, "bash", c, r.stderr.decode("utf-8", "replace")[:200]))
+    # 끝까지: 울타리(읽기 전용 단계 · go 차례)에서 래퍼 조각 안 파이프로 쓰는 꼴은 막히고, 래퍼가 아닌 x.sh 류는 헛자르지 않는다
+    proj = make_project(phase="CHECKUP", allow=(".turn",))
+    try:
+        _cases_042(res, proj, "W4 래퍼 조각 막힘 유지", [(B, bash("sh -c 'cat x | sponge src/app.ts'")), (B, bash("bash -c \"cat x | tee src/app.ts\"")),
+                                                     (B, bash("eval 'a=1; touch src/app.ts'")), (B, bash("(sh -c 'cat x | sponge src/app.ts')")),
+                                                     (B, bash("busybox sh -c 'cat x | tee src/app.ts'")), (B, bash("./sh -c 'cat x | tee src/app.ts'")),
+                                                     (OK, bash("awk -F'|' '{print $2}' run.sh")), (OK, bash("grep -c 'a;b' my-sh.txt"))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_run_retry_042b(res):
+    """0.4.2 W4 A: run.sh 는 guard 가 신호로 죽으면(맥 bash 3.2 TRE 충돌 139 등, 감시 KILL 137 제외) 같은 입력으로 한 번 다시 판정하고,
+    다시도 죽으면 막는다(2 + 안내). problems.log 에 '판정 중 멈춤(신호 N) → 재시도 / → 차단' 한 줄씩(명령·값 없음)."""
+    tmpd = pathlib.Path(tempfile.mkdtemp(prefix="runretry-"))
+    shutil.copytree(ROOT / "plugins/refactor", tmpd / "refactor")
+    g = tmpd / "refactor/hooks/guard.sh"
+    mark = (tmpd / "first").as_posix()
+    run_sh = (tmpd / "refactor/hooks/run.sh").as_posix()
+    plog = pathlib.Path(TEST_DATA) / "problems.log"
+    proj = make_project()
+    pl = json.dumps({"session_id": "t", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": str(proj)}).encode()
+    need = "판정 중 안전장치가 멈춰(신호 11) 막았습니다"
+
+    def lines(word):
+        if not plog.exists():
+            return 0
+        return sum(1 for ln in plog.read_text(encoding="utf-8").splitlines() if "| run.sh |" in ln and "guard 판정 중 멈춤(신호 11) → " + word in ln)
+
+    # 둘째 호출은 입력을 그대로 받았는지까지 본다(같은 입력 재공급) — 다르면 9
+    once = "#!/usr/bin/env bash\nif [ ! -e '" + mark + "' ]; then : > '" + mark + "'; kill -SEGV $$; fi\nin=$(cat)\ncase \"$in\" in *'\"command\": \"ls\"'*) ;; *) exit 9 ;; esac\nexit %s\n"
+    rows = [("1회 신호 → 다시 막음(42)", once % "42", B, 1, 0, False),
+            ("1회 신호 → 다시 통과(0)", once % "0", OK, 1, 0, False),
+            ("늘 신호 → 막음", "#!/usr/bin/env bash\nkill -SEGV $$\n", B, 1, 1, True),
+            ("정상 통과 → 기록 없음", "#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n", OK, 0, 0, False)]
+    try:
+        for label, body, want, n_re, n_blk, msg in rows:
+            lf(g, body)
+            pathlib.Path(mark).unlink(missing_ok=True)
+            r0, b0 = lines("재시도"), lines("차단")
+            r = run_hook([BASH, run_sh, "guard"], input=pl, capture_output=True, env=env_for(proj))
+            err = r.stderr.decode("utf-8", "replace")
+            res["total"] += 1
+            if r.returncode != want or (msg and (need not in err or "우회하지 말고" not in err)) or (not msg and "멈춰" in err):
+                res["fails"].append(("0.4.2 W4 run.sh 재시도 " + label, want, r.returncode, "guard", "", err[:300]))
+            res["total"] += 1
+            got = (lines("재시도") - r0, lines("차단") - b0)
+            if got != (n_re, n_blk):
+                res["fails"].append(("0.4.2 W4 run.sh 기록 " + label, (n_re, n_blk), got, "problems.log", "", ""))
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
+        shutil.rmtree(tmpd, ignore_errors=True)
 
 
 if __name__ == "__main__":

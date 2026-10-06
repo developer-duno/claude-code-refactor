@@ -52,6 +52,8 @@ for st in "$root"/docs/refactor/STATE.md "$root"/*/docs/refactor/STATE.md "$root
   allow=0; allow_steps=""
   for f in "$pdir"/docs/refactor/.allow-*; do
     [ -e "$f" ] || continue
+    # 0.4.2 F5: 멈춤 파일(.allow-pause)은 ⚠허용파일로 세지 않는다(멈춤 중이면 아래 ⏸ 표시 — 사람이 다시 시작·만료로 지움)
+    [ "${f##*/}" = .allow-pause ] && continue
     # 기준선 허용 파일에 단계 ID 가 적혀 있으면(0.3.2) 그 단계를 실행하는 동안만(0.3.3 — STATE.md current_step) 열린다(끝나면 저절로 닫힘) —
     # ⚠허용파일 대신 따로 표시. 빈(0바이트·공백만) 파일은 기준선 전부가 열려 저절로 안 닫힘(0.3.3)
     if [ "$have_lib" = 1 ] && [ "${f##*/}" = .allow-baseline-edit ]; then
@@ -67,6 +69,8 @@ for st in "$root"/docs/refactor/STATE.md "$root"/*/docs/refactor/STATE.md "$root
     fi
     allow=1
   done
+  [ "$have_lib" = 1 ] && [ -f "$pdir/docs/refactor/.allow-pause" ] && rl_pause_state "$pdir/docs/refactor" \
+    && allow_steps="${allow_steps:+$allow_steps }⏸멈춤($(rl_hm "$RL_PUNTIL")까지)"
   doneok=0
   [ "$have_lib" = 1 ] && rl_done_confirmed "$pdir/docs/refactor" && doneok=1
   # 실행 대기(승인됨·미완료·번호 하나, 승인 기록이 봉인 그대로) / 승인 대기 단계가 있나 — 상태 명령과 같은 기준

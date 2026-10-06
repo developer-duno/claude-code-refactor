@@ -285,11 +285,34 @@ AGO
     "  단계 이름만 바꿔 한 줄 그대로 실행합니다(다른 명령·래퍼와 섞지 않음): bash \"$rt/hooks/run.sh\" refactor-auto <단계> \"$proj\" $b_ $sid"
 }
 
+# 0.4.2 F5 잠깐 멈춤(docs/refactor/.allow-pause — /refactor:approve 잠깐 멈춤 이 만든다): 사람 입력마다 본다(알림 입력은 위에서 걸렀다).
+#   만료됐으면 지우고 이번 턴 컨텍스트(stdout)에 한 번 알린다(멈춤 중 바뀐 기준선·마이그레이션 포함 — 기록 줄은 남기지 않는다: 사람 입력이 아님).
+#   멈춤 중이면 PAUSED=1 — 아래 /refactor:go 는 go 표시를 만들지 않고 안내만 한다. 파일이 없으면 외부 명령 0
+PAUSED=0
+if [ -f "$rdir/.allow-pause" ] && load_lib; then
+  if rl_pause_state "$rdir"; then
+    PAUSED=1
+  elif [ "$RL_PST" = expired ]; then
+    p_h=$RL_PHEAD; p_u=$RL_PUNTIL
+    rm -f "$rdir/.allow-pause"
+    if [ ! -f "$rdir/.allow-pause" ]; then
+      printf '%s\n' "[Vibe Refactor] ⏸ 잠깐 멈춤 시간($(rl_hm "$p_u") 까지)이 지나 안전장치가 다시 켜졌습니다."
+      rl_pause_changes "$proj" "$p_h"
+      rl_pause_branch "$proj" "$p_h"
+    fi
+  fi
+fi
+
 re_go='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt]|$)'
 re_again='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+다시(([[:space:]]|\\[nrt])+([A-Za-z_]+))?'
 re_bundle='^[[:space:]]*/refactor:go([[:space:]]|\\[nrt])+묶음(([[:space:]]|\\[nrt])|$)'
 re_slash='^[[:space:]]*/'
 if [[ $prompt =~ $re_go ]]; then
+  if [ "$PAUSED" = 1 ]; then   # 0.4.2 F5: 멈춤 중에는 리팩토링 차례를 열지 않는다(go 표시 없음 · 이 세션의 옛 표시도 지움)
+    rm -f "$T"
+    printf '%s\n' "[Vibe Refactor] ⏸ 잠깐 멈춤 중($(rl_hm "$RL_PUNTIL") 까지) — \`/refactor:approve 다시 시작\` 뒤에 /refactor:go 를 다시 입력하세요(이번 /refactor:go 로는 리팩토링을 이어 가지 않았습니다 — Claude 는 이 안내를 사용자에게 전하고 기다립니다)."
+    exit 0
+  fi
   [ -d "$rdir" ] || mkdir -p "$rdir" 2>/dev/null || exit 0
   # 느린 계산(승인 재설정·실행 대기 계산·snapshot)과 정리 전에 닫힌 표시(ready ? = 실행 대기를 아직 모름)를 먼저 둔다 — 그 뒤
   # Claude Code 가 시간 초과로 이 훅을 끊어도 표시가 남아 읽기 전용 울타리·안전 실행기 규칙은 켜지고, 단계 실행(EXECUTE)의

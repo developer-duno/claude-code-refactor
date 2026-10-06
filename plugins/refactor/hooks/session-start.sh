@@ -46,8 +46,14 @@ printf '%s' "$front"
 printf '규칙: 승인은 사용자가 /refactor:approve 로만 한다(근거는 APPROVALS.log — 계획서 체크 표시가 아님) · 푸시·PR 합치기는 사용자가 입력창 명령으로 한다(작업 가지 push 는 사용자가 /refactor:approve 푸시 로 허락한 차례에만 · 합치기는 /refactor:approve 합치기 · 합친 뒤 새 작업 가지는 /refactor:approve 새 가지) · 배포·운영 DB는 사람이 한다 · 기준선 커밋과 단계 커밋은 /refactor:go 가 그 파일만 한다 · 테스트·빌드는 안전 실행기(refactor-safe-run)로 한다 · 비밀값은 출력하지 않는다 · [refactor 안전장치] 차단은 우회하지 말고 보고한다.\n'
 printf '이어서 하려면 사용자가 /refactor:go, 현황만 보려면 /refactor:status 를 실행한다. 사용자가 이어서 하자고 하면 이 명령을 안내한다.\n'
 
+# 0.4.2 F5 잠깐 멈춤 중(안전장치와 같은 조건)이면 한 줄. 멈춤 파일(.allow-pause)은 아래 "허용 파일이 남아 있음" 알림에서 뺀다(사람이 다시 시작·만료로 지움)
+if [ -f "$proj/docs/refactor/.allow-pause" ] && [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$REFACTOR_ROOT/scripts/refactor-lib.sh" ]; then
+  eval "$(tr -d '\r' < "$REFACTOR_ROOT/scripts/refactor-lib.sh")"
+  rl_pause_state "$proj/docs/refactor" && printf '⏸ 잠깐 멈춤 중 — %s 에 안전장치가 다시 켜집니다(일찍 끝내려면 사용자가 /refactor:approve 다시 시작 · 그 전에는 /refactor:go 로 이어 가지 않는다).\n' "$(rl_hm "$RL_PUNTIL")"
+fi
 for f in "$proj"/docs/refactor/.allow-*; do
   [ -e "$f" ] || continue
+  [ "${f##*/}" = .allow-pause ] && continue
   printf '[주의] 허용 파일이 남아 있습니다: docs/refactor/%s — 그 작업이 끝났고 커밋했다면 사용자에게 지우라고 알려 주세요(터미널에서 rm "%s" — CLI 라면 입력창에 ! rm "…" 도 됨).\n' "${f##*/}" "$f"
 done
 exit 0
