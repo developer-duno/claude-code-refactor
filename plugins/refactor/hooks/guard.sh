@@ -1054,19 +1054,21 @@ iw_one() {
 interp_record_writes() {
   IRW=""
   has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
-  local IRC=${lr0:-$lr} IRU=0 t m b IFS=$' \t\n'
-  local -a IRD=() toks=()
+  local IRC=${lr0:-$lr} IRU=0 t m b w p IFS=$' \t\n' IRS_OK=0
+  local -a IRD=() toks=() IRS=() IRV_ID=() IRV_EX=()
   # 따옴표 앞 역슬래시(node -e "fs.cpSync(\"a\",\"b\")")는 떼고 본다
   IRC=${IRC//"$BS$Q"/$Q}; IRC=${IRC//"$BS'"/\'}
   # 찾을 호출: <글자>|<방식> — 2 = 둘째 인자(통째) · f = 둘째 인자(파일 복사: 있는 폴더면 그 안의 원본 이름) · R = 인자 하나면 첫째·둘이면 둘째 ·
   #   X = 첫째 또는 path=(없으면 지금 폴더) · U = 둘째 또는 extract_dir=(없으면 지금 폴더) · E = 둘째 또는 path=(없으면 안 봄) · F = 인자를 못 가림(②로)
   toks=('shutil.copy(|f' 'shutil.copy2(|f' 'shutil.copyfile(|f' 'shutil.move(|f' 'shutil.copytree(|2' 'shutil.unpack_archive(|U'
         '.extractall(|X' '.extract(|E' 'os.replace(|2' 'os.rename(|2' '.rename(|R'
-        'cpSync(|2' 'fs.cp(|2' 'promises.cp(|2' ').cp(|2' 'copyFileSync(|f' '.copyFile(|f' 'renameSync(|2'
+        'cpSync(|2' '.cp(|2' 'copyFileSync(|f' '.copyFile(|f' 'renameSync(|2'
         'cp_r(|2' 'FileUtils.cp(|f' 'FileUtils.mv(|f' 'FileUtils.copy_entry(|2' 'FileUtils.cp_r |F' 'FileUtils.cp |F' 'FileUtils.mv |F')
   case "$IRC" in *'from shutil import'*) toks+=('=copy(|f' '=copy2(|f' '=copyfile(|f' '=move(|f' '=copytree(|2' '=unpack_archive(|U') ;; esac
   case "$IRC" in *'File::Copy'*) toks+=('=copy(|f' '=move(|f' 'File::Copy::copy(|f' 'File::Copy::move(|f') ;; esac
   has "$lr" "${S}php[[:space:]]" && toks+=('=copy(|f' '=rename(|2')
+  # W1fix4 I-3: perl 기본 rename( · File::Copy copy(·move( (-MFile::Copy 꼴도)
+  has "$lr" "${S}perl[[:space:]]" && toks+=('=rename(|2' '=copy(|f' '=move(|f')
   shopt -u nocasematch
   for t in "${toks[@]}"; do irw_find "${t%|*}" "${t##*|}"; done
   shopt -s nocasematch
@@ -1091,15 +1093,24 @@ interp_record_writes() {
   done
   [ "$IRU" = 1 ] || return 1
   # ② 목적지를 못 푼 호출 — 코드 안 모든 따옴표 글자(' " `)
-  local s=$IRC p k=0
+  local s=$IRC k=0
   while [ -n "$s" ]; do
     case "$s" in *[\"\'\`]*) p=${s%%[\"\'\`]*}; s=${s#*[\"\'\`]} ;; *) p=$s; s="" ;; esac
-    case "$p" in ''|[[:space:]]*|*[[:space:]]|*"$NL"*|*[\;=,]*) continue ;; esac
-    case "$p" in *[[:alnum:]]*) ;; *) continue ;; esac
-    case "$p" in [A-Za-z]:|[A-Za-z]:/) continue ;; esac
-    k=$((k + 1))
-    [ "$k" -gt 50 ] && { IRW=over; return 0; }
-    cpd_hit1 "$p" rec && { IRW=hit; return 0; }
+    if case "$p" in ''|[[:space:]]*|*[[:space:]]|*"$NL"*|*[\;=,]*|[A-Za-z]:|[A-Za-z]:/) false ;; *[[:alnum:]]*) true ;; *) false ;; esac; then
+      k=$((k + 1))
+      [ "$k" -gt 50 ] && { IRW=over; return 0; }
+      cpd_hit1 "$p" rec && { IRW=hit; return 0; }
+    fi
+    # W1fix4 I-1(A2 🟡★): 따옴표 밖 낱말도 — 명령 꼬리 인자(… sys.argv[2])" /tmp/x docs/refactor)가 목적지일 수 있다.
+    #   기록 폴더·상위·지금 폴더를 가리킬 수 있는 꼴만(세지 않음). 목적지를 푼 호출뿐이면(IRU=0) 여기 오지 않는다
+    case "$p" in *[[:space:]\(\),\;=]*) ;; *) continue ;; esac
+    p=${p//[(),;=\[\]\{\}]/ }
+    set -f
+    for w in $p; do
+      case "$w" in *docs*|*refactor*|*state.md*|*approv*|*.turn*|*.allow*|*execution_log*|.|./|..|../|../*|"$proj"|"$proj"/) ;; *) continue ;; esac
+      cpd_hit1 "$w" rec && { set +f; IRW=hit; return 0; }
+    done
+    set +f
   done
   return 1
 }
@@ -1115,10 +1126,13 @@ irw_find() {
       case "$c" in [A-Za-z0-9_\$]) continue ;; esac
       [ "$bare" = 1 ] && [ "$c" = . ] && continue
     fi
+    [ "$tok" = .cp\( ] && case "$pre" in *FileUtils) continue ;; esac   # FileUtils.cp( 는 파일 복사(f) 줄이 본다
     [ "$mode" = F ] && { IRU=1; continue; }
     irw_args "$rest" || { IRU=1; continue; }
     irw_dest "$mode"
   done
+  # W1fix4 I-4: 이름과 ( 사이에 공백(shutil.copy (…))이면 인자를 가리지 않고 ② 길로
+  case "$mode:$tok" in [2fXU]:*\() case "$IRC" in *"${tok%\(} ("*) IRU=1 ;; esac ;; esac
 }
 # '(' 바로 뒤 글 → IA(맨 위 쉼표로 나눈 인자 글). 따옴표 안·괄호 안 쉼표는 나누지 않는다. 닫는 ) 를 4000 글자 안에서 못 찾으면 1
 irw_args() {
@@ -1169,7 +1183,7 @@ irw_dest() {
   if [ -n "$kw" ]; then d=$kw
   else
     case "$mode" in
-      2|f) [ "$n" -ge 2 ] && d=${P[1]} ;;
+      2|f) if [ "$n" -ge 2 ]; then d=${P[1]}; else IRU=1; return 0; fi ;;   # W1fix4 I-4: *args · 인자 모자람 = 못 품
       R) if [ "$n" -ge 2 ]; then d=${P[1]}; elif [ "$n" = 1 ]; then d=${P[0]}; fi ;;
       X) if [ "$n" -ge 1 ]; then d=${P[0]}; else IRD+=("cwd"); return 0; fi ;;
       U) if [ "$n" -ge 2 ]; then d=${P[1]}; else IRD+=("cwd"); return 0; fi ;;
@@ -1229,18 +1243,45 @@ irw_val() {
       [ "$2" = 0 ] || return 0
       case "$v" in [A-Za-z_]*) ;; *) return 0 ;; esac
       case "$v" in *[!A-Za-z0-9_]*) return 0 ;; esac
-      id=$v; rest=$IRC
-      while :; do
-        case "$rest" in *"$id"*) ;; *) break ;; esac
-        pre=${rest%%"$id"*}; rest=${rest#*"$id"}
-        if [ -n "$pre" ]; then c=${pre:$((${#pre} - 1))}; case "$c" in [A-Za-z0-9_.\$]) continue ;; esac; fi
-        case "$rest" in [A-Za-z0-9_]*) continue ;; esac
-        a=${rest#"${rest%%[![:space:]]*}"}
-        case "$a" in =[!=]*) a=${a#=}; a=${a%%[;$NL]*}; e=$a ;; esac
-      done
-      [ -n "$e" ] && irw_val "$e" 1 ;;
+      irw_assign "$v"
+      [ -n "$AE" ] && irw_val "$AE" 1 ;;
   esac
   return 0
+}
+# 변수 하나의 값 식 → AE(못 풀면 빈 값). W1fix4 I-5: 대입이 꼭 한 번이고 다른 묶기(for·with/import/except … as·:=·+= 같은 고쳐 쓰기·
+#   a, b = … 여러 이름 대입)가 없을 때만. I-7: 문장 나누기(; · 줄바꿈)와 이름별 결과는 한 번만 계산해 둔다(IRS · IRV_ID/IRV_EX)
+irw_assign() {
+  local id=$1 i st x n=0 e="" bind=0 lhs
+  for ((i = 0; i < ${#IRV_ID[@]}; i++)); do [ "${IRV_ID[$i]}" = "$id" ] && { AE=${IRV_EX[$i]}; return 0; }; done
+  if [ "$IRS_OK" = 0 ]; then
+    x=${IRC//;/$NL}
+    while [ -n "$x" ]; do
+      st=${x%%"$NL"*}; if [ "$st" = "$x" ]; then x=""; else x=${x#*"$NL"}; fi
+      st=${st#"${st%%[![:space:]]*}"}; [ -n "$st" ] && IRS+=("$st")
+    done
+    IRS_OK=1
+  fi
+  for st in "${IRS[@]}"; do
+    case "$st" in *"$id"*) ;; *) continue ;; esac
+    case "$st" in const\ *|let\ *|var\ *) st=${st#* }; st=${st#"${st%%[![:space:]]*}"} ;; esac
+    case "$st" in
+      "for $id "*|"for $id,"*|"for ($id "*|"for (const $id "*|"for (let $id "*|"for (var $id "*|*" as $id"|*" as $id"[:,\)\ ]*|*"$id :="*|*"$id:="*) bind=1 ;;
+    esac
+    case "$st" in
+      "$id"=*|"$id"[[:space:]]*)
+        lhs=${st#"$id"}; lhs=${lhs#"${lhs%%[![:space:]]*}"}
+        case "$lhs" in
+          =[!=]*) n=$((n + 1)); e=${lhs#=} ;;
+          [-+*/%\&\|^@:]=*|'**='*|'//='*|'>>='*|'<<='*) bind=1 ;;
+          ,*) bind=1 ;;
+        esac ;;
+      [A-Za-z_\(\[]*,*=*)
+        lhs=${st%%=*}
+        case "$lhs" in *[!A-Za-z0-9_,\ \(\)\[\]]*) ;; *) case ",${lhs//[ ()\[\]]/,}," in *",$id,"*) bind=1 ;; esac ;; esac ;;
+    esac
+  done
+  { [ "$bind" = 0 ] && [ "$n" = 1 ]; } || e=""
+  IRV_ID+=("$id"); IRV_EX+=("$e"); AE=$e
 }
 # PowerShell Copy-Item·Move-Item·Expand-Archive(별명 cpi·mi) — -Destination·-DestinationPath(앞 글자만 적은 꼴·-D:값 도) 값 · 아니면 둘째 위치 인자 · 없으면 지금 폴더
 irw_ps() {
@@ -1259,10 +1300,12 @@ irw_ps() {
     dest=""; pos=0; sk=""
     for ((i = i + 1; i < n; i++)); do
       w=${W[$i]}
-      if [ -n "$sk" ]; then [ "$sk" = d ] && dest=$w; sk=""; continue; fi
+      if [ -n "$sk" ]; then [ "$sk" = d ] && [ -z "$dest" ] && dest=$w; sk=""; continue; fi
+      # W1fix4 I-6: -Destination 줄임은 -de* 만(-Debug 는 값 없는 스위치) · 값 없는 스위치는 건너뜀 · 첫 목적지 값 우선
       case "$w" in
-        -d*:*) dest=${w#*:} ;;
-        -d*) sk=d ;;
+        -debug|-debug:*|-recurse|-force|-container|-passthru|-whatif|-confirm|-verbose) ;;
+        -de*:*) [ -z "$dest" ] && dest=${w#*:} ;;
+        -de*) sk=d ;;
         -path|-literalpath|-lp|-pspath|-filter|-include|-exclude|-credential|-tosession|-fromsession) sk=s ;;
         -*) ;;
         *) pos=$((pos + 1)); [ "$pos" = 2 ] && [ -z "$dest" ] && dest=$w ;;

@@ -6295,6 +6295,10 @@ def check_restore_copy_043(res):
             one("W1fix3 막음", B, bash(c), need=W_UNPACK)
         for c in H_PASS_043:
             one("W1fix3 통과", OK, bash(c))
+        for c in I_BLOCK_043:
+            one("W1fix4 막음", B, bash(c), need=W_UNPACK)
+        for c in I_PASS_043:
+            one("W1fix4 통과", OK, bash(c))
         for c in G_BLOCK_043:
             one("W1fix2 G-3 막음", B, bash(c), need=W_UNPACK)
         for c in G_PASS_043:
@@ -6374,6 +6378,28 @@ H_PASS_043 = [   # W1fix3 H-1(검사 C 🟠1 실측 6꼴)·H-2·H-3·H-7①·A-2
     "python -c \"import shutil; shutil.copytree('a','b')\"",
     "python -c \"d={}; e=d.copy(); L=" + _L55 + "\"",
     "node -e \"console.log(`docs`)\"",
+]
+I_BLOCK_043 = [   # W1fix4 (재검사 A2 🟡★·보안)
+    "python -c \"import shutil,sys; shutil.copytree(sys.argv[1], sys.argv[2])\" /tmp/x docs/refactor",            # I-1
+    "node -e \"require('fs').cpSync(process.argv[1], process.argv[2], {recursive:true})\" /tmp/x docs/refactor",
+    "node -e \"require('fs/promises').cp('/tmp/x','docs/refactor',{recursive:true})\"",                             # I-2
+    "node -e \"const fsp=require('fs/promises'); fsp.cp('/tmp/x','docs/refactor',{recursive:true})\"",
+    "perl -e \"rename('/tmp/a','docs/refactor/STATE.md')\"",                                                       # I-3
+    "perl -MFile::Copy -e \"copy('/tmp/a','docs/refactor/STATE.md')\"",
+    "python -c \"import shutil; shutil.copy('a','b'); shutil.copytree(*a)\" /tmp/x docs/refactor",                 # I-4
+    "python -c \"import shutil; shutil.copy('a','b'); shutil.copytree ('/tmp/x', 'docs/refactor')\"",
+    "python -c \"import shutil; d='/tmp/y'; d='docs/refactor'; shutil.copytree('/tmp/x', d)\"",                    # I-5
+    "python3 - <<'EOF'\nimport shutil\nfor d in ['docs/refactor']:\n    shutil.copytree('/tmp/x', d)\nEOF",
+    "pwsh -c \"Copy-Item -Recurse -Debug /tmp/x docs/refactor\"",                                                  # I-6
+    "pwsh -c \"Copy-Item /tmp/x -Dest docs/refactor\"",
+]
+I_PASS_043 = [
+    "python -c \"import shutil,sys; shutil.copytree(sys.argv[1], sys.argv[2])\" /tmp/x /tmp/y",                    # I-1
+    "node -e \"require('fs/promises').cp('dist','out',{recursive:true})\"",                                         # I-2
+    "perl -e \"rename('/tmp/a','/tmp/b')\"",                                                                        # I-3
+    "python -c \"import shutil; d='/tmp/y'; shutil.copytree('/tmp/x', d)\"",                                        # I-5
+    "pwsh -c \"Copy-Item docs/refactor/REPORT.md /tmp/x\"", "pwsh -c \"Copy-Item -Recurse -Force /tmp/x /tmp/y\"",  # I-6
+    "ruby -e \"require 'fileutils'; FileUtils.cp('README.md','docs')\"",
 ]
 F5_PASS_043 = ["python -c \"print('1.2.3'.replace('.', '_'))\"",
                "python -c \"import json; print('.'.join(['a','b']).replace('a','c'))\"",
