@@ -870,6 +870,8 @@ def main():
     check_sed_write_042(res)
     check_doc_edit_042(res)
     check_pause_042(res)
+    check_pause_destroy_042b(res)
+    check_pause_push_042b(res)
     check_msgs_042(res)
 
     res["total"] += 1
@@ -5996,6 +5998,86 @@ def check_pause_042(res):
             _cases_042(res, proj, "F5 안 쉼: " + label, [(B, c) for c in closed])
         finally:
             rmtree_rw(proj)
+
+
+def check_pause_destroy_042b(res):
+    """보완(사장님 결정 S7-5·S7-6): 되돌릴 수 없는 지우기 8꼴과 이웃은 리팩토링 중(EXECUTE·CHECKUP)·멈춤 중 모두 막고 리팩토링 밖은 그대로 ·
+    멈춤 중 ssh 는 풀리되 원격 명령에 지우기 꼴이 있으면 막는다(문구 = S7-4 의 둘째 줄)"""
+    fut = int(time.time()) + 3600
+    destroy = ["fly apps destroy app -y", "aws s3 rb s3://bucket --force", "firebase hosting:disable", "netlify api deleteSite",
+               "terraform apply -destroy", "pnpm run db:fresh", "npm run db:push -- --force-reset", "kubectl -n prod delete deploy app",
+               "kubectl --context y delete pod x",
+               "flyctl apps destroy app", "aws s3 rm s3://b --recursive", "yarn db:fresh", "npx prisma db push --force-reset",
+               "firebase hosting:channel:delete x"]
+    open_pause = ["fly deploy", "aws s3 cp a s3://b/a", "firebase deploy", "netlify deploy --prod", "terraform apply", "pnpm run db:seed",
+                  "npm run db:push", "kubectl -n prod get pods", "kubectl -n prod rollout status deploy app"]
+    ssh_bad = ["ssh prod 'rm -rf /srv/app'", "ssh user@h \"cd /srv && rm -rf releases/*\"", "ssh h 'psql -c \"DROP DATABASE app\"'",
+               "ssh h docker compose down -v"]
+    ssh_ok = ["ssh prod 'systemctl restart app'", "ssh h 'tail -100 /var/log/app.log'", "scp build.tgz h:/srv/", "ssh h 'git pull && pm2 reload app'"]
+    need = "꼭 필요하면 사람이 터미널에서 직접 실행하게 안내하세요"
+    # 리팩토링 밖에서도 원래 막히던 두 꼴(DB 초기화·DROP — 앞선 규칙의 문구로 막힘)은 문구를 보지 않는다
+    always = {"npx prisma db push --force-reset", "ssh h 'psql -c \"DROP DATABASE app\"'"}
+    for ph in ("EXECUTE", "CHECKUP"):
+        proj = make_project(phase=ph)
+        try:
+            _cases_042(res, proj, "S7-5 리팩토링 중(%s) 지우기 → 막음" % ph, [(B, bash(c)) for c in destroy if c not in always], need=need)
+            _cases_042(res, proj, "S7-5 리팩토링 중(%s) 지우기(원래 막힘) → 막음" % ph, [(B, bash(c)) for c in destroy if c in always])
+        finally:
+            rmtree_rw(proj)
+    proj = _pause_proj_042(fut)
+    try:
+        _cases_042(res, proj, "S7-5 멈춤 중 지우기 → 막음", [(B, bash(c)) for c in destroy if c not in always], need=need)
+        _cases_042(res, proj, "S7-5 멈춤 중 지우기(원래 막힘) → 막음", [(B, bash(c)) for c in destroy if c in always])
+        _cases_042(res, proj, "S7-5 멈춤 중 배포·조회 → 통과", [(OK, bash(c)) for c in open_pause])
+        _cases_042(res, proj, "S7-6 멈춤 중 ssh 지우기 → 막음", [(B, bash(c)) for c in ssh_bad])
+        _cases_042(res, proj, "S7-6 멈춤 중 ssh·scp → 통과", [(OK, bash(c)) for c in ssh_ok])
+    finally:
+        rmtree_rw(proj)
+    # 리팩토링 밖(STATE 없음)은 기존과 같게 — 원래 어디서든 막히던 DB 초기화·DROP 두 꼴(always)만 빼고 통과
+    proj = make_project()
+    try:
+        _cases_042(res, proj, "S7-5·S7-6 리팩토링 밖 → 기존과 같게",
+                   [(B if c in always else OK, bash(c)) for c in destroy + open_pause + ssh_bad + ssh_ok])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_pause_push_042b(res):
+    """보완(사장님 결정 S7-7): 멈춤 중 push 는 풀리되 기본 가지로 들어가는 꼴(<무엇>:main · 기본 가지 이름 지정 · --all · --mirror)은
+    지금 가지와 상관없이 막는다. 기본 가지 = main·master + 저장소의 판정(origin/HEAD → …) · 저장소가 아닌 작업 폴더는 main·master 만"""
+    fut = int(time.time()) + 3600
+    bad = ["git push origin HEAD:main", "git push origin feat/x:main", "git push origin HEAD:refs/heads/main", "git push --all origin",
+           "git push --mirror origin", "git push origin main", "git push origin master", "git push origin +HEAD:main", "git push origin :",
+           "git push origin \"HEAD:$B\"", "git push --branches origin"]
+    good = ["git push origin feat/x", "git push -u origin HEAD", "git push", "git push origin HEAD:feat/y", "git push origin feat/x:feat/x"]
+    for label, br in (("지금 가지 feat/x", "feat/x"), ("지금 가지 기본", None)):
+        proj = _pause_proj_042(fut)
+        try:
+            if br:
+                git(proj, "checkout", "-qb", br)
+            _cases_042(res, proj, "S7-7 멈춤 중 기본 가지 직행(%s) → 막음" % label, [(B, bash(c)) for c in bad])
+            _cases_042(res, proj, "S7-7 멈춤 중 작업 가지 push(%s) → 통과" % label, [(OK, bash(c)) for c in good])
+        finally:
+            rmtree_rw(proj)
+    # 저장소가 판정한 기본 가지(origin/HEAD → origin/develop)도 막는다
+    proj = _pause_proj_042(fut)
+    try:
+        git(proj, "remote", "add", "origin", "https://example.com/o/r.git")
+        git(proj, "update-ref", "refs/remotes/origin/develop", "HEAD")
+        git(proj, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+        _cases_042(res, proj, "S7-7 판정된 기본 가지(develop)", [(B, bash("git push origin HEAD:develop")), (B, bash("git push origin develop")),
+                                                         (OK, bash("git push origin HEAD:feat/y"))])
+    finally:
+        rmtree_rw(proj)
+    # 저장소가 아닌 작업 폴더 → main·master 글자만으로
+    proj = _pause_proj_042(fut)
+    other = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-norepo-"))
+    try:
+        _cases_042(res, proj, "S7-7 저장소 아닌 작업 폴더", [(B, bash("git push origin HEAD:main")), (OK, bash("git push origin HEAD:feat/y"))],
+                   extra={"cwd": str(other)})
+    finally:
+        rmtree_rw(proj)
+        rmtree_rw(other)
 
 
 def check_msgs_042(res):

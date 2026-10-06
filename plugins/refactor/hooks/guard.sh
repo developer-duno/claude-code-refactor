@@ -1678,6 +1678,32 @@ br_ref() {
   [ "$BR_S" = "$BR_T" ] && BR_S=""
   return 0
 }
+# 기본 가지 고르기(br_judge_in 에서 옮김 — 0.4.2 S7-7 의 멈춤 중 push 판정도 같이 쓴다). 부르는 쪽의 local 을 그대로 쓰고 바꾼다:
+#   읽기 $out(참조 목록 — br_ref 꼴) · $origin(1 = origin 원격 있음) / 쓰기 o · bref · boid · btree · bshort · bname(못 찾으면 bref 빈 값)
+br_pick_default() {
+  if [ "$origin" = 1 ]; then
+    # origin/HEAD 의 %(symref) 는 심볼릭을 끝까지 따라간 대상이다(origin/HEAD → origin/develop → refs/heads/x 면 refs/heads/x) —
+    #   그 대상이 origin 아래가 아니면 기준으로 쓰지 않는다. 그래서 대상 자체가 심볼릭인 경우는 따로 볼 필요가 없다(git 호출을 늘리지 않음)
+    if br_ref refs/remotes/origin/HEAD; then
+      case "$BR_S" in refs/remotes/origin/HEAD) ;; refs/remotes/origin/?*) bref=$BR_S; boid=$BR_O; btree=$BR_T ;; esac
+    fi
+    for o in main master; do
+      [ -n "$bref" ] && break
+      br_ref refs/remotes/origin/$o || continue
+      [ -n "$BR_S" ] && continue                      # 그 자체로 심볼릭(git symbolic-ref refs/remotes/origin/main refs/heads/x) — 기준이 아니다
+      bref=refs/remotes/origin/$o; boid=$BR_O; btree=$BR_T
+    done
+    bshort=${bref#refs/remotes/}; bname=${bref#refs/remotes/origin/}
+  else
+    for o in main master; do
+      [ -n "$bref" ] && break
+      br_ref refs/heads/$o || continue
+      [ -n "$BR_S" ] && continue                      # 그 자체로 심볼릭(git symbolic-ref refs/heads/main refs/heads/x) — 기준이 아니다
+      bref=refs/heads/$o; boid=$BR_O; btree=$BR_T
+    done
+    bshort=${bref#refs/heads/}; bname=$bshort
+  fi
+}
 br_judge_in() {
   BRV=no
   local why="한 줄 삭제 명령이 아님" s=${cmd0:-} rest k=0 i=0 cdp="" cp="" w o del=0 force=0 names="" pats="" n nn=0 loc out out2 rc
@@ -1778,28 +1804,7 @@ br_judge_in() {
   br_cant "시간 초과"
   [ $((SECONDS - t0)) -gt 15 ] && return 0
   # 기본 가지
-  if [ "$origin" = 1 ]; then
-    # origin/HEAD 의 %(symref) 는 심볼릭을 끝까지 따라간 대상이다(origin/HEAD → origin/develop → refs/heads/x 면 refs/heads/x) —
-    #   그 대상이 origin 아래가 아니면 기준으로 쓰지 않는다. 그래서 대상 자체가 심볼릭인 경우는 따로 볼 필요가 없다(git 호출을 늘리지 않음)
-    if br_ref refs/remotes/origin/HEAD; then
-      case "$BR_S" in refs/remotes/origin/HEAD) ;; refs/remotes/origin/?*) bref=$BR_S; boid=$BR_O; btree=$BR_T ;; esac
-    fi
-    for o in main master; do
-      [ -n "$bref" ] && break
-      br_ref refs/remotes/origin/$o || continue
-      [ -n "$BR_S" ] && continue                      # 그 자체로 심볼릭(git symbolic-ref refs/remotes/origin/main refs/heads/x) — 기준이 아니다
-      bref=refs/remotes/origin/$o; boid=$BR_O; btree=$BR_T
-    done
-    bshort=${bref#refs/remotes/}; bname=${bref#refs/remotes/origin/}
-  else
-    for o in main master; do
-      [ -n "$bref" ] && break
-      br_ref refs/heads/$o || continue
-      [ -n "$BR_S" ] && continue                      # 그 자체로 심볼릭(git symbolic-ref refs/heads/main refs/heads/x) — 기준이 아니다
-      bref=refs/heads/$o; boid=$BR_O; btree=$BR_T
-    done
-    bshort=${bref#refs/heads/}; bname=$bshort
-  fi
+  br_pick_default
   br_cant "기본 가지를 못 찾음"
   [ -n "$bref" ] && [ -n "$boid" ] && [ -n "$btree" ] || return 0
   for n in $names; do
@@ -2066,6 +2071,22 @@ hv_deploy() {
     has "$t" "${S}gh[[:space:]]+pr${ghr}[[:space:]]+merge" && block "$MSG_PMERGE" "$MSG_PMERGE2"
     if has "$t" "${S}(heroku[[:space:]]+(pg:reset|apps:destroy)([^A-Za-z0-9]|$)|(netlify|ntl)[[:space:]]+sites:delete([^A-Za-z0-9]|$)|kubectl[[:space:]]+delete|wrangler[[:space:]]+pages[[:space:]]+deployment[[:space:]]+delete|gh[[:space:]]+release${ghr}[[:space:]]+delete|docker(-compose|[[:space:]]+compose)[^;&|]*[[:space:]]down[^;&|]*[[:space:]](-v|--volumes)([[:space:]]|$)|git[[:space:]]+push[^;&|]*[[:space:]]--prune([[:space:]=\"')]|$)|(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?[a-z0-9_:-]*(db|prisma|supabase|drizzle)[:_-](reset|drop))" \
       || has "$t" '(^|[[:space:]:])db:(reset|drop|wipe|purge)([[:space:]]|$)'; then
+      block "$MSG_PDEL" "$MSG_PDEL2"
+    fi
+  fi
+  # 0.4.2 보완(사장님 결정 S7-5): 되돌릴 수 없는 지우기 8꼴과 이웃 — 앱·버킷·호스팅·사이트 지우기, 인프라 통째 지우기, DB 새로 만들기·강제 초기화,
+  #   옵션이 하위 명령 앞에 온 kubectl delete(-n x · --context y). 리팩토링 중이면 멈춤 중에도·평소에도 막는다(문구는 S7-4 와 같은 둘째 줄)
+  local xo="([[:space:]]+-[^[:space:];&|]*([[:space:]]+[^-[:space:];&|][^[:space:];&|]*)?)*"
+  if has "$t" "${S}((fly|flyctl)[[:space:]]+((apps?)[[:space:]]+)?(destroy|delete)([^A-Za-z0-9]|$)|aws${xo}[[:space:]]+s3[[:space:]]+rb([^A-Za-z0-9]|$)|aws${xo}[[:space:]]+s3[[:space:]]+rm[[:space:]][^;&|]*--recursive|aws${xo}[[:space:]]+s3api[[:space:]]+delete-bucket([^A-Za-z0-9]|$)|firebase[^;&|]*[[:space:]](hosting:(disable|channel:delete|sites:delete)|functions:delete|firestore:delete|database:remove)([^A-Za-z0-9:]|$)|(netlify|ntl)[[:space:]]+api[[:space:]]+[\"']?delete|(terraform|tofu)[^;&|]*[[:space:]]apply[^;&|]*[[:space:]]-{1,2}destroy([[:space:]=\"']|$)|kubectl${xo}[[:space:]]+delete([[:space:]]|$)|(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?[a-z0-9_:-]*(db|prisma|supabase|drizzle)[:_-]fresh([[:space:]]|$))" \
+    || has "$t" '(^|[[:space:]:])db:fresh([[:space:]]|$)|[[:space:]]--force-reset([[:space:]=]|$)'; then
+    [ "$PS" = 1 ] && block "$MSG_PDEL" "$MSG_PDEL2"
+    block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "$MSG_PDEL2"
+  fi
+  # 0.4.2 보완(사장님 결정 S7-6): 멈춤 중 ssh·scp 는 풀리지만, ssh 뒤(따옴표 안 원격 명령 포함)에 되돌릴 수 없는 지우기 꼴이 있으면 막는다
+  if [ "$PS" = 1 ] && has "$t" "${S}ssh[[:space:]]"; then
+    local sb=${t#*ssh}
+    if has "$sb" "(^|[^a-z0-9_.-])(rm[[:space:]]+(-[^[:space:]]*[[:space:]]+)*(-[a-z]*r[a-z]*|--recursive)([[:space:]]|$)|drop[[:space:]]+(database|table|schema)([[:space:]]|$)|truncate([[:space:]]|$)|mkfs([.[:space:]]|$)|dd[[:space:]][^;&|]*of=/dev/|kubectl([[:space:]][^;&|]*)?[[:space:]]delete([[:space:]]|$)|systemctl[[:space:]]+([^;&|]*[[:space:]])?disable([[:space:]]|$)|shred([[:space:]]|$))" \
+      || has "$sb" "docker(-compose|[[:space:]]+compose)[^;&|]*[[:space:]]down[^;&|]*[[:space:]](-v|--volumes)([[:space:]\"']|$)"; then
       block "$MSG_PDEL" "$MSG_PDEL2"
     fi
   fi
@@ -4320,6 +4341,50 @@ push_exact() {
 #       (0.3.4 T8: 그 아래라도 프로젝트 폴더까지 올라가는 길에 .git 이 있으면 프로젝트 안의 다른 저장소라 막는다)
 #   F4: 프로젝트 저장소 설정에 remote.origin.push(올리기 규칙)가 있으면 허락된 가지 말고 다른 가지로 갈 수 있어 막는다. git 이 없거나,
 #       origin 주소(remote.origin.url)가 안 보이면(git 저장소가 아님 · origin 없음 — 설정이 없을 때와 종료 코드가 같아 주소로 가린다) 막는다
+# 0.4.2 보완(사장님 결정 S7-7): 잠깐 멈춤 중 push 가 기본 가지로 들어가는 꼴이면 0(막음). 조각 = git push 부터 ; & | 앞까지, 조각마다:
+#   --all·--mirror·--branches(전부 올리기) · 원격 이름(옵션 뒤 첫 낱말) 다음 낱말(따옴표 뗌)마다 받는 쪽 이름(: 뒤, 없으면 낱말 자체 · 앞의 + 와
+#   refs/heads/ 를 뗌)이 main·master·이 저장소의 기본 가지(br_pick_default — 작업 폴더 기준, 못 찾거나 저장소가 아니면 main·master 만)이거나,
+#   판정할 수 없는 글자($ ` *)가 있거나, 받는 쪽이 비었으면(: 만 = 같은 이름 가지 전부) 막는다. 지금 가지와 상관없이(이름을 적은 push 만 —
+#   이름 없는 git push · git push -u origin HEAD 는 저장소를 보지 않고 통과). 대소문자는 무시(nocasematch — 대소문자를 안 가리는 파일 시스템)
+pp_dflt() {
+  local rest=$1 seg w d s first sk r=1 got=0 bn="" re_pp="git[[:space:]]+push([[:space:]][^;&|]*)?" IFS=$' \t\n'
+  local out out2 origin=0 o bref="" boid="" btree="" bshort="" bname="" loc
+  while [ "$r" = 1 ] && [[ $rest =~ $re_pp ]]; do
+    seg=${BASH_REMATCH[0]}; rest=${rest#*"$seg"}
+    set -f; set -- $seg; set +f
+    shift 2
+    first=1; sk=0
+    for w in "$@"; do
+      w=${w//\"/}; w=${w//\'/}
+      [ "$sk" = 1 ] && { sk=0; continue; }
+      case "$w" in
+        --all|--mirror|--branches) r=0; break ;;
+        -o|--push-option|--repo|--receive-pack|--exec) sk=1; continue ;;
+        -*) continue ;;
+      esac
+      [ "$first" = 1 ] && { first=0; continue; }
+      d=${w#+}; s=$d
+      case "$d" in *:*) s=${d%%:*}; d=${d#*:} ;; esac
+      [ -z "$d" ] && d=$s
+      d=${d#refs/heads/}
+      case "$d" in
+        ""|*'$'*|*'`'*|*'*'*|main|master) r=0; break ;;
+        HEAD|@) continue ;;
+      esac
+      if [ "$got" = 0 ]; then
+        got=1; loc=${BRCWD:-$proj}
+        out=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" for-each-ref --format='%(refname) %(objectname) %(tree) %(symref)' \
+              refs/remotes/origin/HEAD refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master 2>/dev/null)
+        out="$NL$out$NL"
+        out2=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" config --name-only --get-regexp '^remote[.]origin[.]' 2>/dev/null)
+        case "$NL$out2" in *"${NL}remote.origin."*) origin=1 ;; esac
+        br_pick_default; bn=$bname
+      fi
+      [ -n "$bn" ] && case "$d" in "$bn") r=0; break ;; esac
+    done
+  done
+  return "$r"
+}
 push_where() {
   PW=""; PWH="푸시 허락으로는 올릴 수 없는 저장소 설정입니다 — 사람이 터미널에서 올립니다."
   local pn out ln v inp=0 nc=0
@@ -4623,6 +4688,11 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   fi
 
   # 0.4.2 F5: 잠깐 멈춤 중에는 아래 일곱 규칙(push·stash·가지 바꾸기·배포·포맷터·기준선·마이그)을 건너뛴다(pause_skips)
+  #   보완(사장님 결정 S7-7): 멈춤 중에도 기본 가지로 들어가는 push(<무엇>:main · main 이름 지정 · --all · --mirror)는 막는다 — PR 없이 합치는 길(pp_dflt)
+  if pause_skips push && has "$lq" 'git[[:space:]]+push' \
+    && { pp_dflt "$lq" || { [ -n "$lz" ] && pp_dflt "$lz"; } || { [ -n "$hv" ] && pp_dflt "$hv"; } || { [ -n "$hvz" ] && pp_dflt "$hvz"; }; }; then
+    block "$MSG_PMERGE" "$MSG_PMERGE2"
+  fi
   if ! pause_skips push && has "$lq" 'git[[:space:]]+push'; then
     # 0.3.3: 사람이 /refactor:approve 푸시 로 허락한 턴이면 맨 위 명령의 정확한 꼴(git push [-u] origin <허락된 가지>)만 통과.
     #   판정용 사본(원형 cmd0·lq·lz·hv·hvz) 모두가 정확한 꼴이어야 하고, 줄 이어쓰기·역슬래시(JSON 의 \\)가 있으면 막는다
