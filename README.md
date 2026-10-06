@@ -506,6 +506,7 @@ claude-code-refactor/
 - **기록 폴더 git 되돌리기 막음(R1)** — 리팩토링 중 `git checkout [커밋] -- docs/refactor`·`git restore [--source X] docs/refactor`처럼 기록 폴더 자체·그 상위(`docs`·프로젝트·`.`·`:/`)·사람 전용 파일(`STATE.md`·`APPROVALS.log`·`approved/`·`.turn*`·`.allow-*`)·실행 기록(`EXECUTION_LOG.md`, 되돌리기에만)을 되돌리는 것을 막았습니다. 이름을 적어 그 밖 파일(`docs/refactor/REPORT.md`)을 되돌리거나 `--staged`만 쓰는 것은 그대로 통과합니다.
 - **인터프리터 복사·풀기 막음(R2)** — `python -c`·`node -e`·히어독 등에서 `shutil.copytree`·`fs.cpSync`·`Copy-Item`·`extractall` 같은 복사·옮기기·풀기 함수로 기록 폴더(자체·상위·사람 전용 파일)에 넣는 것을 막았습니다. 이름을 적은 그 밖 파일로의 복사는 그대로 통과합니다.
 - **되돌리기 판정 보강** — `--` 없이 경로 하나만 적은 `git checkout <경로>` · 와일드카드(`'docs/refactor/*'`) · 홑 `&` 로 이은 명령 · `--pathspec-from-file` · ruby/php/perl/pwsh 복사 함수 · `python -m zipfile/tarfile -e` · 문자열 50개 초과 안내도 R1·R2 와 같은 문구로 막습니다.
+- **인터프리터 복사 판정은 목적지 자리만** — 복사·옮기기 함수는 **목적지 자리**(둘째 인자·`dst=`·`path=`)만 봅니다 — 기록 폴더 밖으로 복사·변수 이름 `docs`·문자열 `.replace()` 는 통과, 지금 폴더(`'.'`·인자 없는 `extractall()`)와 `'doc*'` 같은 패턴은 막습니다.
 
 ### 0.4.2 (2026-10-06)
 
@@ -526,7 +527,7 @@ claude-code-refactor/
 - **시험** — 안전장치 75건·스크립트 19건 추가(끝 표시만으로 허락되지 않음 · 2시간 지난 허락 무시 · 위 다섯 가지 재현과 반대 방향). 0.4.0 때 "못 잡음"으로 남아 있던 변이 "판 표지 안 봄"(WA M17)은 다시 돌려 보니 0.4.0 에 추가된 시험이 잡습니다(새 시험을 더한 것은 아님).
 - **막는 대상의 기준**([§6-4](#6-4-한계) 맨 앞) — 안전장치는 "Claude 가 평소 칠 만한 꼴"을 막습니다. 아래 알려진 빈틈은 일부러 꼬아 써야 터지는 꼴이라 목록으로 남겨 두고, 실제로 겪어 신고해 주시면 그 항목부터 고칩니다.
 - **알려진 빈틈(0.4.1 기준 — 신고 오면 우선)** — 절대경로로 부른 실행기(`/usr/bin/gh`·vercel·claude) · 따옴표를 엇갈리게 꼬은 안의 `npm publish`(평범한 `npm publish`·`pnpm publish` 는 막힘) · `gh -R 'o r'` 류 · 겹친 `$( )` 안의 복사 · busybox cp·gtar·7zz·ditto·jar xf·cpio·pax·`find -exec sh -c`·setsid·ionice·flock·parallel 로 감싼 복사·풀기 · `git clone`·`git worktree add` 로 기록 폴더 안에 저장소 만들기 · 환경 변수(`TAR_OPTIONS`·`UNZIP`)를 다른 조각에 두기·대문자 옵션·bsdtar `s` · 옵션 값·파일 이름 안의 글자로 풀기 모드를 속이기(평범한 풀기 명령은 막힘) · 묶음 보류 뒤 다시 승인하면 그 사이 따로 끝낸 카드는 묶음 밖으로 봄 · 다른 묶음 번호로 막힐 때 안내가 "정해진 꼴로…"라 번호가 다름을 말해 주지 않음. **0.4.3 에서 고침(R1·R2)**: `git checkout <커밋> -- docs/refactor`·`git restore docs/refactor` 로 기록 폴더 되돌리기 · 파이썬·노드 한 줄로 기록 폴더에 폴더째 복사.
-- **알려진 빈틈(0.4.3 기준 — 신고 오면 우선)** — `git -C <폴더> checkout -- …`(기준 폴더 이동 미반영) · `:(top)`·`':!src'` 표기 · `git restore --source=X`·`git merge`·plumbing 으로 기록 폴더 교체 · 파이썬·노드로 기록 파일을 **읽기만** 하는 꼴이 "실행"으로 막힘 · `'*.md'` 앞 폴더 없는 패턴 · `copytree(…,'..')`.
+- **알려진 빈틈(0.4.3 기준 — 신고 오면 우선)** — `git -C <폴더> checkout -- …`(기준 폴더 이동 미반영) · `:(top)`·`':!src'` 표기 · `git restore --source=X`·`git merge`·plumbing 으로 기록 폴더 교체 · `python -c "print(open('docs/refactor/APPROVALS.log').read())"` 처럼 **인자 자리에 기록 파일 경로를 적은** 읽기 한 줄이 "실행"으로 막힘(0.4.2 S4 와 같은 결). 별칭 두 단계(`s2 = shutil; s2.copytree`) · distutils `copy_tree`·`Path.copy_into` · `"doc"'s/refactor'` 이어 붙임은 아직 막지 못합니다.
 - **알려진 헛막힘(신고 오면 우선)** — `claude -p hi --model $M`·`claude -p "$Q"` 꼴 · `rsync --no-times`·루트에서 `tar xf`·`unzip`·`ln -s /tmp/x` · 따옴표 안 `;` 뒤의 풀기 한 줄 · 16KB 넘는 한 조각 cp 판정이 부하 때 8~12초.
 
 ### 0.4.0 (2026-10-05)

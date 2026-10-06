@@ -7176,6 +7176,11 @@ def check_docs_043(check):
           "- **알려진 빈틈(0.4.3 기준 — 신고 오면 우선)** —" in rd and "`git -C <폴더> checkout -- …`" in rd, "")
     check("0.4.3 문구 README 0.4.1 절 528행 '다음 판' 구절이 '0.4.3 에서 고침'으로 닫힘(X-3)",
           "**0.4.3 에서 고침(R1·R2)**:" in rd and "**다음 판(0.4.3" not in rd, "")
+    check("0.4.3 문구 README 알려진 빈틈 줄에 이제 막히는 '*.md'·copytree('..') 없음(Y-1)",
+          "`'*.md'` 앞 폴더 없는 패턴" not in rd and "`copytree(…,'..')`" not in rd
+          and "별칭 두 단계(`s2 = shutil; s2.copytree`) · distutils `copy_tree`·`Path.copy_into` · `\"doc\"'s/refactor'` 이어 붙임은 아직 막지 못합니다." in rd, "")
+    check("0.4.3 문구 README §13 인터프리터 목적지 자리 설명 글머리(Y-2)",
+          "**인터프리터 복사 판정은 목적지 자리만** — 복사·옮기기 함수는 **목적지 자리**(둘째 인자·`dst=`·`path=`)만 봅니다 — 기록 폴더 밖으로 복사·변수 이름 `docs`·문자열 `.replace()` 는 통과, 지금 폴더(`'.'`·인자 없는 `extractall()`)와 `'doc*'` 같은 패턴은 막습니다." in rd, "")
 
 
 def check_docs_fix_042(check):
