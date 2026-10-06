@@ -474,7 +474,7 @@ ROUND2 = [  # 3차 재검증에서 나온 오탐·빈틈
 ]
 GO_TURN_EXECUTE = [  # EXECUTE + /refactor:go 턴: 프로젝트 코드 실행은 안전 실행기로만
     (B, bash("npm test")), (B, bash("npx vitest run tests/baseline")), (B, bash("node scripts/report.js")),
-    (B, bash("python3 -c \"print(1)\"")), (B, bash("cd app && npm run build")), (B, bash("pnpm dev")),
+    (OK, bash("python3 -c \"print(1)\"")), (B, bash("python3 -c \"import random; print(1)\"")), (B, bash("cd app && npm run build")),   # 0.4.2 F3: 문서·출력만 하는 한 줄은 통과 (B, bash("pnpm dev")),
     (B, bash("npx vitest run 2>&1 | tail -20")), (B, bash("timeout 600 npm test")), (B, bash("./scripts/seed.sh")),
     (OK, bash("bash /x/hooks/run.sh refactor-safe-run -- npm test")),
     (OK, bash("bash /x/hooks/run.sh refactor-safe-run -- npx vitest run tests/baseline 2>&1 | tail -20")),
@@ -866,6 +866,10 @@ def main():
     check_readme_040(res)
     check_fg_040(res)
     check_copy_dir_040(res)
+    check_pipe_quote_042(res)
+    check_doc_edit_042(res)
+    check_pause_042(res)
+    check_msgs_042(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -5762,6 +5766,174 @@ def check_copy_dir_040(res):
                 res["fails"].append(("0.4.0 WC 평소(STATE 없음) 통과", OK, code, "Bash", c, err.strip()[:200]))
     finally:
         rmtree_rw(plain)
+
+
+# ── 0.4.2 잔치 신고(S4 F2 · S3 F3 · S7 F5) ─────────────────────────────────────
+def _cases_042(res, proj, label, rows, need=None, extra=None):
+    """0.4.2 시험 공용: rows = [(기대, (도구, 입력))]. need = 차단일 때 문구에 꼭 있어야 할 글자"""
+    for want, call in rows:
+        code, err = run(proj, *call, extra=extra)
+        res["total"] += 1
+        if code != want or (need and want == B and need not in err):
+            res["fails"].append(("0.4.2 " + label, want, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+
+
+def check_pipe_quote_042(res):
+    """F2(S4): 따옴표 안 | · 역슬래시 \\| 는 파이프가 아니다 — 읽기만 하는 awk·cut 이 사람 전용 파일 보호에 헛막히지 않는다.
+    진짜 파이프(따옴표 밖 · sh -c '…' 안 · "$( … )" 안)로 사람 전용 파일에 쓰는 꼴은 그대로 막힌다. dd of= · sponge 도 쓰기"""
+    passes = ["awk -F'|' '{print $2}' docs/refactor/APPROVALS.log", "awk -F '|' '{print $2}' docs/refactor/APPROVALS.log",
+              "awk -F\\| '{print $2}' docs/refactor/APPROVALS.log", "cut -d'|' -f2 docs/refactor/APPROVALS.log",
+              "awk -F'|' '{print $2}' docs/refactor/approved/P1-2.md", "awk -F'|' '{print $2}' docs/refactor/APPROVALS.log | sort",
+              "grep '|' docs/refactor/APPROVALS.log", "tr '|' ',' < docs/refactor/APPROVALS.log", "sed 's/|/,/' docs/refactor/APPROVALS.log",
+              "awk -F: '{print $2}' docs/refactor/APPROVALS.log", "grep -c '| 승인 |' docs/refactor/APPROVALS.log", "tail -5 docs/refactor/APPROVALS.log",
+              "awk '{print}' docs/refactor/APPROVALS.log > /tmp/x"]
+    blocked = ["awk -i inplace '{print}' docs/refactor/APPROVALS.log", "awk '{print}' docs/refactor/APPROVALS.log > docs/refactor/APPROVALS.log",
+               "tee docs/refactor/APPROVALS.log", "cp x docs/refactor/APPROVALS.log",
+               "sh -c 'cat x | dd of=docs/refactor/APPROVALS.log'", "sh -c 'cat x | sponge docs/refactor/APPROVALS.log'",
+               "cat x | tee docs/refactor/APPROVALS.log", "cat x | dd of=docs/refactor/APPROVALS.log", "cat x | sponge docs/refactor/APPROVALS.log",
+               "dd if=/tmp/x of=docs/refactor/.allow-baseline-edit", "bash -c \"cat x | tee docs/refactor/APPROVALS.log\"",
+               "echo \"$(cat x | tee docs/refactor/APPROVALS.log)\"", "eval 'cat x | tee docs/refactor/APPROVALS.log'",
+               "awk -F'|' '{print $2}' x | tee docs/refactor/APPROVALS.log", "cut -d'|' -f2 x > docs/refactor/.turn.t"]
+    for go in (False, True):
+        proj = make_project(phase="EXECUTE", allow=(".turn",) if go else ())
+        try:
+            tag = " (go 차례)" if go else ""
+            _cases_042(res, proj, "F2 따옴표 안 | 는 파이프 아님 → 통과" + tag, [(OK, bash(c)) for c in passes])
+            _cases_042(res, proj, "F2 진짜 파이프·쓰기 → 막음" + tag, [(B, bash(c)) for c in blocked])
+        finally:
+            rmtree_rw(proj)
+    # 반대 방향: 읽기 전용 단계 울타리(go 차례) — 히어독 본문의 ' 로 짝을 어긋나게 해 진짜 파이프를 따옴표 안처럼 보이게 하는 꼴도 막힌다
+    proj = make_project(phase="CHECKUP", allow=(".turn",))
+    try:
+        _cases_042(res, proj, "F2 울타리 그대로", [(B, bash("cat x | tee src/app.ts")), (B, bash("cat 'x' | tee src/app.ts")), (B, bash("echo 'a|b' | tee src/app.ts")),
+                                                (B, bash("cat 'a b' | tee src/app.ts")), (B, bash("awk -F'|' '{print $2}' x | sponge src/app.ts")),
+                                                (B, bash("tr a b <<'EOF'\nit's\nEOF\ncat x | tee src/app.ts; ls 'a'")),
+                                                (B, bash("cat <<EOF\nit's\nEOF\ncat x | tee src/app.ts; echo 'done'")),
+                                                (B, bash("tr a b <<'EOF'\n# it's\nEOF\ncat x | tee src/app.ts; echo 'done'")),
+                                                (B, bash("ls # it's\ncat x | tee src/app.ts; ls 'a'")),
+                                                (B, bash("sh -c 'cat x | sponge src/app.ts'")), (B, bash("bash -c \"cat x | tee src/app.ts\"")),
+                                                (OK, bash("awk -F'|' '{print $2}' src/app.ts"))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_doc_edit_042(res):
+    """F3(S3): /refactor:go 차례에도 docs/refactor 문서만 다루는 파이썬·노드 한 줄/히어독은 안전 실행기 없이 통과.
+    조건 ①경로 ②불러오기 허용 목록 ③위험 낱말 중 하나라도 어긋나거나 명령이 인터프리터 호출 하나가 아니면 지금처럼 막는다"""
+    S3 = "python - <<'EOF'\np='docs/refactor/STATE.md'\ns=open(p,encoding='utf-8').read()\ns=s.replace('gate: G3-step\\n','gate: ask-user\\n',1)\nopen(p,'w',encoding='utf-8').write(s)\nEOF"
+    passes = [S3,
+              "python - <<EOF\np='docs/refactor/REFACTOR_PLAN.md'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF",
+              "python -c \"print('hi')\"",
+              "node -e \"const fs=require('fs');fs.writeFileSync('docs/refactor/STATE.md','x')\"",
+              "python3 - <<'EOF'\nimport json, re\nfrom pathlib import Path\nt = Path('docs/refactor/STATE.md').read_text(encoding='utf-8')\nprint(json.dumps(re.findall('gate: (.*)', t)))\nEOF",
+              "python - <<'EOF'\n# it's a doc edit\nimport os\nif os.path.exists('docs/refactor/STATE.md'):\n    print(open('docs/refactor/STATE.md').read().count('run shell'))\nEOF",
+              "node -e \"require('fs').appendFileSync('./docs/refactor/NOTES.md','x')\""]
+    path_bad = ["python -c \"open('src/app.ts','w').write('x')\"", "python -c \"open('docs/refactor/../../.env').read()\"",
+                "python -c \"open('docs/refactor/APPROVALS.log','w').write('x')\"", "python -c \"open('docs/refactor/notes.txt','w')\"",
+                "python - <<'EOF'\np='docs/refactor/STATE.md'\nq=p\nopen(q,'w').write('x')\nEOF",
+                "python - <<'EOF'\np='docs/refactor/STATE.md'\np, q = 'src/app.ts', 1\nopen(p,'w').write('x')\nEOF",
+                "python - <<'EOF'\no=open\no('src/app.ts','w').write('x')\nEOF",
+                "python - <<'EOF'\nfrom pathlib import Path\nx=Path('docs/refactor/STATE.md')\nx.replace('Makefile')\nEOF",
+                "node -e \"const w=require('fs').writeFileSync; w('src/a.ts','x')\"",
+                "node -e \"const {writeFileSync}=require('fs');writeFileSync('src/a.ts','x')\""]
+    import_bad = ["python -c \"import random; print(random.random())\"", "python -c \"import subprocess; subprocess.run(['ls'])\"",
+                  "python -c \"import requests; requests.get('http://x')\"", "python -c \"import shutil; shutil.rmtree('src')\"",
+                  "python -c \"__import__('os').system('ls')\"", "node -e \"require('child_process')\"", "python -c \"import os as o; o.system('ls')\""]
+    word_bad = ["python -c \"import os; os.system('ls')\"", "python -c \"requests.get('http://x')\"", "python -c \"shutil.rmtree('src')\"",
+                "python - <<'EOF'\nimport sys\nsys.modules['os'].system('ls')\nEOF", "python - <<'EOF'\nimport os\nos.path.os.system('ls')\nEOF",
+                "py -c \"exec('import os')\"", "node -e \"arguments[1]('child_'+'process')\"", "node -e \"const fs=require('fs');fs['writeFileSync']('src/a.ts','x')\"",
+                "python - <<'EOF'\nprint(f'{1}')\nEOF"]
+    form_bad = ["python scripts/x.py", "node -r x -e \"console.log(1)\"", "NODE_OPTIONS=--require=x node -e \"console.log(1)\"",
+                "python -c \"print(1)\" ; python -c \"print(2)\"", "python -X dev -c \"print(1)\"", "python -I -c \"print(1)\"",
+                "python - <<EOF\nprint('$(rm -rf src)')\nEOF", "python -c \"print('$(rm -rf src)')\"", "python - <<'EOF'\nprint(1)\nEOF\nrm -rf src",
+                "python - <<'EOF'\nprint(1)\nEOF\nnpm test\nEOF", "cd docs/refactor && python -c \"print(1)\""]
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        _cases_042(res, proj, "F3 문서 편집만 → 통과(go 차례)", [(OK, bash(c)) for c in passes])
+        _cases_042(res, proj, "F3 ① 경로가 문서 밖·다른 꼴 → 막음", [(B, bash(c)) for c in path_bad])
+        _cases_042(res, proj, "F3 ② 불러오기 허용 목록 밖 → 막음", [(B, bash(c)) for c in import_bad])
+        _cases_042(res, proj, "F3 ③ 위험 낱말 → 막음", [(B, bash(c)) for c in word_bad])
+        _cases_042(res, proj, "F3 꼴(호출 하나가 아님·셸이 펼침) → 막음", [(B, bash(c)) for c in form_bad])
+        _cases_042(res, proj, "F3 막힐 때 둘째 줄 안내", [(B, bash("python scripts/x.py"))], need="docs/refactor 문서만 다루는 파이썬 한 줄로")
+        _cases_042(res, proj, "F3 하위 폴더에서는 아님", [(B, bash(passes[2]))], extra={"cwd": str(proj / "src")})
+    finally:
+        rmtree_rw(proj)
+    proj = make_project(phase="EXECUTE")
+    try:
+        _cases_042(res, proj, "F3 go 차례 아님 → 그대로 통과", [(OK, bash(c)) for c in passes])
+    finally:
+        rmtree_rw(proj)
+
+
+def _pause_proj_042(until, n=2, log_until=None, extra_log="", seal=True, go=False, last_resume=False):
+    """잠깐 멈춤 시험 재료: EXECUTE 프로젝트 + .allow-pause 1줄 + 승인 기록의 잠깐 멈춤 줄(봉인은 lib rl_log_seal 로)"""
+    proj = make_project(phase="EXECUTE", allow=(".turn",) if go else ())
+    head = subprocess.run(["git", "-C", str(proj), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    rd = proj / "docs/refactor"
+    with open(rd / ".allow-pause", "w", encoding="utf-8", newline="") as fh:
+        fh.write(f"{until} {n} {head}\n")
+    lu = until if log_until is None else log_until
+    log = (f"2026-10-06 09:00 KST | 잠깐 멈춤 | - | - | until={lu} {n}시간 head={head[:7]} | 사용자가 /refactor:approve 로 실행\n")
+    if last_resume:
+        log += "2026-10-06 09:30 KST | 다시 시작 | - | - | - | 사용자가 /refactor:approve 로 실행\n"
+    with open(rd / "APPROVALS.log", "w", encoding="utf-8", newline="") as fh:
+        fh.write(log)
+    if seal:
+        lib = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
+        subprocess.run([BASH, "-c", 'eval "$(tr -d \'\\r\' < "$1")"; rl_log_seal "$2"', "x", lib, rd.as_posix()],
+                       capture_output=True, env=dict(env_for(proj), LC_ALL="C"), timeout=60)
+    if extra_log:
+        with open(rd / "APPROVALS.log", "a", encoding="utf-8", newline="") as fh:
+            fh.write(extra_log)
+    return proj
+
+
+def check_pause_042(res):
+    """F5(S7): 잠깐 멈춤 중(.allow-pause + 봉인된 기록의 마지막 잠깐 멈춤 줄 until= 같음 + 만료 전 + go 차례 아님)에는
+    pause_skips 목록(push·stash·가지 바꾸기·배포·포맷터·기준선·마이그)만 풀리고 나머지는 그대로 막힌다"""
+    fut = int(time.time()) + 3600
+    edit = lambda p: ("Edit", {"file_path": p, "old_string": "1", "new_string": "2"})
+    open_rows = [bash("git push origin x"), bash("git stash"), bash("git switch other"), bash("vercel --prod"), bash("prettier --write ."),
+                 bash("echo x > tests/baseline/x.test.ts"), bash("echo x > supabase/migrations/x.sql"),
+                 bash("git push -u origin feat/x"), bash("supabase db push"), bash("gh pr merge 5 --squash"), bash("npx vitest run -u"),
+                 edit("tests/baseline/money.test.ts"), ("Edit", {"file_path": "supabase/migrations/0001_init.sql", "old_string": "x", "new_string": "y"})]
+    keep_rows = [bash("bash /x/hooks/run.sh refactor-approve \"$proj\" --from-hook <<<'P1-1 승인'"), bash("bash /x/scripts/refactor-approve.sh /p"),
+                 bash("claude -p '/refactor:approve P1-1'"), bash("python -c \"open('docs/refactor/APPROVALS.log','a').write('x')\""),
+                 bash("echo {} > .claude/settings.json"), bash("claude plugin disable refactor"),
+                 ("Write", {"file_path": "docs/refactor/.allow-pause", "content": "9999999999 12 x"}),
+                 ("Write", {"file_path": ".claude/settings.local.json", "content": "{}"}), bash("cat .env"), ("Read", {"file_path": ".env"}),
+                 bash("git push --force origin x"), bash("git remote set-url origin https://example.com/x.git"),
+                 bash("gh api -X PATCH repos/o/r -f default_branch=x"), bash("gh alias set pm 'pr merge'"), bash("rm -rf docs/refactor")]
+    proj = _pause_proj_042(fut)
+    try:
+        _cases_042(res, proj, "F5 멈춤 중 풀리는 규칙 → 통과", [(OK, c) for c in open_rows])
+        _cases_042(res, proj, "F5 멈춤 중에도 그대로 → 막음", [(B, c) for c in keep_rows])
+    finally:
+        rmtree_rw(proj)
+    closed = [bash("git push origin x"), bash("echo x > tests/baseline/x.test.ts"), bash("vercel --prod")]
+    for label, kw in [("만료 뒤(과거 epoch)", dict(until=int(time.time()) - 1)),
+                      ("파일 epoch ≠ 기록 until", dict(until=fut, log_until=fut + 60)),
+                      ("기록 봉인 깨짐", dict(until=fut, extra_log="2026-10-06 09:10 KST | 승인 | P1-1 | - | - | 꾸민 줄\n")),
+                      ("봉인 없음", dict(until=fut, seal=False)),
+                      ("마지막 줄이 다시 시작", dict(until=fut, last_resume=True)),
+                      ("go 차례", dict(until=fut, go=True)),
+                      ("N 이 13(꼴 밖)", dict(until=fut, n=13))]:
+        proj = _pause_proj_042(**kw)
+        try:
+            _cases_042(res, proj, "F5 안 쉼: " + label, [(B, c) for c in closed])
+        finally:
+            rmtree_rw(proj)
+
+
+def check_msgs_042(res):
+    """안내 3곳(새 대화 → 잠깐 멈춤 부탁): 울타리 차단 문구(파일 도구·셸 대상·코드 바꾸는 명령)"""
+    proj = make_project(phase="CHECKUP", allow=(".turn",))
+    try:
+        need = "/refactor:approve 잠깐 멈춤 1시간` 을 부탁하세요 — 새 대화를 열어도 이 폴더는 막힙니다"
+        _cases_042(res, proj, "안내 잠깐 멈춤", [(B, ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "x"})),
+                                              (B, bash("touch src/new.ts")), (B, bash("git commit -m x"))], need=need)
+    finally:
+        rmtree_rw(proj)
 
 
 if __name__ == "__main__":
