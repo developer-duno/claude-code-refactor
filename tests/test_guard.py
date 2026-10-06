@@ -5880,7 +5880,7 @@ def _pause_proj_042(until, n=2, log_until=None, extra_log="", seal=True, go=Fals
         fh.write(log)
     if seal:
         lib = (ROOT / "plugins/refactor/scripts/refactor-lib.sh").as_posix()
-        subprocess.run([BASH, "-c", 'eval "$(tr -d \'\\r\' < "$1")"; rl_log_seal "$2"', "x", lib, rd.as_posix()],
+        subprocess.run([BASH, "-c", 'LC_ALL=C; export LC_ALL; eval "$(tr -d \'\\r\' < "$1")"; rl_log_seal "$2"', "x", lib, rd.as_posix()],
                        capture_output=True, env=dict(env_for(proj), LC_ALL="C"), timeout=60)
     if extra_log:
         with open(rd / "APPROVALS.log", "a", encoding="utf-8", newline="") as fh:
