@@ -875,6 +875,7 @@ def main():
     check_msgs_042(res)
     check_wrap_case_042b(res)
     check_run_retry_042b(res)
+    check_restore_copy_043(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -6188,6 +6189,97 @@ def check_run_retry_042b(res):
     finally:
         shutil.rmtree(proj, ignore_errors=True)
         shutil.rmtree(tmpd, ignore_errors=True)
+
+
+W_RESTORE = ("리팩토링 기록 폴더(docs/refactor)나 그 안의 승인 기록·상태 파일을 git 으로 되돌리면 사람의 승인 기록이 지워집니다 — "
+             "되돌릴 파일은 기록 폴더 밖에서 이름을 하나씩 적으세요. 기록 폴더 정리는 사람이 합니다.")
+W_UNPACK = "리팩토링 기록 폴더(docs/refactor)에 압축을 풀거나 파일을 한꺼번에 넣지 않습니다(사람 전용 파일을 덮어쓸 수 있음)."
+R1_BLOCK_043 = [   # 0.4.3 R1: 기록 폴더 자체·상위·사람 전용 파일·실행 기록을 git 으로 되돌리기
+    "git checkout -- docs/refactor", "git checkout HEAD~1 -- docs/refactor", "git restore docs/refactor",
+    "git restore --source=HEAD~1 docs/refactor", "git restore -s main -- docs/refactor/EXECUTION_LOG.md",
+    "git restore docs/refactor/EXECUTION_LOG.md", "git restore docs", "git restore docs/refactor/STATE.md",
+    "git restore ':/docs'",
+    "cd src && git restore :/docs/refactor", "git restore --worktree docs/refactor/STATE.md",
+    # R1-2: 따옴표·$( )·; 뒤·래퍼·따옴표 쪼개기(lz)·빈 변수(hv)
+    'bash -c "git checkout -- docs/refactor"', "x=$(git restore docs/refactor)", "ls; git restore docs/refactor",
+    "echo $(git checkout -- docs/refactor)", 'git checkout -- doc"s/refactor"', "git checkout -- docs/re${u}factor",
+    "ls && git restore -s HEAD~2 docs", "(git restore docs/refactor)",
+    # T-1 다른 철자
+    "git -C . checkout -- docs/refactor", "git checkout -q -- docs/refactor", "git checkout HEAD -- 'docs/refactor'",
+    'git checkout HEAD -- "docs/refactor/"', "cd src && git checkout -- ../docs/refactor", "git restore -W docs/refactor",
+    "git restore --staged --worktree docs/refactor", "git restore -SW docs/refactor", "git.exe checkout -- docs/refactor",
+    "GIT Checkout -- docs/refactor", "git restore --source main docs/refactor", "git restore -smain docs/refactor",
+]
+R1_OTHER_BLOCK_043 = ["git checkout main -- docs/refactor/APPROVALS.log", "git checkout -- .", "git restore docs/refactor/approved",
+                      "git checkout HEAD -- docs/refactor/.turn.t"]   # 기존 규칙(문구는 그쪽)
+R1_PASS_043 = [
+    "git checkout -- src/app.ts", "git restore src/app.ts", "git checkout main -- src/a.ts src/b.ts",
+    "git restore --staged docs/refactor/REPORT.md", "git restore docs/refactor/REPORT.md", "git checkout main -- docs/refactor/PLAN.md",
+    "git checkout -b x", 'git commit -m "docs: git restore docs/refactor 안내"', "git restore --staged docs/refactor",
+    "git restore --staged docs/refactor/EXECUTION_LOG.md", "git restore -- src/app.ts", "git checkout -q main -- src/a.ts",
+    "git restore -s main src/app.ts", "git restore --source main src/app.ts",
+    'echo "git checkout -- docs/refactor"', "grep -rn 'git restore docs' src",
+]
+_LIT51 = "[" + ",".join("'a%d'" % i for i in range(51)) + "]"
+_LIT40 = "[" + ",".join("'a%d'" % i for i in range(40)) + "]"
+R2_BLOCK_043 = [   # 0.4.3 R2: 인터프리터 복사·옮기기·풀기로 기록 폴더(자체·상위·사람 파일)에
+    "python -c \"import shutil; shutil.copytree('/tmp/x', 'docs/refactor', dirs_exist_ok=True)\"",
+    "python3 -c \"import shutil; shutil.copy('/tmp/STATE.md', 'docs/refactor/STATE.md')\"",
+    "node -e \"require('fs').cpSync('/tmp/x', 'docs/refactor', {recursive: true})\"",
+    "python -c \"import zipfile; zipfile.ZipFile('/tmp/a.zip').extractall('docs/refactor')\"",
+    "python -c \"import tarfile; tarfile.open('/tmp/a.tar').extractall('docs/refactor')\"",
+    "python -c \"import zipfile; zipfile.ZipFile('/tmp/a.zip').extract('STATE.md', 'docs/refactor')\"",
+    "python -c \"import shutil; shutil.move('/tmp/x', 'docs')\"",
+    "python -c \"import os; os.replace('/tmp/s', 'docs/refactor/STATE.md')\"",
+    "python -c \"from shutil import copytree; copytree('/tmp/x','docs/refactor')\"",
+    "python -c 'import shutil; shutil.copytree(\"/tmp/x\", \"docs/refactor\")'",
+    "py -c \"import shutil; shutil.copytree('/tmp/x','docs/refactor')\"",
+    "deno eval \"Deno.copyFileSync('/tmp/s', 'docs/refactor/STATE.md')\"",
+    "bun -e \"require('fs').cpSync('/tmp/x','docs/refactor',{recursive:true})\"",
+    "node -e \"const fs=require('fs'); fs.cpSync('/tmp/x','docs/refactor',{recursive:true})\"",
+    "pwsh -c \"Copy-Item -Recurse '/tmp/x' 'docs/refactor'\"",
+    # R2-3: 히어독(0.4.2 F3 문서 편집 통과 길과 교차)
+    "python - <<'EOF'\nimport shutil; shutil.copytree('/tmp/x','docs/refactor')\nEOF",
+    "python3 - <<'EOF'\nimport shutil\nshutil.copy('/tmp/a', 'docs/refactor/STATE.md')\nEOF",
+    "node - <<'EOF'\nconst fs = require('fs');\nfs.cpSync('/tmp/x', 'docs/refactor', {recursive: true});\nEOF",
+]
+R2_PASS_043 = [
+    "python -c \"print(open('docs/refactor/REPORT.md').read())\"",
+    "node -e \"require('fs').cpSync('/tmp/a','/tmp/b',{recursive:true})\"",
+    "python -c \"import shutil; shutil.copy('/tmp/PLAN.md','docs/refactor/PLAN.md')\"",
+    "python -c \"import shutil; shutil.copytree('/tmp/x','build/out')\"",
+    "python -c \"import zipfile; zipfile.ZipFile('a.zip').extractall('/tmp/out')\"",
+    "python -c \"import shutil; L=" + _LIT40 + "; shutil.copy(L[0], L[1])\"",
+]
+
+
+def check_restore_copy_043(res):
+    """0.4.3 R1(기록 폴더 git 되돌리기)·R2(인터프리터 복사·풀기) — 리팩토링 중(EXECUTE)"""
+    proj = make_project(phase="EXECUTE")
+
+    def one(label, want, call, need=None, first=False):
+        code, err = run(proj, *call)
+        res["total"] += 1
+        line0 = err.strip().splitlines()[0] if err.strip() else ""
+        bad = code != want or (need and want == B and (need not in (line0 if first else err)))
+        if bad:
+            res["fails"].append(("0.4.3 " + label, want, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+
+    try:
+        for c in R1_BLOCK_043:
+            one("R1 되돌리기 막음", B, bash(c), need="[refactor 안전장치] " + W_RESTORE, first=True)
+        for c in R1_OTHER_BLOCK_043:
+            one("R1 기존 규칙 막음", B, bash(c))
+        for c in R1_PASS_043:
+            one("R1 이웃 통과", OK, bash(c))
+        for c in R2_BLOCK_043:
+            one("R2 복사·풀기 막음", B, bash(c), need=W_UNPACK)
+        one("R2 PowerShell Copy-Item 막음", B, ps("Copy-Item -Recurse /tmp/x docs/refactor"))
+        one("R2 리터럴 51개 막음", B, bash("python -c \"import shutil; L=" + _LIT51 + "; shutil.copy(L[0], L[1])\""), need="50개를 넘어")
+        for c in R2_PASS_043:
+            one("R2 이웃 통과", OK, bash(c))
+    finally:
+        rmtree_rw(proj)
 
 
 if __name__ == "__main__":

@@ -1038,8 +1038,34 @@ iw_one() {
   has "$1" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
   has "$1" "$2" || return 1
   # 0.3.5 F7②: open 의 방식 글자에 > 도(perl open(F,">",…) · ">>")
-  has "$1" "open[(][^)]*['\"][wax+>]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate)|[.]unlink|rmtree|os[.](remove|rename|replace)|shutil[.](move|copy)|set-content|out-file|add-content|[.]replace[(]" || return 1
+  # 0.4.3 R2: 복사·풀기 함수도 쓰기(fs.cp·cpSync·copyFileSync·renameSync·copytree·Copy-Item·extractall·.extract( )
+  has "$1" "open[(][^)]*['\"][wax+>]|write_?text|write_?bytes|writefile|write_file|appendfile|fs[.](write|append|rm|unlink|rename|copy|truncate|cp)|[.]unlink|rmtree|os[.](remove|rename|replace)|shutil[.](move|copy)|set-content|out-file|add-content|[.]replace[(]|cpsync|copyfilesync|renamesync|copytree|copy-item|extractall|[.]extract[(]" || return 1
   return 0
+}
+# 0.4.3 R2: 인터프리터 코드(python -c · node -e · 히어독 …)의 복사·옮기기·풀기 함수가 기록 폴더 자체·그 상위·그 안의 사람 전용 파일을
+#   겨냥하는가 → 0(IRW = hit | over). 코드 글(벗기기 전 lr0 · lr)을 따옴표(' ")로 잘라 조각마다 cpd_hit1 <조각> rec — 이름 적은 그 밖 파일
+#   ('docs/refactor/PLAN.md')은 통과(cp 와 같은 결). 함수 낱말·조각 자르기는 case·매개변수 확장으로(맥 bash 3.2 TRE — 0.4.2 W4).
+#   인터프리터 낱말이나 함수 낱말이 없으면 바로 1(평소 비용 0). 판정 조각이 50개를 넘으면 판정할 수 없어 막는다(IRW=over — "애매하면 막는다")
+interp_record_writes() {
+  IRW=""
+  has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
+  local x="${lr0:-}$NL$lr" s p k t
+  case "$x" in
+    *shutil*|*copytree*|*copy2*|*cpsync*|*copyfilesync*|*renamesync*|*extractall*|*copy-item*|*os.replace*|*os.rename*|*.cp\(*|*.copyfile*|*.rename\(*|*.extract\(*) ;;
+    *) return 1 ;;
+  esac
+  for t in 0 1; do
+    if [ "$t" = 0 ]; then s=${lr0:-$lr}; else { [ -n "${lr0:-}" ] && [ "$lr0" != "$lr" ]; } || break; s=$lr; fi
+    k=0
+    while [ -n "$s" ]; do
+      case "$s" in *[\"\']*) p=${s%%[\"\']*}; s=${s#*[\"\']} ;; *) p=$s; s="" ;; esac
+      case "$p" in ''|[[:space:]]*|*[[:space:]]|*"$NL"*|*[\;=,]*) continue ;; esac
+      k=$((k + 1))
+      [ "$k" -gt 50 ] && { IRW=over; return 0; }
+      cpd_hit1 "$p" rec && { IRW=hit; return 0; }
+    done
+  done
+  return 1
 }
 # 0.3.5 X2: 인터프리터 코드가 플러그인 폴더(.claude/plugins · 지금 플러그인 폴더 plugroot)에 쓰는가. 플러그인 폴더 경로는 글자 그대로의 정규식으로
 #   (구분자 / 와 \ 는 같게 · Windows 의 c:/… 는 Git Bash 꼴 /c/… 도). 인터프리터 낱말이 없으면 경로 정규식을 만들지 않는다(평소 비용 0)
@@ -1903,6 +1929,78 @@ hv_git() {
       block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
   fi
+  return 0
+}
+# 0.4.3 R1: 리팩토링 중 git checkout·git restore 로 기록 폴더(docs/refactor) 자체·그 상위(docs·프로젝트·.·:/)·그 안의 사람 전용 파일
+#   (STATE.md·APPROVALS.log·approved/·.turn*·.allow-*)을 되돌리기 → 막는다. 이름 적은 그 밖 파일(docs/refactor/REPORT.md)·기록 폴더 밖은 통과.
+#   경로 낱말: checkout = -- 뒤 전부 + (-- 없고 비옵션 2개 이상이면 둘째부터) · restore = 비옵션 전부(-s·--source·--pathspec-from-file 값은 건너뜀).
+#   restore --staged 만(작업 폴더 안 건드림)은 통과, --worktree·-W 가 함께면 본다. 명령 이름은 대소문자 무시·옵션 글자는 가린다.
+#   판정은 정규식 없이 낱말·case 로(맥 bash 3.2 TRE — 0.4.2 W4)
+MSG_RESTORE="리팩토링 기록 폴더(docs/refactor)나 그 안의 승인 기록·상태 파일을 git 으로 되돌리면 사람의 승인 기록이 지워집니다 — 되돌릴 파일은 기록 폴더 밖에서 이름을 하나씩 적으세요. 기록 폴더 정리는 사람이 합니다."
+restore_record() {
+  [ "$refactor_on" = 1 ] || return 0
+  case "$1" in *checkout*|*restore*) ;; *) return 0 ;; esac
+  cd_all restore_record1 "$1"
+}
+restore_record1() { # $1 판정 문자열 — && || ; | ` $( 로 나눈 조각마다(cd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준)
+  local s=$1 seg CWD_BASE=$cwd CD_PREV=$cwd
+  s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; s=${s//'$('/$NL}
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    cd_seg "$seg" && continue
+    case "$seg" in *checkout*|*restore*) rr_seg "$seg" ;; esac
+  done
+  cwd=$CWD_BASE
+}
+rr_seg() {
+  seg_words "$1"
+  case "$SCMD" in git) ;; *) return 0 ;; esac
+  local n=${#SW[@]} i=$((SI + 1)) a sub L j c dd=0 st=0 wt=0 skip=0 pre=() post=() paths=()
+  while [ "$i" -lt "$n" ]; do   # git 전역 옵션(-c 이름=값 · -C 폴더 · --no-pager …)
+    case "${SW[$i]}" in -c|-C) i=$((i + 2)) ;; -*) i=$((i + 1)) ;; *) break ;; esac
+  done
+  sub=${SW[$i]:-}
+  case "$sub" in checkout|restore) ;; *) return 0 ;; esac
+  shopt -u nocasematch
+  for ((i = i + 1; i < n; i++)); do
+    a=${SW[$i]}
+    if [ "$dd" = 1 ]; then post+=("$a"); continue; fi
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    case "$a" in
+      --) dd=1 ;;
+      --st*) st=1 ;;
+      --w*) wt=1 ;;
+      --so*=*|--pathspec-f*=*) ;;
+      --so*|--pathspec-f*|--orphan|--conflict) skip=1 ;;
+      --*) ;;
+      -?*)
+        L=${a#-}
+        for ((j = 0; j < ${#L}; j++)); do
+          c=${L:j:1}
+          case "$c" in
+            W) wt=1 ;;
+            S) st=1 ;;
+            s|b|B) [ "$((j + 1))" -ge "${#L}" ] && skip=1; break ;;   # 값을 받는 옵션: 붙어 있으면(-smain) 그 낱말 안, 아니면 다음 낱말
+          esac
+        done ;;
+      *) pre+=("$a") ;;
+    esac
+  done
+  shopt -s nocasematch
+  case "$sub" in
+    restore)
+      [ "$st" = 1 ] && [ "$wt" = 0 ] && return 0
+      paths=("${pre[@]}" "${post[@]}") ;;
+    *)
+      paths=("${post[@]}")
+      [ "$dd" = 0 ] && [ "${#pre[@]}" -ge 2 ] && paths=("${pre[@]:1}") ;;
+  esac
+  for a in "${paths[@]}"; do
+    case "$a" in ':/'*) a=${a#:/}; a="$proj/${a:-.}" ;; esac
+    cpd_hit1 "$a" rec && block "$MSG_RESTORE"
+    # 되돌리기에만: 실행 기록(EXECUTION_LOG.md) — 자동 모드가 그 '기준선 결과' 줄을 믿으므로 옛 판으로 되돌리지 않는다(메인 판정 19:2x)
+    resolve_tok "$a" && case "$RP" in "$rdir"/execution_log.md) block "$MSG_RESTORE" ;; esac
+  done
   return 0
 }
 MSG_GHDEL="원격 가지·저장소 삭제는 사람이 직접 합니다(gh api DELETE 도 같습니다)."
@@ -4557,6 +4655,11 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   writes_to '\.claude/plugins' && block "플러그인 폴더(.claude/plugins)는 고치지 않습니다." "플러그인 수정은 사람이 원본 저장소에서 합니다."
   # 0.3.5 X2: 인터프리터 코드(python -c open(…,'w') · node -e appendFileSync …)로 플러그인 폴더에 쓰기 — 같은 경로(.claude/plugins + 지금 플러그인 폴더)
   interp_plug_writes && block "플러그인 폴더(.claude/plugins)는 고치지 않습니다." "플러그인 수정은 사람이 원본 저장소에서 합니다."
+  # 0.4.3 R2: 인터프리터 코드의 복사·옮기기·풀기로 기록 폴더(자체·상위·사람 전용 파일)에 넣기
+  if interp_record_writes; then
+    [ "$IRW" = over ] && block "$MSG_UNPACK" "코드 안 문자열이 50개를 넘어 복사·풀기 대상을 판정할 수 없습니다 — 코드를 나누거나 대상 경로를 줄여 다시 실행하세요."
+    block "$MSG_UNPACK" "$MSG_HUMAN"
+  fi
   # 쓰기 대상(목적지) 기준: 사람 전용 파일, 기록 폴더 이동·개명, 플러그인 폴더, 읽기 전용 단계의 프로젝트 파일
   norm_dirvars "$lq"; local tq=$NV pb=${plugroot##*/} tchk=0
   has "$tq" 'approvals|allow-|[.]turn|approved|refactor|state[.]md|docs|[.][.]|plugins|>' && tchk=1
@@ -4680,6 +4783,11 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   [ -n "$lz" ] && hv_git "$lz"
   [ -n "$hv" ] && hv_git "$hv"
   [ -n "$hvz" ] && hv_git "$hvz"
+  # 0.4.3 R1: 같은 네 판정 문자열로 기록 폴더 git 되돌리기
+  restore_record "$lq"
+  [ -n "$lz" ] && restore_record "$lz"
+  [ -n "$hv" ] && restore_record "$hv"
+  [ -n "$hvz" ] && restore_record "$hvz"
 
   # 4) 대량 삭제 ------------------------------------------------------------
   # 원형(lq)과 따옴표를 모두 뺀 사본(lz)·빈 변수를 지운 사본(hv·hvz)으로 본다(eval "rm -rf doc"'s/refactor' · rm -rf docs/re${x:-f}actor)
