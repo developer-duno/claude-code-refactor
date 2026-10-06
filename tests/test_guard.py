@@ -5839,8 +5839,14 @@ def check_sed_write_042(res):
                "sed -n 'w docs/refactor/APPROVALS.log' x", "sed 's/x/y/W docs/refactor/.allow-baseline-edit' x",
                "sed 's|x|y|w docs/refactor/APPROVALS.log' x", "sed '1w docs/refactor/APPROVALS.log' x",
                "sed -n '1,3 w docs/refactor/APPROVALS.log' x", "sed 's/x/y/wdocs/refactor/APPROVALS.log' x",
-               "sed '1e rm -f docs/refactor/APPROVALS.log' x", "sed 's/.*/echo hi/e' x"]
+               "sed '1e rm -f docs/refactor/APPROVALS.log' x", "sed 's/.*/echo hi/e' x",
+               # 재검사 A2 🟡4: 정규식 주소 뒤 w
+               "sed '/x/w docs/refactor/APPROVALS.log' f", "sed -n '/^2026/,/^2027/w docs/refactor/.allow-pause' f",
+               "sed 's/a\\/b/c/w docs/refactor/approved/.log-sum' f", "sed -n \"/x/w docs/refactor/APPROVALS.log\" f"]
     passes = ["sed 's/\\|/,/' docs/refactor/APPROVALS.log", "sed -n '1,3p' x > /tmp/o", "sed -e 's/a/b/' -e 's/c/d/' docs/refactor/APPROVALS.log",
+              "sed '/w/d' docs/refactor/APPROVALS.log", "sed -n '/x/w /tmp/out' docs/refactor/APPROVALS.log",
+              # 재검사 C2 🟡1: 정규식·치환문 속 e 는 실행이 아니다
+              "sed 's/^e //' src/app.ts", "sed -E 's/(a|b)e /x/' src/app.ts",
               "sed -n '/승인/p' docs/refactor/APPROVALS.log | wc -l", "sed 's/x/y/w /tmp/out' docs/refactor/APPROVALS.log",
               "sed -E 's/(a|b)e/x/' docs/refactor/APPROVALS.log", "sed -ne 's/a/b/p' docs/refactor/APPROVALS.log"]
     proj = make_project(phase="EXECUTE")
@@ -5955,6 +5961,8 @@ def check_pause_042(res):
                  ("Write", {"file_path": ".claude/settings.local.json", "content": "{}"}), bash("cat .env"), ("Read", {"file_path": ".env"}),
                  bash("git push --force origin x"), bash("git remote set-url origin https://example.com/x.git"),
                  bash("gh api -X PATCH repos/o/r -f default_branch=x"), bash("gh alias set pm 'pr merge'"), bash("rm -rf docs/refactor"),
+                 # 재검사 A2 🟡1: 사람 전용 파일에 셸 리다이렉트 쓰기도 멈춤 중 그대로
+                 bash("printf x >> docs/refactor/APPROVALS.log"), bash("echo x > docs/refactor/.allow-pause"),
                  # 보완(사장님 결정 S7-3): 멈춤 중에도 PR 합치기·원격 가지 참조 바꾸기
                  bash("gh pr merge 5"), bash("gh pr merge 5 --squash"), bash("gh api -X PUT repos/o/r/pulls/5/merge"),
                  bash("gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc"), bash("gh api -X DELETE repos/o/r/git/refs/heads/x"),

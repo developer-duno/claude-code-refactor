@@ -1011,8 +1011,11 @@ writes_to() {
   #   어느 대상이든 쓰기로 본다: 'e cmd' · 1e cmd · s/…/…/e). sed 낱말이 있을 때만(따옴표 안 ; | 를 넘어 보려고 명령 전체에서)
   if has "$lq" "${S}sed[[:space:]]"; then
     local sw="[[:space:]]*[\"']?[^[:space:]\"';}]*($1)"
-    has "$lq" "(s/[^/]*/[^/]*/[gpime0-9]*|[^A-Za-z0-9_./~[:space:]-][gpime0-9]*|[0-9])w$sw|[[:space:]]w[[:space:]]+[\"']?[^[:space:]\"';}]*($1)" && return 0
-    has "$lq" "(s/[^/]*/[^/]*/[gpimw0-9]*|[^A-Za-z0-9_./~[:space:]-][gpimw0-9]*|[0-9])e([[:space:]\"';}]|\$)" && return 0
+    # 재검사 A2 🟡4·C2 🟠: 정규식 주소 '/…/w 파일'(앞 글자가 / 라 아래 부류에서 빠짐)과 s/…\/…/ 안의 \/ 도 본다
+    local sf="([^/\\\\]|\\\\.)*"
+    has "$lq" "(s/$sf/$sf/[gpime0-9]*|[^A-Za-z0-9_./~[:space:]-][gpime0-9]*|[0-9]|/$sf/)w$sw|[[:space:]]w[[:space:]]+[\"']?[^[:space:]\"';}]*($1)" && return 0
+    # 재검사 C2 🟡1: e 는 앞 글자가 따옴표·;·{·}·!·$·숫자·s///e 일 때만(정규식·치환문 속 e 는 아님 — 's/^e //' 는 읽기)
+    has "$lq" "(s/$sf/$sf/[gpimw0-9]*|[\"';{}!\$][gpimw0-9]*|[0-9])e([[:space:]\"';}]|\$)" && return 0
   fi
   has "$lq" "${S}(rm|unlink|mv|ln|truncate|shred|chmod|chown|patch|tee|sponge|touch|sed[[:space:]]+(-[a-z]*i|--in-place)|perl[[:space:]]+-[a-z]*i|g?awk[[:space:]]+-i[[:space:]]+inplace|git[[:space:]]+(checkout|restore|rm|mv)|set-content|add-content|out-file|remove-item|move-item|new-item)[[:space:]][^;&|]*($1)" && return 0
   has "$lq" ">>?[[:space:]]*[\"']?[^[:space:];&|]*($1)" && return 0
@@ -2054,7 +2057,7 @@ hv_deploy() {
     done
     tv=$vout$vrest
   fi
-  # 0.4.2 F5: 잠깐 멈춤 중(pause_skips deploy)에는 배포·합치기·배포 기록·워크플로 실행·API 커밋·마이그 적용·원격 DB 를 건너뛴다.
+  # 0.4.2 F5: 잠깐 멈춤 중(pause_skips deploy)에는 배포·배포 기록·워크플로 실행·API 커밋·마이그 적용·원격 DB 를 건너뛴다(합치기·파괴 꼴은 S7-3·S7-4 로 멈춤 중에도 막는다).
   #   저장소 설정(MSG_REPOSET — 가지 보호·이름·환경)·gh 별칭·파일에서 읽는 GraphQL 은 멈춤이 끝난 뒤에도 남거나 판정할 수 없어 그대로 막는다
   local PS=0; pause_skips deploy && PS=1
   #   보완(사장님 결정 S7-3·S7-4): 멈춤 중에도 PR 합치기(gh pr merge · API 합치기)·원격 가지 참조 바꾸기(…/git/refs 쓰기 · GraphQL updateRef·deleteRef)와
