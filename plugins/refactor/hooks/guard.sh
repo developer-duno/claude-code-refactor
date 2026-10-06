@@ -1043,55 +1043,233 @@ iw_one() {
   return 0
 }
 # 0.4.3 R2: 인터프리터 코드(python -c · node -e · 히어독 …)의 복사·옮기기·풀기 함수가 기록 폴더 자체·그 상위·그 안의 사람 전용 파일을
-#   겨냥하는가 → 0(IRW = hit | over). 코드 글(벗기기 전 lr0 · lr)을 따옴표(' ")로 잘라 조각마다 cpd_hit1 <조각> rec — 이름 적은 그 밖 파일
-#   ('docs/refactor/PLAN.md')은 통과(cp 와 같은 결). 함수 낱말·조각 자르기는 case·매개변수 확장으로(맥 bash 3.2 TRE — 0.4.2 W4).
-#   인터프리터 낱말이나 함수 낱말이 없으면 바로 1(평소 비용 0). 판정 조각이 50개를 넘으면 판정할 수 없어 막는다(IRW=over — "애매하면 막는다")
+#   겨냥하는가 → 0(IRW = hit | over). W1fix3(검사 C 🟠1~3·보안 1): **목적지 자리만** 본다 —
+#   ① 실제 복사·풀기 함수 호출(아래 표)을 찾아 괄호 안 인자를 맨 위 쉼표로 나누고 목적지 인자(둘째 · extractall 은 첫째 · 이름 붙인 dst= path= …)만
+#      판정. 따옴표 글자 · 지금 폴더(process.cwd() · os.getcwd() · 인자 없는 extractall() · '.' · './') · os.path.join 등 글자 잇기 ·
+#      같은 코드에서 글자로 대입한 변수 한 단계까지 푼다. 파일 복사(shutil.copy·copy2·copyfile·move · copyFile(Sync) · php·perl copy)는
+#      목적지가 있는 폴더면 그 안의 <원본 이름>으로 판정(셸 cp README.md docs/ 와 같은 결)
+#   ② 목적지를 못 푼 호출(변수·식)이 하나라도 있으면 예전처럼 코드 안 모든 따옴표 글자를 판정(애매하면 막는다) — 50개를 넘으면 막는다(IRW=over)
+#   ③ PowerShell Copy-Item·Move-Item·Expand-Archive 는 -Destination(Path) 값이나 둘째 위치 인자(없으면 지금 폴더)
+#   함수 찾기·인자 나누기는 글자 단위 case·매개변수 확장으로(맥 bash 3.2 TRE — 0.4.2 W4). 인터프리터 낱말이 없으면 바로 1(평소 비용 0)
 interp_record_writes() {
   IRW=""
   has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
-  local x="${lr0:-}$NL$lr" s p k t w strong=2 IFS=$' \t\n'
-  case "$x" in
-    *shutil*|*copytree*|*copy2*|*cpsync*|*copyfilesync*|*renamesync*|*extractall*|*copy-item*|*os.replace*|*os.rename*|*.cp\(*|*.copyfile*|*.rename\(*|*.extract\(*) ;;
-    # W1fix F-5: ruby·php·perl·pwsh 꼴(FileUtils.cp_r · File::Copy · Move-Item · Expand-Archive)
-    *fileutils*|*cp_r*|*move-item*|*expand-archive*|*file::copy*) ;;
-    # 약한 낱말(copy( · rename( — dict.copy( 처럼 목록 복사에도 쓴다): 50개를 넘어도 막지 않는다
-    #   (W1fix2 G-1: 홑 .replace( 는 넣지 않는다 — 글자 바꾸기가 평소 꼴. os.replace 는 위 강한 낱말)
-    *copy\(*|*rename\(*) strong=1 ;;
-    *) return 1 ;;
-  esac
-  for t in 0 1; do
-    if [ "$t" = 0 ]; then s=${lr0:-$lr}; else { [ -n "${lr0:-}" ] && [ "$lr0" != "$lr" ]; } || break; s=$lr; fi
-    k=0
-    while [ -n "$s" ]; do
-      case "$s" in *[\"\']*) p=${s%%[\"\']*}; s=${s#*[\"\']} ;; *) p=$s; s="" ;; esac
-      case "$p" in ''|[[:space:]]*|*[[:space:]]|*"$NL"*|*[\;=,]*) ;;
-        *)
-          k=$((k + 1))
-          # 약한 낱말만이면 50개를 넘어도 막지 않고 거기서 그친다(dict.copy( 가 든 긴 히어독 — 헛막힘 방지)
-          if [ "$k" -gt 50 ]; then [ "$strong" = 2 ] || return 1; IRW=over; return 0; fi
-          irw_tok "$p" && return 0 ;;
-      esac
-      # W1fix F-5: 조각 안 낱말(따옴표 없는 인자 — Expand-Archive a.zip docs/refactor · copytree(/tmp/x, docs/refactor))도 —
-      #   기록 폴더·상위를 가리킬 수 있는 꼴만(세지 않음 · 판정 비용을 낱말 수에 묶지 않게)
-      case "$p" in *[[:space:]\(\),\;=]*) ;; *) continue ;; esac
-      p=${p//[(),;=\[\]\{\}]/ }
-      set -f
-      for w in $p; do
-        case "$w" in *docs*|*refactor*|*state.md*|*approv*|*.turn*|*.allow*|*execution_log*|../*|"$proj"|"$proj"/) ;; *) continue ;; esac
-        irw_tok "$w" && { set +f; return 0; }
-      done
-      set +f
-    done
+  local IRC=${lr0:-$lr} IRU=0 t m b IFS=$' \t\n'
+  local -a IRD=() toks=()
+  # 따옴표 앞 역슬래시(node -e "fs.cpSync(\"a\",\"b\")")는 떼고 본다
+  IRC=${IRC//"$BS$Q"/$Q}; IRC=${IRC//"$BS'"/\'}
+  # 찾을 호출: <글자>|<방식> — 2 = 둘째 인자(통째) · f = 둘째 인자(파일 복사: 있는 폴더면 그 안의 원본 이름) · R = 인자 하나면 첫째·둘이면 둘째 ·
+  #   X = 첫째 또는 path=(없으면 지금 폴더) · U = 둘째 또는 extract_dir=(없으면 지금 폴더) · E = 둘째 또는 path=(없으면 안 봄) · F = 인자를 못 가림(②로)
+  toks=('shutil.copy(|f' 'shutil.copy2(|f' 'shutil.copyfile(|f' 'shutil.move(|f' 'shutil.copytree(|2' 'shutil.unpack_archive(|U'
+        '.extractall(|X' '.extract(|E' 'os.replace(|2' 'os.rename(|2' '.rename(|R'
+        'cpSync(|2' 'fs.cp(|2' 'promises.cp(|2' ').cp(|2' 'copyFileSync(|f' '.copyFile(|f' 'renameSync(|2'
+        'cp_r(|2' 'FileUtils.cp(|f' 'FileUtils.mv(|f' 'FileUtils.copy_entry(|2' 'FileUtils.cp_r |F' 'FileUtils.cp |F' 'FileUtils.mv |F')
+  case "$IRC" in *'from shutil import'*) toks+=('=copy(|f' '=copy2(|f' '=copyfile(|f' '=move(|f' '=copytree(|2' '=unpack_archive(|U') ;; esac
+  case "$IRC" in *'File::Copy'*) toks+=('=copy(|f' '=move(|f' 'File::Copy::copy(|f' 'File::Copy::move(|f') ;; esac
+  has "$lr" "${S}php[[:space:]]" && toks+=('=copy(|f' '=rename(|2')
+  shopt -u nocasematch
+  for t in "${toks[@]}"; do irw_find "${t%|*}" "${t##*|}"; done
+  shopt -s nocasematch
+  case "$IRC" in *copy-item*|*cpi\ *|*move-item*|*expand-archive*) irw_ps ;; esac
+  # 별칭으로 부른 꼴(import shutil as s · from shutil import copytree as c · const {cpSync: c} = require('fs') · getattr(shutil, 'copytree')) —
+  #   복사·풀기 함수 낱말이 있는데 목적지를 하나도 못 찾았거나 별칭 꼴이 보이면 ② 길(모든 따옴표 글자)로. 홑 shutil(shutil.which)은 아니다(검사 C 🟠2)
+  if [ "${#IRD[@]}" = 0 ]; then
+    case "$IRC" in *copytree*|*copy2*|*copyfile*|*extractall*|*unpack_archive*|*cpsync*|*renamesync*|*fileutils*|*os.replace*|*os.rename*|*file::copy*|*copy-item*|*expand-archive*|*move-item*|*cp_r*|*shutil.copy*|*shutil.move*) IRU=1 ;; esac
+  fi
+  case "$IRC" in *'import shutil as'*|*'import zipfile as'*|*'import tarfile as'*|*'getattr(shutil'*|*'getattr(os'*|*'getattr(zipfile'*|*'getattr(tarfile'*|*'from shutil import'*' as '*) IRU=1 ;; esac
+  [ "${#IRD[@]}" -gt 0 ] || [ "$IRU" = 1 ] || return 1
+  for t in "${IRD[@]}"; do
+    case "$t" in
+      cwd) cpd_hit1 "$cwd" rec && { IRW=hit; return 0; } ;;
+      lit:*)
+        m=${t#lit:}; m=${m//"$BS"/$SL}
+        # 구분자·문장부호만인 글자('/' · ', ')는 건너뛴다 — . ./ .. 는 함수 인자 자리라 판정(지금 폴더 = 프로젝트, 검사 C 🟠3)
+        case "$m" in *[[:alnum:]]*|.|./|..|../) ;; *) continue ;; esac
+        case "$m" in [A-Za-z]:|[A-Za-z]:/) continue ;; esac
+        cpd_hit1 "$m" rec && { IRW=hit; return 0; } ;;
+    esac
+  done
+  [ "$IRU" = 1 ] || return 1
+  # ② 목적지를 못 푼 호출 — 코드 안 모든 따옴표 글자(' " `)
+  local s=$IRC p k=0
+  while [ -n "$s" ]; do
+    case "$s" in *[\"\'\`]*) p=${s%%[\"\'\`]*}; s=${s#*[\"\'\`]} ;; *) p=$s; s="" ;; esac
+    case "$p" in ''|[[:space:]]*|*[[:space:]]|*"$NL"*|*[\;=,]*) continue ;; esac
+    case "$p" in *[[:alnum:]]*) ;; *) continue ;; esac
+    case "$p" in [A-Za-z]:|[A-Za-z]:/) continue ;; esac
+    k=$((k + 1))
+    [ "$k" -gt 50 ] && { IRW=over; return 0; }
+    cpd_hit1 "$p" rec && { IRW=hit; return 0; }
   done
   return 1
 }
-irw_tok() { # 조각·낱말 하나가 기록 폴더 자체·상위·사람 파일인가 → IRW=hit
-  # W1fix2 G-2: 빈 글자·/·\·.·./·드라이브만(C: · C:/)·글자도 숫자도 없는 조각(구분자·문장부호 — '/' · ', ' · '..')은 보지 않는다
-  #   ('x'.split('/') 의 '/' 가 루트로 풀려 헛막혔다). docs · docs/refactor 같은 글자 조각은 그대로 판정
-  case "$1" in *[[:alnum:]]*) ;; *) return 1 ;; esac
-  case "$1" in [A-Za-z]:|[A-Za-z]:/|[A-Za-z]:"$BS") return 1 ;; esac
-  cpd_hit1 "$1" rec && { IRW=hit; return 0; }
+# 호출 글자 $1(맨 앞 = 는 맨 이름 — 앞 글자가 영숫자·_·$·. 가 아니어야)의 자리마다 인자를 나눠 목적지를 IRD 에(못 풀면 IRU=1)
+irw_find() {
+  local tok=$1 mode=$2 bare=0 rest=$IRC pre c
+  case "$tok" in =*) bare=1; tok=${tok#=} ;; esac
+  while :; do
+    case "$rest" in *"$tok"*) ;; *) break ;; esac
+    pre=${rest%%"$tok"*}; rest=${rest#*"$tok"}
+    if [ -n "$pre" ] && [ "${tok:0:1}" != . ]; then
+      c=${pre:$((${#pre} - 1))}
+      case "$c" in [A-Za-z0-9_\$]) continue ;; esac
+      [ "$bare" = 1 ] && [ "$c" = . ] && continue
+    fi
+    [ "$mode" = F ] && { IRU=1; continue; }
+    irw_args "$rest" || { IRU=1; continue; }
+    irw_dest "$mode"
+  done
+}
+# '(' 바로 뒤 글 → IA(맨 위 쉼표로 나눈 인자 글). 따옴표 안·괄호 안 쉼표는 나누지 않는다. 닫는 ) 를 4000 글자 안에서 못 찾으면 1
+irw_args() {
+  local s=$1 i n=${#1} c d=0 q="" cur=""
+  IA=()
+  [ "$n" -gt 4000 ] && n=4000
+  for ((i = 0; i < n; i++)); do
+    c=${s:i:1}
+    if [ -n "$q" ]; then
+      cur=$cur$c
+      if [ "$c" = "$BS" ]; then i=$((i + 1)); cur=$cur${s:i:1}; elif [ "$c" = "$q" ]; then q=""; fi
+      continue
+    fi
+    case "$c" in
+      \'|\"|\`) q=$c; cur=$cur$c ;;
+      '('|'['|'{') d=$((d + 1)); cur=$cur$c ;;
+      ')'|']'|'}')
+        if [ "$d" = 0 ]; then
+          cur=${cur#"${cur%%[![:space:]]*}"}
+          { [ -n "$cur" ] || [ "${#IA[@]}" -gt 0 ]; } && IA+=("$cur")
+          return 0
+        fi
+        d=$((d - 1)); cur=$cur$c ;;
+      ,) if [ "$d" = 0 ]; then IA+=("$cur"); cur=""; else cur=$cur$c; fi ;;
+      *) cur=$cur$c ;;
+    esac
+  done
   return 1
+}
+# IA(인자 글) + 방식 → 목적지 하나를 IRD 에(lit:<글자> | cwd) · 못 풀면 IRU=1 · 볼 것이 없으면(인자 모자람) 그대로
+irw_dest() {
+  local mode=$1 a nm v d="" src="" kw="" n=0 i
+  local -a P=()
+  for a in "${IA[@]}"; do
+    a=${a#"${a%%[![:space:]]*}"}; a=${a%"${a##*[![:space:]]}"}
+    nm=${a%%=*}
+    if [ "$nm" != "$a" ] && [ -n "$nm" ] && case "$nm" in *[!A-Za-z0-9_[:space:]]*) false ;; *) true ;; esac && case "${a#*=}" in =*) false ;; *) true ;; esac; then
+      nm=${nm%"${nm##*[![:space:]]}"}; v=${a#*=}; v=${v#"${v%%[![:space:]]*}"}
+      case "$mode:$nm" in
+        [2fR]:dst|[2fR]:dest|[2fR]:destination|[2fR]:target|[2fR]:to|[XE]:path|U:extract_dir) kw=$v ;;
+        [2f]:src|[2f]:source) src=$v ;;
+      esac
+      continue
+    fi
+    P+=("$a")
+  done
+  n=${#P[@]}
+  if [ -n "$kw" ]; then d=$kw
+  else
+    case "$mode" in
+      2|f) [ "$n" -ge 2 ] && d=${P[1]} ;;
+      R) if [ "$n" -ge 2 ]; then d=${P[1]}; elif [ "$n" = 1 ]; then d=${P[0]}; fi ;;
+      X) if [ "$n" -ge 1 ]; then d=${P[0]}; else IRD+=("cwd"); return 0; fi ;;
+      U) if [ "$n" -ge 2 ]; then d=${P[1]}; else IRD+=("cwd"); return 0; fi ;;
+      E) [ "$n" -ge 2 ] && d=${P[1]} ;;
+    esac
+  fi
+  [ -n "$d" ] || return 0
+  irw_val "$d" 0
+  case "$IVK" in
+    cwd) IRD+=("cwd"); return 0 ;;
+    lit) ;;
+    *) IRU=1; return 0 ;;
+  esac
+  v=$IV
+  # 파일 복사·옮기기: 목적지가 있는 폴더면 그 안의 원본 이름으로(원본 이름을 모르면 목적지 그대로 — 막는 쪽)
+  if [ "$mode" = f ]; then
+    [ -z "$src" ] && [ "$n" -ge 1 ] && src=${P[0]}
+    if [ -n "$src" ] && resolve_tok "${v//"$BS"/$SL}" && [ -d "$RP" ]; then
+      irw_val "$src" 0
+      if [ "$IVK" = lit ]; then
+        i=${IV//"$BS"/$SL}; i=${i%/}; i=${i##*/}
+        case "$i" in ''|.|..) ;; *) v="${v%/}/$i" ;; esac
+      fi
+    fi
+  fi
+  IRD+=("lit:$v")
+}
+# 인자 글 하나 → IVK(lit | cwd | 빈 값 = 모름) · IV(글자). $2 = 깊이(1 이면 변수를 더 풀지 않는다)
+irw_val() {
+  local v=$1 q inner id rest pre c e="" j="" a
+  IV=""; IVK=""
+  v=${v#"${v%%[![:space:]]*}"}; v=${v%"${v##*[![:space:]]}"}
+  case "$v" in [rRbBuU][\'\"]*) v=${v:1} ;; esac
+  case "$v" in
+    \'*\'|\"*\"|\`*\`)
+      q=${v:0:1}; inner=${v:1:$((${#v} - 2))}
+      case "$inner" in *"$q"*) return 0 ;; esac
+      [ "$q" = '`' ] && case "$inner" in *'${'*) return 0 ;; esac
+      IV=$inner; IVK=lit ;;
+    'process.cwd()'|'os.getcwd()'|'Path.cwd()'|'pathlib.Path.cwd()'|'os.curdir'|'Dir.pwd'|'getcwd()'|'Deno.cwd()') IVK=cwd ;;
+    *join\(*\)|Path\(*\)|'File.join('*\))
+      # 글자 잇기(os.path.join · path.join · File.join · Path('…')): 조각이 모두 글자·지금 폴더면 / 로 잇는다(절대 경로 조각이면 거기서 다시 시작)
+      irw_args "${v#*\(}" || return 0
+      local -a parts=("${IA[@]}")
+      [ "${#parts[@]}" -gt 0 ] || return 0
+      for a in "${parts[@]}"; do
+        irw_val "$a" 1
+        case "$IVK" in
+          cwd) j=$cwd ;;
+          lit) case "$IV" in /*|[A-Za-z]:*) j=$IV ;; *) j=${j:+${j%/}/}$IV ;; esac ;;
+          *) IVK=""; IV=""; return 0 ;;
+        esac
+      done
+      IV=$j; IVK=lit ;;
+    *)
+      # 같은 코드에서 대입한 변수(한 단계) — 마지막 대입 "<이름> = <식>"(== 아님)
+      [ "$2" = 0 ] || return 0
+      case "$v" in [A-Za-z_]*) ;; *) return 0 ;; esac
+      case "$v" in *[!A-Za-z0-9_]*) return 0 ;; esac
+      id=$v; rest=$IRC
+      while :; do
+        case "$rest" in *"$id"*) ;; *) break ;; esac
+        pre=${rest%%"$id"*}; rest=${rest#*"$id"}
+        if [ -n "$pre" ]; then c=${pre:$((${#pre} - 1))}; case "$c" in [A-Za-z0-9_.\$]) continue ;; esac; fi
+        case "$rest" in [A-Za-z0-9_]*) continue ;; esac
+        a=${rest#"${rest%%[![:space:]]*}"}
+        case "$a" in =[!=]*) a=${a#=}; a=${a%%[;$NL]*}; e=$a ;; esac
+      done
+      [ -n "$e" ] && irw_val "$e" 1 ;;
+  esac
+  return 0
+}
+# PowerShell Copy-Item·Move-Item·Expand-Archive(별명 cpi·mi) — -Destination·-DestinationPath(앞 글자만 적은 꼴·-D:값 도) 값 · 아니면 둘째 위치 인자 · 없으면 지금 폴더
+irw_ps() {
+  local s=$IRC seg w nx dest pos have=0 i n sk
+  s=${s//;/$NL}; s=${s//|/$NL}
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    case "$seg" in *copy-item*|*cpi\ *|*move-item*|*mi\ *|*expand-archive*) ;; *) continue ;; esac
+    seg=${seg//[\"\'\`]/ }
+    set -f; local -a W=($seg); set +f
+    n=${#W[@]}; have=0
+    for ((i = 0; i < n; i++)); do
+      case "${W[$i]}" in copy-item|cpi|move-item|mi|expand-archive|microsoft.powershell.management\\copy-item) have=1; break ;; esac
+    done
+    [ "$have" = 1 ] || continue
+    dest=""; pos=0; sk=""
+    for ((i = i + 1; i < n; i++)); do
+      w=${W[$i]}
+      if [ -n "$sk" ]; then [ "$sk" = d ] && dest=$w; sk=""; continue; fi
+      case "$w" in
+        -d*:*) dest=${w#*:} ;;
+        -d*) sk=d ;;
+        -path|-literalpath|-lp|-pspath|-filter|-include|-exclude|-credential|-tosession|-fromsession) sk=s ;;
+        -*) ;;
+        *) pos=$((pos + 1)); [ "$pos" = 2 ] && [ -z "$dest" ] && dest=$w ;;
+      esac
+    done
+    if [ -n "$dest" ]; then IRD+=("lit:$dest"); else IRD+=("cwd"); fi
+  done
 }
 # W1fix2 G-3: 파이썬 모듈 명령으로 풀기(python -m zipfile -e <압축> <폴더> · python -m tarfile -e <압축> [폴더] · -x · --extract) →
 #   풀 곳(마지막 비옵션 낱말 — tarfile 은 없으면 지금 폴더)이 기록 폴더 자체·상위·사람 파일이면 0. 목록(-l)·만들기(-c)·시험(-t)은 아님
@@ -1114,7 +1292,8 @@ imu_seg() {
   case "$SCMD" in python|python3|python3.[0-9]*|py) ;; *) return 1 ;; esac
   local n=${#SW[@]} i=$((SI + 1)) a mod="" ex=0 skip=0 args=() dest
   while [ "$i" -lt "$n" ]; do   # 인터프리터 옵션(-I · -X 값 · -W 값) 뒤 -m <모듈>
-    case "${SW[$i]}" in -m) mod=${SW[$((i + 1))]:-}; i=$((i + 2)); break ;; -X|-W) i=$((i + 2)) ;; -*) i=$((i + 1)) ;; *) return 1 ;; esac
+    # W1fix3 H-6: 붙여 쓴 -m<모듈>(python -mzipfile …)도
+    case "${SW[$i]}" in -m) mod=${SW[$((i + 1))]:-}; i=$((i + 2)); break ;; -m?*) mod=${SW[$i]#-?}; i=$((i + 1)); break ;; -X|-W) i=$((i + 2)) ;; -*) i=$((i + 1)) ;; *) return 1 ;; esac
   done
   case "$mod" in zipfile|tarfile) ;; *) return 1 ;; esac
   for ((i = i; i < n; i++)); do
@@ -2020,7 +2199,7 @@ restore_record1() { # $1 판정 문자열 — && || ; | ` $( 로 나눈 조각�
 rr_seg() {
   seg_words "$1"
   case "$SCMD" in git) ;; *) return 0 ;; esac
-  local n=${#SW[@]} i=$((SI + 1)) a sub L j c dd=0 st=0 wt=0 skip=0 pf=0 pre=() post=() paths=()
+  local n=${#SW[@]} i=$((SI + 1)) a sub L j c g r dd=0 st=0 wt=0 skip=0 pf=0 pre=() post=() paths=()
   while [ "$i" -lt "$n" ]; do   # git 전역 옵션(-c 이름=값 · -C 폴더 · --git-dir 폴더 · --work-tree 폴더 · --no-pager …)
     case "${SW[$i]}" in -c|-C|--git-dir|--work-tree|--namespace|--config-env) i=$((i + 2)) ;; -*) i=$((i + 1)) ;; *) break ;; esac
   done
@@ -2072,8 +2251,20 @@ rr_seg() {
     # W1fix F-2: 와일드카드(git 이 경로 패턴으로 펼친다 — 'docs/refactor/*' · docs/refactor/*.md · docs/refactor/**) → 첫 패턴 글자가 든
     #   칸의 앞 폴더로 판정. 앞 폴더가 없는 꼴('*.md' · doc?/x)은 이 판정에서 보지 않는다('*' 단독은 hv_git)
     case "$a" in *[\*\?\[]*)
-      a=${a%%[\*\?\[]*}
-      case "$a" in */*) a=${a%/*}; a=${a:-/} ;; *) continue ;; esac ;;
+      g=$a; a=${a%%[\*\?\[]*}
+      case "$a" in
+        */*) a=${a%/*}; a=${a:-/} ;;
+        *)
+          # W1fix3 H-5(보안 2): 앞 칸에 / 가 없으면('doc*' · 'd*/refactor' · '*.md') 패턴을 지금 폴더에서 본 기록 폴더 경로(docs/refactor)와
+          #   그 첫 칸(docs)에 맞춰 본다(대소문자 무시) — 맞으면 막고, 아니면 이 판정에서 보지 않는다
+          #   H-5b: git 경로 패턴의 * 는 / 를 넘어 맞는다('*.md' = docs/refactor/STATE.md · '*.log' = APPROVALS.log) — 기록 폴더 안의 사람 전용·상태
+          #   파일 이름과도 맞춰 본다. 지금 폴더 아래에 있는 것만(패턴은 지금 폴더 기준)
+          for r in "${rdir%/*}" "$rdir" "$rdir/STATE.md" "$rdir/APPROVALS.log" "$rdir/EXECUTION_LOG.md" "$rdir/approved" "$rdir/approved/x" "$rdir/.turn" "$rdir/.allow-x"; do
+            case "$r" in "$cwd"/*) r=${r#"$cwd"/} ;; *) continue ;; esac
+            if [[ $r == $g ]]; then block "$MSG_RESTORE"; fi
+          done
+          continue ;;
+      esac ;;
     esac
     cpd_hit1 "$a" rec && block "$MSG_RESTORE"
     # 되돌리기에만: 실행 기록(EXECUTION_LOG.md) — 자동 모드가 그 '기준선 결과' 줄을 믿으므로 옛 판으로 되돌리지 않는다(메인 판정 19:2x)
