@@ -298,6 +298,7 @@ if [ -f "$rdir/.allow-pause" ] && load_lib; then
     if [ ! -f "$rdir/.allow-pause" ]; then
       printf '%s\n' "[Vibe Refactor] ⏸ 잠깐 멈춤 시간($(rl_hm "$p_u") 까지)이 지나 안전장치가 다시 켜졌습니다."
       rl_pause_changes "$proj" "$p_h"
+      rl_pause_branch "$proj" "$p_h"
     fi
   fi
 fi

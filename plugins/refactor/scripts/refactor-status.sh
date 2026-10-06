@@ -198,6 +198,8 @@ fi
 allow=""; allow_msg=""
 for f in "$dir"/.allow-*; do
   [ -e "$f" ] || continue
+  # 0.4.2 F5: 멈춤 파일(.allow-pause)은 '허용 파일 남음 — rm' 으로 알리지 않는다(맨 위 ⏸ 줄 · 사람이 다시 시작·만료로 지움 — session-start 와 같게)
+  [ "${f##*/}" = .allow-pause ] && continue
   # 기준선 허용 파일에 단계 ID 가 적혀 있으면(0.3.2) 그 단계를 실행하는 동안만(0.3.3 — STATE.md current_step) 열리고 끝나면 저절로 닫힌다 —
   # 상태별로 알린다. 빈(0바이트·공백만) 파일은 기준선 전부가 열려 저절로 안 닫히므로 따로 경고(0.3.3)
   if [ "${f##*/}" = .allow-baseline-edit ] && command -v rl_allow_baseline >/dev/null 2>&1; then

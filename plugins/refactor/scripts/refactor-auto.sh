@@ -592,8 +592,8 @@ deploy-wait)
       github)
         [ -n "$MSHA" ] || return 0
         command -v gh >/dev/null 2>&1 || { HWHY="gh 없음"; return 0; }
-        (cd "$proj" && rl_bounded "$GL" gh api "repos/{owner}/{repo}/deployments?sha=$MSHA&per_page=5" --jq '.[0] // empty | "\(.id)\t\(.environment)\t\(.created_at)"') >"$TD/g" 2>/dev/null || { HS=wait; return 0; }
-        IFS=$'\t' read -r did denv dat < "$TD/g" || :
+        (cd "$proj" && rl_bounded "$GL" gh api "repos/{owner}/{repo}/deployments?sha=$MSHA&per_page=5" --jq '.[0] // empty | "\(.id)\t\(.created_at)\t\(.environment)"') >"$TD/g" 2>/dev/null || { HS=wait; return 0; }
+        IFS=$'\t' read -r did dat denv < "$TD/g" || :   # 환경 이름은 마지막 칸(이름에 탭이 있어도 남은 글자 전부가 이름 — 0.4.2 검사 A)
         [[ ${did:-} =~ ^[0-9]+$ ]] || { HS=wait; return 0; }
         (cd "$proj" && rl_bounded "$GL" gh api "repos/{owner}/{repo}/deployments/$did/statuses?per_page=1" --jq '.[0].state // "-"') >"$TD/g" 2>/dev/null || { HS=wait; return 0; }
         read -r st_ < "$TD/g" || :

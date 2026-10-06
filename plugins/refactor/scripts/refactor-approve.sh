@@ -361,6 +361,7 @@ if [ "$mode" = "resume" ]; then
   fi
   say "▶ 잠깐 멈춤을 끝냈습니다 — 안전장치가 다시 켜졌습니다. 이어 하려면 /refactor:go"
   rl_pause_changes "$proj" "$phd"
+  rl_pause_branch "$proj" "$phd"
   exit 0
 fi
 
@@ -414,6 +415,10 @@ if [ "$mode" = "pause" ]; then
   for x in "$dir"/.turn-auto.* "$dir"/.turn-nextok.* "$dir"/.turn-merged.* "$dir"/.turn-mergetp.* "$dir"/.turn-merge.* "$dir"/.turn-push.*; do
     [ -e "$x" ] || continue
     set -f
+    # .turn-merged.* 는 사람 입력으로 안 지워진다(합친 뒤 읽기 단계가 끝나거나 하루 정리 때 — turn.sh) → 문구 따로
+    case "${x##*/}" in .turn-merged.*)
+      pz_no "⛔ 합친 뒤 확인 차례가 진행 중입니다(docs/refactor/${x##*/})." "합친 뒤 읽기 단계가 끝나거나 하루 정리 뒤에 다시 입력하세요" ;;
+    esac
     pz_no "⛔ 자동 모드나 푸시·합치기 허락이 진행 중입니다(docs/refactor/${x##*/})." "그 차례가 끝난 뒤(아무 말이나 입력하면 허락이 끝납니다 — 다른 대화의 것이면 그 대화에서) 다시 입력하세요"
   done
   set -f
@@ -848,7 +853,10 @@ RECS_DONE
     [ -f "$dir/.allow-baseline-edit" ] || say "🔒 리팩토링이 끝나 기준선 허용 파일(.allow-baseline-edit)을 지웠습니다."
   fi
   # 0.4.2 F5: 잠깐 멈춤 파일도 지운다(다음 주기 /refactor:go 다시 때 남은 멈춤이 이어지지 않게 — 기록에는 줄을 더하지 않는다)
+  #   지우기 전에 멈춤 중 바뀐 기준선·마이그레이션을 한 번 알린다(다시 시작·만료와 같게 — 사장님 S7-2)
   if [ -f "$dir/.allow-pause" ]; then
+    rl_pause_state "$dir"
+    rl_pause_changes "$proj" "$RL_PHEAD"
     rm -f "$dir/.allow-pause"
     [ -f "$dir/.allow-pause" ] || say "▶ 잠깐 멈춤 파일(.allow-pause)도 지웠습니다."
   fi

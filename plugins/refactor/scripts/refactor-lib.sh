@@ -919,11 +919,14 @@ rl_card_bl_paths() { # [-n] <카드 본문 파일…>
 #            "잠깐 멈춤"/"다시 시작" 줄이 "| 잠깐 멈춤 | - | - | until=<만료 epoch> …" — 파일과 같은 epoch) · expired(꼴은 맞고 만료가 지남) · bad(그 밖 — 쉬지 않음)
 #   지금 시각 = RL_PNOW(부른 쪽이 정해 둔 epoch)가 있으면 그 값, 없으면 date +%s (bash 5 전용 epoch 변수는 쓰지 않는다 — 맥 bash 3.2)
 rl_pause_state() {
-  local rd=$1 l="" ep n h rest x last="" re_n='^([1-9]|1[0-2])$'
+  local rd=$1 l="" ep n h rest x="" r1 r2 last="" re_n='^([1-9]|1[0-2])$'
   RL_PST=none; RL_PUNTIL=""; RL_PN=""; RL_PHEAD=""
   [ -f "$rd/.allow-pause" ] || return 1
   RL_PST=bad
-  IFS= read -r l < "$rd/.allow-pause" || [ -n "$l" ] || return 1
+  # 꼭 1줄(approve 는 1줄만 쓴다 — 둘째 줄이 있으면 빈 줄이어도 멈춤 아님, 0.4.2 검사 A)
+  { IFS= read -r l; r1=$?; IFS= read -r x; r2=$?; } < "$rd/.allow-pause"
+  [ "$r1" = 0 ] || [ -n "$l" ] || return 1
+  [ "$r2" != 0 ] && [ -z "$x" ] || return 1
   l=${l%$'\r'}
   read -r ep n h rest <<RLPA
 $l
@@ -971,6 +974,20 @@ RLPC
   printf '%s' "$show"
   [ "$n" -gt 10 ] && printf '%s\n' "   … 외 $((n - 10))개"
   printf '%s\n' "   → 일부러 바꾼 것이 아니면 git diff 로 확인해 주세요(되돌릴지는 사람이 정합니다)."
+}
+# 멈춤 중 가지 바뀜 알림(0.4.2 F5 — 다시 시작·만료 때): $1 프로젝트 폴더 $2 시작 HEAD(40자)
+#   지금 HEAD 가 시작 HEAD 를 품고 있으면(같은 가지에서 이어 커밋 · 거기서 딴 가지) 빈 출력. 아니면(다른 가지로 옮김) 한 줄 —
+#   x = 시작 HEAD 를 품은 가지(3개까지) · y = 지금 가지(가지 없음이면 커밋 7자). 시작 HEAD 를 못 읽으면(지워진 커밋 등) 빈 출력
+#   (.allow-pause 칸은 늘리지 않는다 — 안전장치 guard.sh 가 같은 1줄 세 칸을 읽는다)
+rl_pause_branch() {
+  local proj=$1 h=$2 x y rc
+  local G=(git --no-replace-objects -c core.fsmonitor=false -c core.quotePath=false -C "$proj")
+  command -v git >/dev/null 2>&1 && [[ $h =~ ^[0-9a-f]{40}$ ]] || return 0
+  "${G[@]}" merge-base --is-ancestor "$h" HEAD >/dev/null 2>&1; rc=$?
+  [ "$rc" = 1 ] || return 0
+  x=$("${G[@]}" branch --contains "$h" --format='%(refname:short)' 2>/dev/null | head -n 3 | tr '\n' ',' ); x=${x%,}; x=${x//,/, }
+  y=$("${G[@]}" symbolic-ref --short -q HEAD 2>/dev/null) || y="가지 없음 $("${G[@]}" rev-parse --short=7 HEAD 2>/dev/null)"
+  printf '%s\n' "⚠️ 멈춤 중 가지가 바뀌었습니다(${x:-?} → ${y:-?}) — 리팩토링 기록이 있는 가지로 돌아가야 안전장치가 다시 켜집니다."
 }
 # 경로($1, 프로젝트 폴더 기준 상대경로)가 허용 경로 목록($2, 줄마다 하나)의 하나와 정확히 같은가
 rl_abl_hit() {

@@ -1059,6 +1059,9 @@ def main():
     check_card_auto_042(check)
     check_pause_042(check)
     check_pause_expire_042(check)
+    check_pause_fix_042(check)
+    check_pause_e2e_042(check)
+    check_docs_fix_042(check)
     check_deploy_env_042(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
@@ -5883,7 +5886,7 @@ def check_auto_stage_fail_040(check):
         out, rc = _auto040(dw, "deploy-wait", [fgw, noplay, rail])
         check("0.4.0 A8 cloudflare · 판 표지 그대로 → 3 ⏳(판 표지 그대로)", rc == 3 and "판 표지 그대로" in out, out)
         gd = _fake035(made)
-        (gd / "deploy.out").write_text("55\tproduction\t2026-10-05T01:00:00Z\n", newline="")   # 0.4.2 F6: 조회 결과는 탭 구분(jq 식이 탭으로 냄)
+        (gd / "deploy.out").write_text("55\t2026-10-05T01:00:00Z\tproduction\n", newline="")   # 0.4.2 F6: 조회 결과는 탭 구분(jq 식이 탭으로 냄 · 환경 이름은 마지막 칸)
         (gd / "dstat.out").write_text("success\n", newline="")
         (gd / "denv.out").write_text(f"{_SHA040}\t2026-10-05T01:00:00Z\n", newline="")
         _mf040(dw, site.url, host="github")
@@ -7042,6 +7045,177 @@ def check_pause_expire_042(check):
             shutil.rmtree(m_, ignore_errors=True)
 
 
+def check_pause_fix_042(check):
+    """0.4.2 검사 C·A 보완(잠깐 멈춤): status·board 가 .allow-pause 를 '허용 파일 남음 — rm' 으로 알리지 않음 · .turn-merged 거절 문구 따로 ·
+    멈춤 중 마무리 → 보호 파일 변경 알림 · 다시 시작·만료 때 가지 바뀜 한 줄 · 두 줄 멈춤 파일은 멈춤 아님."""
+    made = []
+    try:
+        g = _git034
+        pst = lambda x: _lib033(x, 'rl_pause_state "$R"; echo "$RL_PST"')[0]
+        # status·board: 멈춤 파일은 ⏸ 로만 · 다른 허용 파일은 그대로 알림(반대)
+        d = _mk042(made)
+        rd = d / "docs/refactor"
+        _ap034(d, "잠깐 멈춤")
+        st, bd = sh("refactor-status", d), sh("refactor-board", d, str(d))
+        check("0.4.2 C status: 멈춤 중 → 첫 줄 ⏸ · .allow-pause 를 '허용 파일이 남아 있음 — rm' 으로 알리지 않음",
+              st.startswith("⏸ 잠깐 멈춤:") and ".allow-pause" not in st and "허용 파일이 남아 있음" not in st, st)
+        check("0.4.2 C board: 멈춤 중 → '⏸멈춤(HH:MM까지)' · ⚠허용파일 아님",
+              re.search(r"⏸멈춤\(\d\d:\d\d까지\)", bd) is not None and "⚠허용파일" not in bd and ".allow-pause" not in bd, bd)
+        lf(rd / ".allow-migration-edit", "")
+        st, bd = sh("refactor-status", d), sh("refactor-board", d, str(d))
+        check("0.4.2 C 반대: 멈춤 중이어도 다른 허용 파일(.allow-migration-edit)은 그대로 '남아 있음 — rm'·⚠허용파일",
+              "허용 파일이 남아 있음: .allow-migration-edit —" in st and ".allow-pause" not in st and "⚠허용파일" in bd, st + bd)
+        (rd / ".allow-migration-edit").unlink()
+        # 거절 문구: .turn-merged.* 는 '아무 말이나' 가 아님 · .turn-push.* 는 그대로(반대)
+        d2 = _mk042(made)
+        r2 = d2 / "docs/refactor"
+        lf(r2 / ".turn-merged.B1", "x\n")
+        o, _ = _ap034(d2, "잠깐 멈춤")
+        check("0.4.2 C .turn-merged 있음 → 거절 문구 '합친 뒤 읽기 단계가 끝나거나 하루 정리 뒤에' · '아무 말이나' 없음 · 멈춤 없음",
+              "합친 뒤 읽기 단계가 끝나거나 하루 정리 뒤에" in o and "아무 말이나" not in o and ".turn-merged.B1" in o
+              and not (r2 / ".allow-pause").exists(), o)
+        (r2 / ".turn-merged.B1").unlink()
+        lf(r2 / ".turn-push.s2", "x\n")
+        o, _ = _ap034(d2, "잠깐 멈춤")
+        check("0.4.2 C 반대: .turn-push 있음 → '아무 말이나 입력하면 허락이 끝납니다' 그대로", "아무 말이나 입력하면 허락이 끝납니다" in o
+              and "하루 정리 뒤에" not in o and not (r2 / ".allow-pause").exists(), o)
+        (r2 / ".turn-push.s2").unlink()
+        # 멈춤 중 마무리 → 지우기 전에 보호 파일 변경 알림 1번 · 바뀐 것 없으면 0(반대)
+        _ap034(d2, "잠깐 멈춤")
+        lf(d2 / "tests/baseline/money.test.ts", "b\n")
+        o, _ = _ap034(d2, "마무리")
+        check("0.4.2 C 멈춤 중 기준선을 바꾼 뒤 마무리 → '멈춤 중 바뀐 보호 파일 1개' 알림 1번 · .allow-pause 지움",
+              "리팩토링을 마무리했습니다" in o and "⚠️ 멈춤 중 바뀐 보호 파일 1개" in o and "   tests/baseline/money.test.ts" in o
+              and o.count("멈춤 중 바뀐") == 1 and not (r2 / ".allow-pause").exists(), o)
+        d3 = _mk042(made)
+        _ap034(d3, "잠깐 멈춤")
+        o, _ = _ap034(d3, "마무리")
+        check("0.4.2 C 반대: 멈춤 중 바뀐 것 없이 마무리 → 알림 없음", "리팩토링을 마무리했습니다" in o and "멈춤 중 바뀐" not in o, o)
+        # 가지 바뀜: 시작 HEAD 를 품지 않은 가지로 옮긴 뒤 다시 시작 → 한 줄 · 같은 가지 커밋·거기서 딴 가지 → 0줄(반대)
+        d4 = _mk042(made)
+        g(d4, "branch", "side")
+        lf(d4 / "a.txt", "b\n")
+        g(d4, "commit", "-qam", "c2")
+        _ap034(d4, "잠깐 멈춤")
+        g(d4, "checkout", "-q", "side")
+        o, _ = _ap034(d4, "다시 시작")
+        check("0.4.2 C 멈춤 중 가지를 바꾼 뒤 다시 시작 → '멈춤 중 가지가 바뀌었습니다(main → side)' 한 줄",
+              "⚠️ 멈춤 중 가지가 바뀌었습니다(main → side) — 리팩토링 기록이 있는 가지로 돌아가야 안전장치가 다시 켜집니다." in o
+              and o.count("가지가 바뀌었습니다") == 1 and "▶ 잠깐 멈춤을 끝냈습니다" in o, o)
+        g(d4, "checkout", "-q", "main")
+        _ap034(d4, "잠깐 멈춤")
+        lf(d4 / "a.txt", "c\n")
+        g(d4, "commit", "-qam", "c3")
+        g(d4, "checkout", "-q", "-b", "feat")
+        lf(d4 / "a.txt", "d\n")
+        g(d4, "commit", "-qam", "c4")
+        o, _ = _ap034(d4, "다시 시작")
+        check("0.4.2 C 반대: 멈춤 중 같은 가지에 커밋 · 거기서 딴 가지(시작 HEAD 를 품음) → 가지 바뀜 알림 없음",
+              "가지가 바뀌었습니다" not in o and "▶ 잠깐 멈춤을 끝냈습니다" in o, o)
+        # 만료(turn.sh)도 같은 한 줄
+        d5 = _mk042(made)
+        r5 = d5 / "docs/refactor"
+        g(d5, "branch", "side")
+        lf(d5 / "a.txt", "b\n")
+        g(d5, "commit", "-qam", "c2")
+        _ap034(d5, "잠깐 멈춤")
+        ep, n, h = (r5 / ".allow-pause").read_text(encoding="utf-8").split()
+        past = int(time.time()) - 30
+        lf(r5 / ".allow-pause", f"{past} {n} {h}\n")
+        lf(r5 / "APPROVALS.log", (r5 / "APPROVALS.log").read_text(encoding="utf-8").replace(f"until={ep} ", f"until={past} "))
+        _lib033(d5, 'rl_log_seal "$R"')
+        g(d5, "checkout", "-q", "side")
+        to, _, rc, _ = _go040(d5, prompt="계속해 줘")
+        check("0.4.2 C turn: 만료 알림에도 가지 바뀜 한 줄(main → side)", rc == 0 and not (r5 / ".allow-pause").exists()
+              and "지나 안전장치가 다시 켜졌습니다" in to and "멈춤 중 가지가 바뀌었습니다(main → side)" in to, to)
+        # 두 줄 멈춤 파일 → 멈춤 아님(빈 둘째 줄 포함) · CRLF 한 줄·줄 끝 없는 한 줄은 멈춤(반대)
+        d6 = _mk042(made)
+        p6 = d6 / "docs/refactor/.allow-pause"
+        _ap034(d6, "잠깐 멈춤")
+        one = p6.read_text(encoding="utf-8").rstrip("\n")
+        for title, body, want in (("둘째 줄 있음", one + "\n" + one + "\n", "bad\n"), ("빈 둘째 줄", one + "\n\n", "bad\n"),
+                                  ("CRLF 한 줄", one + "\r\n", "on\n"), ("줄 끝 없음", one, "on\n"), ("한 줄", one + "\n", "on\n")):
+            p6.write_bytes(body.encode("utf-8"))
+            got = pst(d6)
+            check(f"0.4.2 A .allow-pause {title} → rl_pause_state {want.strip()}", got == want, got)
+        p6.write_bytes((one + "\n" + one + "\n").encode("utf-8"))
+        st = sh("refactor-status", d6)
+        check("0.4.2 A 두 줄 멈춤 파일 → status 에 '⏸ 잠깐 멈춤' 줄 없음", "⏸ 잠깐 멈춤" not in st, st[:300])
+    finally:
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
+def check_docs_fix_042(check):
+    """0.4.2 검사 C 🟢·사장님 결정 S7-3·S7-4 문구: README §6-3 '그대로 남는 것'·되돌릴 수 없는 지우기 · F1 설명 · §11 동결 예외 · 7-execute 범위 확인."""
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    ex = (ROOT / "plugins/refactor/skills/go/phases/7-execute.md").read_text(encoding="utf-8")
+    keep = next((l for l in rd.splitlines() if l.startswith("- **그대로 남는 것**:")), "")
+    check("0.4.2 문구 README §6-3 그대로 남는 것: 원격 저장소 설정·저장소 설정·gh 별칭·PR 합치기·API 가지 변경",
+          all(w in keep for w in ("원격 저장소 설정", "저장소 설정 바꾸기", "`gh` 별칭", "PR 합치기", "API 로 가지를 강제로 바꾸거나 지우기")), keep)
+    check("0.4.2 문구 README §6-3 되돌릴 수 없는 지우기(DB 초기화·앱/사이트 삭제·릴리스 삭제·원격 가지 삭제)는 멈춤 중에도 막힘",
+          "- **되돌릴 수 없는 지우기도 그대로 막힙니다**: DB 초기화·앱/사이트 삭제·릴리스 삭제·원격 가지 삭제 등은" in rd, "")
+    check("0.4.2 문구 README F1 설명 = '`/` 가 든 경로 꼴' (옛 '글자·`/`·`.` 포함' 없음)",
+          "백틱 값이 `/` 가 든 경로 꼴(`:` 없음)일 때만" in rd and "글자·`/`·`.` 포함" not in rd, "")
+    check("0.4.2 문구 README §11 동결 예외 2건 표기", "(0.4.2 의 '추가 시험' 칸·'잠깐 멈춤'은 실사용 신고로 사장님이 정한 동결 예외 2건)" in rd, "")
+    check("0.4.2 문구 7-execute 범위 확인 '(추가 시험 칸 파일 제외)'", "카드 밖 변경 0개인지(추가 시험 칸 파일 제외)" in ex, "")
+
+
+def check_pause_e2e_042(check):
+    """0.4.2 검사 C 시험 ①: 승인 스크립트(approve)가 만든 멈춤 파일·기록을 안전장치(guard)가 그대로 받아들이는지(W1·W2 글자 일치) —
+    .omc 의 e2e_pause.py 13건 + 멈춤 중 PR 합치기 BLOCK(사장님 결정 S7-3) + 진짜 만료(파일·기록 모두 지난 시각)."""
+    made = []
+    try:
+        d = _mk042(made)
+        rd = d / "docs/refactor"
+        pf = rd / ".allow-pause"
+        lf(rd / "STATE.md", STATE.replace("phase: PLAN", "phase: EXECUTE"))
+        lf(d / ".env", "SECRET=do-not-read\n")
+
+        def guard(tool, ti):
+            pl = {"session_id": "s1", "transcript_path": "/tmp/t.jsonl", "cwd": str(d), "permission_mode": "default",
+                  "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": ti, "tool_use_id": "toolu_1"}
+            _, _, rc, _ = hook("guard", d, pl, extra_env={"REFACTOR_GUARD_ALWAYS": ""})   # 스위치 없이 진짜 문(STATE 있음 → 켜짐)
+            return "BLOCK" if rc == 2 else f"PASS({rc})"
+
+        bash_ = lambda c: guard("Bash", {"command": c, "description": "t"})
+        PUSH = "git push origin feat/x"
+        check("0.4.2 e2e 멈춤 전 push → BLOCK", bash_(PUSH) == "BLOCK", "")
+        out, _ = _ap034(d, "잠깐 멈춤 1시간")
+        check("0.4.2 e2e approve 가 멈춤 파일·기록을 만듦", pf.exists() and "⏸ 잠깐 멈춤:" in out, out)
+        for label, cmd, want in (("push", PUSH, "PASS(0)"), ("stash", "git stash", "PASS(0)"), ("switch", "git switch other", "PASS(0)"),
+                                 ("기준선 쓰기", "echo x > tests/baseline/money.test.ts", "PASS(0)"), (".env 읽기", "cat .env", "BLOCK"),
+                                 ("승인 기록 쓰기", "echo x >> docs/refactor/APPROVALS.log", "BLOCK"),
+                                 ("settings 쓰기", "echo x > .claude/settings.json", "BLOCK"),
+                                 ("PR 합치기(S7-3)", "gh pr merge 5 --squash", "BLOCK")):
+            got = bash_(cmd)
+            check(f"0.4.2 e2e 멈춤 중 {label} → {want}", got == want, got)
+        got = guard("Write", {"file_path": str(rd / "APPROVALS.log"), "content": "x"})
+        check("0.4.2 e2e 멈춤 중 Write 승인 기록 → BLOCK", got == "BLOCK", got)
+        out, _ = _ap034(d, "다시 시작")
+        check("0.4.2 e2e 다시 시작 뒤 멈춤 파일 없음", not pf.exists(), out)
+        got = bash_(PUSH)
+        check("0.4.2 e2e 다시 시작 뒤 push → BLOCK", got == "BLOCK", got)
+        _ap034(d, "잠깐 멈춤 2시간")
+        n0 = len(_log033(d).splitlines())
+        out, _ = _ap034(d, "P1-1")
+        check("0.4.2 e2e 멈춤 중 단계 승인 안 됨(기록 줄 그대로)", len(_log033(d).splitlines()) == n0
+              and "| 승인 |" not in _log033(d).splitlines()[-1], out)
+        ep, n, h = pf.read_text(encoding="utf-8").split()
+        lf(pf, f"{int(ep) - 8000} {n} {h}\n")
+        got = bash_(PUSH)
+        check("0.4.2 e2e 파일만 과거로(기록과 어긋남) → push BLOCK", got == "BLOCK", got)
+        past = int(time.time()) - 30
+        lf(pf, f"{past} {n} {h}\n")
+        lf(rd / "APPROVALS.log", _log033(d).replace(f"until={ep} ", f"until={past} "))
+        _lib033(d, 'rl_log_seal "$R"')
+        got = bash_(PUSH)
+        check("0.4.2 e2e 진짜 만료(파일·기록 모두 지난 시각·봉인 그대로) → push BLOCK", got == "BLOCK", got)
+    finally:
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
 def check_deploy_env_042(check):
     """0.4.2 F6(S8) 자동 deploy-wait github 갈래: 환경 이름 띄어쓰기·빗금 → 탭 구분·URL 인코딩 · 같은 환경 조회가 비면 덮음 아님 ·
     진짜 덮음(다른 커밋·더 늦은 시각)은 그대로 · 시각 비교는 ISO 꼴일 때만."""
@@ -7058,7 +7232,7 @@ def check_deploy_env_042(check):
 
         def run(envname, envq, denv):
             gd = _fake035(made)
-            (gd / "deploy.out").write_text(f"55\t{envname}\t{T1}\n", newline="")
+            (gd / "deploy.out").write_text(f"55\t{T1}\t{envname}\n", newline="")   # jq 식 순서(아이디·시각·환경 — 환경 이름은 마지막 칸)
             (gd / "dstat.out").write_text("success\n", newline="")
             (gd / "denv.out").write_text(denv, newline="")
             (gd / "denv.envq").write_text(envq, newline="")
@@ -7073,6 +7247,11 @@ def check_deploy_env_042(check):
         out, rc, cl = run("janchi-commerce / production", "environment=janchi-commerce%20%2F%20production&", f"{'cd' * 20}\t{T2}\n")
         check("0.4.2 F6 반대: 띄어쓰기 환경에서 진짜 덮음(다른 커밋·더 늦은 시각) → 1 · ⚠ 다른 배포가 덮음",
               rc == 1 and out.startswith("⚠️ 다른 배포가 덮었습니다") and "cdcdcdc" in out, out)
+        # 0.4.2 검사 A 🟢: 환경 이름에 탭 — 이름이 마지막 칸이라 잘리지 않고(조회 a%09b) 시각 칸도 밀리지 않는다 → 진짜 덮음 그대로 잡음
+        out, rc, cl = run("a\tb", "environment=a%09b&", f"{'cd' * 20}\t{T2}\n")
+        check("0.4.2 F6 환경 이름에 탭('a<TAB>b') · 진짜 덮음 → 1 · 조회 이름 a%09b · jq 식 환경이 마지막 칸",
+              rc == 1 and out.startswith("⚠️ 다른 배포가 덮었습니다") and any("environment=a%09b&" in c for c in cl)
+              and any("\\(.id)\\t\\(.created_at)\\t\\(.environment)" in c for c in cl), out + str(cl))
         out, rc, cl = run("production", "no-such-query", "")
         check("0.4.2 F6 같은 환경 조회가 빈 배열(빈 출력) → 0(덮음 아님) · jq 에 // empty", rc == 0 and "다른 배포가 덮었습니다" not in out
               and any("environment=production&" in c and "// empty" in c for c in cl), out + str(cl))
