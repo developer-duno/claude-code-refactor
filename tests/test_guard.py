@@ -6044,19 +6044,25 @@ def check_pause_destroy_042b(res):
 
 def check_pause_push_042b(res):
     """보완(사장님 결정 S7-7): 멈춤 중 push 는 풀리되 기본 가지로 들어가는 꼴(<무엇>:main · 기본 가지 이름 지정 · --all · --mirror)은
-    지금 가지와 상관없이 막는다. 기본 가지 = main·master + 저장소의 판정(origin/HEAD → …) · 저장소가 아닌 작업 폴더는 main·master 만"""
+    지금 가지와 상관없이 막는다. 기본 가지 = main·master + 저장소의 판정(origin/HEAD → …) · 저장소가 아닌 작업 폴더는 main·master 만 ·
+    보완(재검사 A2 X18): 받는 쪽을 적지 않은 꼴·HEAD·@ 는 지금 가지가 기본 가지 집합이면 막고, 작업 가지(feat/x)면 통과"""
     fut = int(time.time()) + 3600
     bad = ["git push origin HEAD:main", "git push origin feat/x:main", "git push origin HEAD:refs/heads/main", "git push --all origin",
            "git push --mirror origin", "git push origin main", "git push origin master", "git push origin +HEAD:main", "git push origin :",
-           "git push origin \"HEAD:$B\"", "git push --branches origin"]
-    good = ["git push origin feat/x", "git push -u origin HEAD", "git push", "git push origin HEAD:feat/y", "git push origin feat/x:feat/x"]
-    for label, br in (("지금 가지 feat/x", "feat/x"), ("지금 가지 기본", None)):
+           "git push origin \"HEAD:$B\"", "git push --branches origin", "git push origin HEAD:master"]
+    bare = ["git push", "git push origin", "git push -u origin HEAD", "git push origin HEAD", "git push origin @"]
+    good = ["git push origin feat/x", "git push origin HEAD:feat/y", "git push origin feat/x:feat/x", "git push origin feat/y"]
+    # 지금 가지 = 작업 가지(feat/x) → 이름 없는 꼴은 통과 / 지금 가지 = main(git init 기본값과 상관없이 이름을 main 으로) → 이름 없는 꼴도 막음
+    for label, br, bare_want in (("지금 가지 feat/x", "feat/x", OK), ("지금 가지 main", "main", B)):
         proj = _pause_proj_042(fut)
         try:
-            if br:
+            if br == "main":
+                git(proj, "branch", "-M", "main")
+            else:
                 git(proj, "checkout", "-qb", br)
             _cases_042(res, proj, "S7-7 멈춤 중 기본 가지 직행(%s) → 막음" % label, [(B, bash(c)) for c in bad])
             _cases_042(res, proj, "S7-7 멈춤 중 작업 가지 push(%s) → 통과" % label, [(OK, bash(c)) for c in good])
+            _cases_042(res, proj, "S7-7 멈춤 중 받는 쪽 없는 push(%s)" % label, [(bare_want, bash(c)) for c in bare])
         finally:
             rmtree_rw(proj)
     # 저장소가 판정한 기본 가지(origin/HEAD → origin/develop)도 막는다
@@ -6073,7 +6079,8 @@ def check_pause_push_042b(res):
     proj = _pause_proj_042(fut)
     other = pathlib.Path(tempfile.mkdtemp(prefix="guardtest-norepo-"))
     try:
-        _cases_042(res, proj, "S7-7 저장소 아닌 작업 폴더", [(B, bash("git push origin HEAD:main")), (OK, bash("git push origin HEAD:feat/y"))],
+        _cases_042(res, proj, "S7-7 저장소 아닌 작업 폴더", [(B, bash("git push origin HEAD:main")), (B, bash("git push origin HEAD:master")),
+                                                       (OK, bash("git push origin HEAD:feat/y"))],
                    extra={"cwd": str(other)})
     finally:
         rmtree_rw(proj)

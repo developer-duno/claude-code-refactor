@@ -4344,16 +4344,33 @@ push_exact() {
 # 0.4.2 보완(사장님 결정 S7-7): 잠깐 멈춤 중 push 가 기본 가지로 들어가는 꼴이면 0(막음). 조각 = git push 부터 ; & | 앞까지, 조각마다:
 #   --all·--mirror·--branches(전부 올리기) · 원격 이름(옵션 뒤 첫 낱말) 다음 낱말(따옴표 뗌)마다 받는 쪽 이름(: 뒤, 없으면 낱말 자체 · 앞의 + 와
 #   refs/heads/ 를 뗌)이 main·master·이 저장소의 기본 가지(br_pick_default — 작업 폴더 기준, 못 찾거나 저장소가 아니면 main·master 만)이거나,
-#   판정할 수 없는 글자($ ` *)가 있거나, 받는 쪽이 비었으면(: 만 = 같은 이름 가지 전부) 막는다. 지금 가지와 상관없이(이름을 적은 push 만 —
-#   이름 없는 git push · git push -u origin HEAD 는 저장소를 보지 않고 통과). 대소문자는 무시(nocasematch — 대소문자를 안 가리는 파일 시스템)
+#   판정할 수 없는 글자($ ` *)가 있거나, 받는 쪽이 비었으면(: 만 = 같은 이름 가지 전부) 막는다(이름을 적은 push 는 지금 가지와 상관없이).
+#   보완(재검사 A2 🟠 X18): 받는 쪽이 HEAD·@ 이거나 받는 쪽을 적지 않은 꼴(git push · git push origin · git push -u origin HEAD)은
+#   지금 가지(br_cur_branch — 프로젝트 기준)가 같은 기본 가지 집합이면 막는다. 지금 가지를 못 읽으면(분리 HEAD·저장소 아님) 통과.
+#   대소문자는 무시(nocasematch — 대소문자를 안 가리는 파일 시스템)
+# pp_isdef <이름>: 기본 가지 집합(main·master·판정된 기본 가지)이면 0 — pp_dflt 의 local(got·bn·out·origin·…)을 그대로 쓴다(판정은 한 번만)
+pp_isdef() {
+  case "$1" in main|master) return 0 ;; esac
+  if [ "$got" = 0 ]; then
+    got=1; loc=${BRCWD:-$proj}
+    out=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" for-each-ref --format='%(refname) %(objectname) %(tree) %(symref)' \
+          refs/remotes/origin/HEAD refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master 2>/dev/null)
+    out="$NL$out$NL"
+    out2=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" config --name-only --get-regexp '^remote[.]origin[.]' 2>/dev/null)
+    case "$NL$out2" in *"${NL}remote.origin."*) origin=1 ;; esac
+    br_pick_default; bn=$bname
+  fi
+  [ -n "$bn" ] && case "$1" in "$bn") return 0 ;; esac
+  return 1
+}
 pp_dflt() {
-  local rest=$1 seg w d s first sk r=1 got=0 bn="" re_pp="git[[:space:]]+push([[:space:]][^;&|]*)?" IFS=$' \t\n'
+  local rest=$1 seg w d s first sk nref r=1 got=0 bn="" re_pp="git[[:space:]]+push([[:space:]][^;&|]*)?" IFS=$' \t\n'
   local out out2 origin=0 o bref="" boid="" btree="" bshort="" bname="" loc
   while [ "$r" = 1 ] && [[ $rest =~ $re_pp ]]; do
     seg=${BASH_REMATCH[0]}; rest=${rest#*"$seg"}
     set -f; set -- $seg; set +f
     shift 2
-    first=1; sk=0
+    first=1; sk=0; nref=0
     for w in "$@"; do
       w=${w//\"/}; w=${w//\'/}
       [ "$sk" = 1 ] && { sk=0; continue; }
@@ -4363,25 +4380,19 @@ pp_dflt() {
         -*) continue ;;
       esac
       [ "$first" = 1 ] && { first=0; continue; }
+      nref=1
       d=${w#+}; s=$d
       case "$d" in *:*) s=${d%%:*}; d=${d#*:} ;; esac
       [ -z "$d" ] && d=$s
       d=${d#refs/heads/}
       case "$d" in
-        ""|*'$'*|*'`'*|*'*'*|main|master) r=0; break ;;
-        HEAD|@) continue ;;
+        ""|*'$'*|*'`'*|*'*'*) r=0; break ;;
+        HEAD|@) br_cur_branch && pp_isdef "$CURB" && { r=0; break; }; continue ;;
       esac
-      if [ "$got" = 0 ]; then
-        got=1; loc=${BRCWD:-$proj}
-        out=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" for-each-ref --format='%(refname) %(objectname) %(tree) %(symref)' \
-              refs/remotes/origin/HEAD refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master 2>/dev/null)
-        out="$NL$out$NL"
-        out2=$(git --no-replace-objects -c core.fsmonitor=false -C "$loc" config --name-only --get-regexp '^remote[.]origin[.]' 2>/dev/null)
-        case "$NL$out2" in *"${NL}remote.origin."*) origin=1 ;; esac
-        br_pick_default; bn=$bname
-      fi
-      [ -n "$bn" ] && case "$d" in "$bn") r=0; break ;; esac
+      pp_isdef "$d" && { r=0; break; }
     done
+    # 받는 쪽을 적지 않은 꼴(git push · git push origin) = 지금 가지를 올린다
+    [ "$r" = 1 ] && [ "$nref" = 0 ] && br_cur_branch && pp_isdef "$CURB" && r=0
   done
   return "$r"
 }
