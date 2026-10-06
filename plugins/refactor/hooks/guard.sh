@@ -1049,9 +1049,14 @@ iw_one() {
 interp_record_writes() {
   IRW=""
   has "$lr" "${S}(python3?|py|node|ruby|php|perl|deno|bun|pwsh|powershell)[[:space:]]" || return 1
-  local x="${lr0:-}$NL$lr" s p k t
+  local x="${lr0:-}$NL$lr" s p k t w strong=2 IFS=$' \t\n'
   case "$x" in
     *shutil*|*copytree*|*copy2*|*cpsync*|*copyfilesync*|*renamesync*|*extractall*|*copy-item*|*os.replace*|*os.rename*|*.cp\(*|*.copyfile*|*.rename\(*|*.extract\(*) ;;
+    # W1fix F-5: ruby·php·perl·pwsh 꼴(FileUtils.cp_r · File::Copy · Move-Item · Expand-Archive)
+    *fileutils*|*cp_r*|*move-item*|*expand-archive*|*file::copy*) ;;
+    # 약한 낱말(copy( · rename( — dict.copy( 처럼 목록 복사에도 쓴다): 50개를 넘어도 막지 않는다
+    #   (W1fix2 G-1: 홑 .replace( 는 넣지 않는다 — 글자 바꾸기가 평소 꼴. os.replace 는 위 강한 낱말)
+    *copy\(*|*rename\(*) strong=1 ;;
     *) return 1 ;;
   esac
   for t in 0 1; do
@@ -1059,13 +1064,72 @@ interp_record_writes() {
     k=0
     while [ -n "$s" ]; do
       case "$s" in *[\"\']*) p=${s%%[\"\']*}; s=${s#*[\"\']} ;; *) p=$s; s="" ;; esac
-      case "$p" in ''|[[:space:]]*|*[[:space:]]|*"$NL"*|*[\;=,]*) continue ;; esac
-      k=$((k + 1))
-      [ "$k" -gt 50 ] && { IRW=over; return 0; }
-      cpd_hit1 "$p" rec && { IRW=hit; return 0; }
+      case "$p" in ''|[[:space:]]*|*[[:space:]]|*"$NL"*|*[\;=,]*) ;;
+        *)
+          k=$((k + 1))
+          # 약한 낱말만이면 50개를 넘어도 막지 않고 거기서 그친다(dict.copy( 가 든 긴 히어독 — 헛막힘 방지)
+          if [ "$k" -gt 50 ]; then [ "$strong" = 2 ] || return 1; IRW=over; return 0; fi
+          irw_tok "$p" && return 0 ;;
+      esac
+      # W1fix F-5: 조각 안 낱말(따옴표 없는 인자 — Expand-Archive a.zip docs/refactor · copytree(/tmp/x, docs/refactor))도 —
+      #   기록 폴더·상위를 가리킬 수 있는 꼴만(세지 않음 · 판정 비용을 낱말 수에 묶지 않게)
+      case "$p" in *[[:space:]\(\),\;=]*) ;; *) continue ;; esac
+      p=${p//[(),;=\[\]\{\}]/ }
+      set -f
+      for w in $p; do
+        case "$w" in *docs*|*refactor*|*state.md*|*approv*|*.turn*|*.allow*|*execution_log*|../*|"$proj"|"$proj"/) ;; *) continue ;; esac
+        irw_tok "$w" && { set +f; return 0; }
+      done
+      set +f
     done
   done
   return 1
+}
+irw_tok() { # 조각·낱말 하나가 기록 폴더 자체·상위·사람 파일인가 → IRW=hit
+  # W1fix2 G-2: 빈 글자·/·\·.·./·드라이브만(C: · C:/)·글자도 숫자도 없는 조각(구분자·문장부호 — '/' · ', ' · '..')은 보지 않는다
+  #   ('x'.split('/') 의 '/' 가 루트로 풀려 헛막혔다). docs · docs/refactor 같은 글자 조각은 그대로 판정
+  case "$1" in *[[:alnum:]]*) ;; *) return 1 ;; esac
+  case "$1" in [A-Za-z]:|[A-Za-z]:/|[A-Za-z]:"$BS") return 1 ;; esac
+  cpd_hit1 "$1" rec && { IRW=hit; return 0; }
+  return 1
+}
+# W1fix2 G-3: 파이썬 모듈 명령으로 풀기(python -m zipfile -e <압축> <폴더> · python -m tarfile -e <압축> [폴더] · -x · --extract) →
+#   풀 곳(마지막 비옵션 낱말 — tarfile 은 없으면 지금 폴더)이 기록 폴더 자체·상위·사람 파일이면 0. 목록(-l)·만들기(-c)·시험(-t)은 아님
+interp_mod_unpack() {
+  case "$lr" in *zipfile*|*tarfile*) ;; *) return 1 ;; esac
+  IMU=1; cd_all imu1 "$lr"; [ "$IMU" = 0 ]
+}
+imu1() {
+  local s=$1 seg CWD_BASE=$cwd CD_PREV=$cwd
+  s=${s//&&/$NL}; s=${s//&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; s=${s//'$('/$NL}
+  while [ -n "$s" ]; do
+    seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
+    cd_seg "$seg" && continue
+    case "$seg" in *zipfile*|*tarfile*) imu_seg "$seg" && IMU=0 ;; esac
+  done
+  cwd=$CWD_BASE
+}
+imu_seg() {
+  seg_words "$1"
+  case "$SCMD" in python|python3|python3.[0-9]*|py) ;; *) return 1 ;; esac
+  local n=${#SW[@]} i=$((SI + 1)) a mod="" ex=0 skip=0 args=() dest
+  while [ "$i" -lt "$n" ]; do   # 인터프리터 옵션(-I · -X 값 · -W 값) 뒤 -m <모듈>
+    case "${SW[$i]}" in -m) mod=${SW[$((i + 1))]:-}; i=$((i + 2)); break ;; -X|-W) i=$((i + 2)) ;; -*) i=$((i + 1)) ;; *) return 1 ;; esac
+  done
+  case "$mod" in zipfile|tarfile) ;; *) return 1 ;; esac
+  for ((i = i; i < n; i++)); do
+    a=${SW[$i]}
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    case "$a" in
+      -e|-x|--extract|--e|--ex|--ext|--extr|--extra|--extrac) ex=1 ;;
+      --filter|--metadata-encoding) skip=1 ;;
+      -*) ;;
+      *) args+=("$a") ;;
+    esac
+  done
+  [ "$ex" = 1 ] || return 1
+  if [ "${#args[@]}" -ge 2 ]; then dest=${args[$((${#args[@]} - 1))]}; else dest=$cwd; fi
+  cpd_hit1 "$dest" rec
 }
 # 0.3.5 X2: 인터프리터 코드가 플러그인 폴더(.claude/plugins · 지금 플러그인 폴더 plugroot)에 쓰는가. 플러그인 폴더 경로는 글자 그대로의 정규식으로
 #   (구분자 / 와 \ 는 같게 · Windows 의 c:/… 는 Git Bash 꼴 /c/… 도). 인터프리터 낱말이 없으면 경로 정규식을 만들지 않는다(평소 비용 0)
@@ -1944,7 +2008,8 @@ restore_record() {
 }
 restore_record1() { # $1 판정 문자열 — && || ; | ` $( 로 나눈 조각마다(cd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준)
   local s=$1 seg CWD_BASE=$cwd CD_PREV=$cwd
-  s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; s=${s//'$('/$NL}
+  # W1fix F-3: 홑 & (배경 실행 — true & git restore …)도 조각 경계
+  s=${s//&&/$NL}; s=${s//&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; s=${s//'$('/$NL}
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
     cd_seg "$seg" && continue
@@ -1955,9 +2020,9 @@ restore_record1() { # $1 판정 문자열 — && || ; | ` $( 로 나눈 조각�
 rr_seg() {
   seg_words "$1"
   case "$SCMD" in git) ;; *) return 0 ;; esac
-  local n=${#SW[@]} i=$((SI + 1)) a sub L j c dd=0 st=0 wt=0 skip=0 pre=() post=() paths=()
-  while [ "$i" -lt "$n" ]; do   # git 전역 옵션(-c 이름=값 · -C 폴더 · --no-pager …)
-    case "${SW[$i]}" in -c|-C) i=$((i + 2)) ;; -*) i=$((i + 1)) ;; *) break ;; esac
+  local n=${#SW[@]} i=$((SI + 1)) a sub L j c dd=0 st=0 wt=0 skip=0 pf=0 pre=() post=() paths=()
+  while [ "$i" -lt "$n" ]; do   # git 전역 옵션(-c 이름=값 · -C 폴더 · --git-dir 폴더 · --work-tree 폴더 · --no-pager …)
+    case "${SW[$i]}" in -c|-C|--git-dir|--work-tree|--namespace|--config-env) i=$((i + 2)) ;; -*) i=$((i + 1)) ;; *) break ;; esac
   done
   sub=${SW[$i]:-}
   case "$sub" in checkout|restore) ;; *) return 0 ;; esac
@@ -1970,8 +2035,10 @@ rr_seg() {
       --) dd=1 ;;
       --st*) st=1 ;;
       --w*) wt=1 ;;
-      --so*=*|--pathspec-f*=*) ;;
-      --so*|--pathspec-f*|--orphan|--conflict) skip=1 ;;
+      --pathspec-f*=*) pf=1 ;;
+      --pathspec-f*) pf=1; skip=1 ;;
+      --so*=*) ;;
+      --so*|--orphan|--conflict) skip=1 ;;
       --*) ;;
       -?*)
         L=${a#-}
@@ -1993,10 +2060,21 @@ rr_seg() {
       paths=("${pre[@]}" "${post[@]}") ;;
     *)
       paths=("${post[@]}")
-      [ "$dd" = 0 ] && [ "${#pre[@]}" -ge 2 ] && paths=("${pre[@]:1}") ;;
+      [ "$dd" = 0 ] && [ "${#pre[@]}" -ge 2 ] && paths=("${pre[@]:1}")
+      # W1fix F-1(사장님 결정 19:5x): -- 없이 낱말 하나(git checkout docs/refactor/STATE.md) — 가지 이름일 수도 있지만 git 은 그런 가지가 없으면
+      #   파일을 되돌린다. 기록 폴더 자체·상위·사람 파일·실행 기록이면 막는다(애매하면 막는다). main·feat/x·docs/0.3.7-a 는 아래 판정에서 통과
+      [ "$dd" = 0 ] && [ "${#pre[@]}" -eq 1 ] && paths=("${pre[@]}") ;;
   esac
+  # W1fix F-4: 경로를 파일에서 읽으면(--pathspec-from-file) 무엇을 되돌리는지 판정할 수 없다 → 막는다(restore --staged 만은 위에서 통과)
+  [ "$pf" = 1 ] && block "$MSG_RESTORE"
   for a in "${paths[@]}"; do
     case "$a" in ':/'*) a=${a#:/}; a="$proj/${a:-.}" ;; esac
+    # W1fix F-2: 와일드카드(git 이 경로 패턴으로 펼친다 — 'docs/refactor/*' · docs/refactor/*.md · docs/refactor/**) → 첫 패턴 글자가 든
+    #   칸의 앞 폴더로 판정. 앞 폴더가 없는 꼴('*.md' · doc?/x)은 이 판정에서 보지 않는다('*' 단독은 hv_git)
+    case "$a" in *[\*\?\[]*)
+      a=${a%%[\*\?\[]*}
+      case "$a" in */*) a=${a%/*}; a=${a:-/} ;; *) continue ;; esac ;;
+    esac
     cpd_hit1 "$a" rec && block "$MSG_RESTORE"
     # 되돌리기에만: 실행 기록(EXECUTION_LOG.md) — 자동 모드가 그 '기준선 결과' 줄을 믿으므로 옛 판으로 되돌리지 않는다(메인 판정 19:2x)
     resolve_tok "$a" && case "$RP" in "$rdir"/execution_log.md) block "$MSG_RESTORE" ;; esac
@@ -4656,6 +4734,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   # 0.3.5 X2: 인터프리터 코드(python -c open(…,'w') · node -e appendFileSync …)로 플러그인 폴더에 쓰기 — 같은 경로(.claude/plugins + 지금 플러그인 폴더)
   interp_plug_writes && block "플러그인 폴더(.claude/plugins)는 고치지 않습니다." "플러그인 수정은 사람이 원본 저장소에서 합니다."
   # 0.4.3 R2: 인터프리터 코드의 복사·옮기기·풀기로 기록 폴더(자체·상위·사람 전용 파일)에 넣기
+  interp_mod_unpack && block "$MSG_UNPACK" "$MSG_HUMAN"   # W1fix2 G-3
   if interp_record_writes; then
     [ "$IRW" = over ] && block "$MSG_UNPACK" "코드 안 문자열이 50개를 넘어 복사·풀기 대상을 판정할 수 없습니다 — 코드를 나누거나 대상 경로를 줄여 다시 실행하세요."
     block "$MSG_UNPACK" "$MSG_HUMAN"

@@ -6278,8 +6278,63 @@ def check_restore_copy_043(res):
         one("R2 리터럴 51개 막음", B, bash("python -c \"import shutil; L=" + _LIT51 + "; shutil.copy(L[0], L[1])\""), need="50개를 넘어")
         for c in R2_PASS_043:
             one("R2 이웃 통과", OK, bash(c))
+        # W1fix F-1(-- 없이 낱말 하나) · F-2(와일드카드)
+        for c in F1_BLOCK_043 + F2_BLOCK_043:
+            one("W1fix 막음", B, bash(c), need="[refactor 안전장치] " + W_RESTORE, first=True)
+        for c in F2_PASS_043:
+            one("W1fix F-2·F-3·F-4 통과", OK, bash(c))
+        for c in F5_BLOCK_043:
+            one("W1fix F-5 막음", B, bash(c), need=W_UNPACK)
+        for c in F5_PASS_043:
+            one("W1fix F-5 통과", OK, bash(c))
+        for c in G_BLOCK_043:
+            one("W1fix2 G-3 막음", B, bash(c), need=W_UNPACK)
+        for c in G_PASS_043:
+            one("W1fix2 G 통과", OK, bash(c))
+        # ruby 읽기: 기존 규칙(docs/refactor 를 명령 자리로 읽음 — 0.4.2 F3 은 파이썬·노드만)이 막을 수 있다 — 복사·풀기 문구로 막히지만 않으면 된다
+        c = "ruby -e \"puts File.read('docs/refactor/REPORT.md')\""
+        code, err = run(proj, *bash(c))
+        res["total"] += 1
+        if W_UNPACK in err:
+            res["fails"].append(("0.4.3 W1fix F-5 ruby 읽기를 복사로 오판", "복사 문구 없음", code, "Bash", c, err.strip()[:300]))
+        for c in F1_PASS_043:   # 리팩토링 중엔 가지 바꾸기 규칙이 막을 수 있다 — 되돌리기 문구로 막히지만 않으면 된다
+            code, err = run(proj, *bash(c))
+            res["total"] += 1
+            if "git 으로 되돌리면" in err:
+                res["fails"].append(("0.4.3 W1fix F-1 되돌리기로 오판", "되돌리기 문구 없음", code, "Bash", c, err.strip()[:300]))
     finally:
         rmtree_rw(proj)
+    # 잠깐 멈춤 중(가지 바꾸기 규칙이 풀림): 가지 이름 낱말 하나는 통과 · 기록 폴더 낱말 하나는 그대로 막힘
+    proj = _pause_proj_042(int(time.time()) + 3600)
+    try:
+        for c in F1_PASS_043:
+            one("W1fix F-1 멈춤 중 통과", OK, bash(c))
+        for c in F1_BLOCK_043:
+            one("W1fix F-1 멈춤 중 막음", B, bash(c), need="[refactor 안전장치] " + W_RESTORE, first=True)
+    finally:
+        rmtree_rw(proj)
+
+
+F1_BLOCK_043 = ["git checkout docs/refactor/STATE.md", "git checkout docs/refactor", "git checkout docs",
+                "true & git restore docs/refactor",                                     # F-3 홑 &
+                "git restore --pathspec-from-file=list.txt", "git checkout HEAD --pathspec-from-file list.txt",   # F-4
+                "git --git-dir .git --work-tree . restore docs/refactor"]
+F1_PASS_043 = ["git checkout main", "git checkout feat/x", "git checkout docs/0.3.7-a", "git checkout -b x", "git checkout -"]
+F2_BLOCK_043 = ["git restore 'docs/refactor/*'", 'git checkout -- "docs/refactor/*.md"', "git restore docs/refactor/**"]
+F2_PASS_043 = ["git restore 'src/*'", "git restore src/a.ts & echo ok",                 # F-3 통과 쪽
+               "git restore --staged --pathspec-from-file=list.txt"]
+F5_BLOCK_043 = ["ruby -e \"FileUtils.cp_r('/tmp/x','docs/refactor')\"", "pwsh -c \"Expand-Archive a.zip docs/refactor\"",
+                "php -r \"copy('/tmp/a','docs/refactor/STATE.md');\"", "perl -e \"use File::Copy; copy('/tmp/a', 'docs/refactor/STATE.md')\"",
+                "pwsh -c \"Move-Item /tmp/x docs/refactor\""]
+G_BLOCK_043 = ["python -m zipfile -e /tmp/a.zip docs/refactor", "python3 -m tarfile -e /tmp/a.tar docs",    # G-3 모듈 명령 풀기
+               "python -m tarfile -e /tmp/a.tar"]                                                     # 풀 곳 없음 = 지금 폴더(프로젝트)
+G_PASS_043 = ["python -c \"s='docs/refactor'; print(s.replace('/', '-'))\"", "python -c \"s='a/b'; print(s.replace('/', '-'))\"",   # G-1
+              "python -c \"import shutil; shutil.copytree('/tmp/x','build/out'); print('x'.split('/'))\"",                          # G-2
+              "python -c \"import shutil; shutil.copy('a','b'); print('x'.split('/'), ', '.join(['c']))\"",
+              "python -m zipfile -l /tmp/a.zip", "python -m zipfile -e /tmp/a.zip vendor/", "python -m zipfile -c out.zip docs/refactor"]
+F5_PASS_043 = ["python -c \"print('1.2.3'.replace('.', '_'))\"",
+               "python -c \"import json; print('.'.join(['a','b']).replace('a','c'))\"",
+               "python -c \"s=open('docs/refactor/REPORT.md').read()" + "".join(".replace('a%d','b%d')" % (i, i) for i in range(60)) + "\""]
 
 
 if __name__ == "__main__":
