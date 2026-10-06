@@ -3,7 +3,7 @@
 운영 중인 서비스를 AI로 **안전하게** 리팩토링하는 Claude Code 플러그인입니다.
 누구나 쓸 수 있는 공개 플러그인(MIT)이고, 화면 문구와 문서는 모두 한국어입니다(**한국어 전용 플러그인**).
 
-![version](https://img.shields.io/badge/version-0.4.2-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+![version](https://img.shields.io/badge/version-0.4.3-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
 
 > **0.3.0에서 달라진 점**: 안전장치는 이제 리팩토링 중에만 켜집니다. 0.2.x처럼 평소 대화에서도 비밀값·위험 명령을 막으려면 [스위치](#6-안전장치)를 켜세요.
 > **0.3.2에서 달라진 점**: 기준선 허용 파일(`.allow-baseline-edit`)에 승인한 단계 ID 를 적으면 그 단계들 동안만 열리고 끝나면 저절로 닫힙니다([§6-3](#6-3-일부러-풀어야-할-때-사람만-가능)). 리팩토링 중 다른 가지로 옮기는 명령은 이제 안전장치가 막습니다.
@@ -14,6 +14,7 @@
 > **0.3.7에서 달라진 점**: 합치기 확인이 도는 동안 사람이 무엇이든 입력하면 대화 기록에서 바로 알아채 그 자리에서 멈춥니다(0.3.6 의 "최대 약 2분" 틈을 거의 없앴습니다(대부분 몇 초 안에 — 한계는 [§6-4](#6-4-한계)) — 대화 기록을 못 보는 환경은 0.3.6 과 같습니다). 리팩토링 중 저장소 설정 바꾸기(기본 가지·이름·보관·공개 여부·가지 보호)와 `heroku rollback`·`netlify rollback`, 히어독 본문의 인터프리터 쓰기를 막습니다([§6](#6-안전장치)). 기준선 알림은 이번 묶음 안만 보고, 하위 폴더 프로젝트의 보호 파일 감시 결함을 고쳤습니다.
 > **0.4.0에서 달라진 점**: 계획서 카드를 **묶음**(`B1`·`B2` — 함께 고칠 카드 몇 장 = 작업 가지 하나 = PR 하나)으로 나눠 `/refactor:approve B1` 한 번에 승인하고, 묶음 순서로 실행합니다([§5](#5-사용-순서)). 이미 진행 중인 계획서도 `/refactor:go 묶음` 으로 묶음만 덧붙일 수 있습니다(승인은 그대로). **자동 모드** `/refactor:approve B1 자동` — 그다음 `/refactor:go` 한 번이면 묶음 카드를 끝낸 뒤 Claude 가 푸시·PR·자동 검사 기다림·합치기·배포 끝 기다림·운영 화면 확인까지 혼자 합니다(사람이 아무 말이나 입력하면 합치기 전에 멈춤 · [§6-5](#6-5-자동-모드)).
 > **0.4.1에서 달라진 점**: 자동 모드의 오작동을 고쳤습니다 — 명령에 적힌 묶음 번호가 허락과 다르면 막고, 합치기 되풀이가 2시간 허락을 매 바퀴 다시 확인하며, 기준선 커밋은 기록 파일 꼴만 받고, 새 가지를 만들기 직전에 사람 입력(AskUserQuestion 답 포함)을 한 번 더 봅니다([§6-5](#6-5-자동-모드)). 안전장치가 막는 대상의 기준을 [§6-4](#6-4-한계) 맨 앞에 적었습니다.
+> **0.4.3에서 달라진 점**: 리팩토링 중 `git checkout`·`git restore` 로 기록 폴더(docs/refactor) 자체를 되돌리는 것과, 파이썬·노드 한 줄(`shutil.copytree`·`fs.cpSync`·`zipfile`/`tarfile`의 `extractall` 등)로 기록 폴더에 한꺼번에 넣는 것을 막았습니다(이름을 적어 하나씩 되돌리거나 베껴 넣는 것은 그대로 통과). 되돌리기·복사 판정의 이웃 꼴(경로 하나·와일드카드·pathspec-from-file·python -m zipfile 등)도 함께 막습니다.
 > **0.4.2에서 달라진 점**: 실사용 신고 6건을 고쳤습니다 — 기준선 백틱 설명 오탐(괄호 설명을 경로로 잘못 봄) · `awk -F'\|'`처럼 따옴표 안 `\|`를 읽기만 하는 명령을 쓰기로 오탐 · 문서(docs/refactor) 편집만 하는 파이썬·노드 한 줄/히어독 헛막힘 · 계획서 카드에 "추가 시험" 칸을 둬 카드 밖 기존 시험 파일을 재승인 없이 더할 수 있음 · `/refactor:approve 잠깐 멈춤 [N시간]`으로 안전장치를 사람이 잠깐 끌 수 있음(`다시 시작`으로 되돌림) · 자동 모드 배포 확인에서 환경 이름에 띄어쓰기·빗금이 있으면 거짓 경보가 나던 것을 고쳤습니다.
 
 > **English summary**
@@ -181,8 +182,8 @@ Claude가 도구를 쓰기 **직전에**(PreToolUse 훅) 검사해서 위험하�
 명령 이름 바로 뒤에 `.exe`를 붙인 꼴(`git.exe …`·`cat.exe …`)도 같은 규칙으로 봅니다(경로를 앞에 붙인 꼴은 [§6-4](#6-4-한계)).
 
 리팩토링 중에는 허락 파일·승인 기록을 덮어쓰거나 다른 이름으로 바꿀 수 있는 다음 꼴을 막습니다. ① 기록 폴더(`docs/refactor`)나 그 안으로 **폴더째 복사**(`cp -r`·`cp -a`·`rsync`·`robocopy`·`Copy-Item -Recurse`·`xcopy /s`)나 **이름을 미리 알 수 없는 복사·옮기기**(와일드카드·`$( )`·백틱·`xargs`·`find -exec`·끝이 `/`·`/.` 인 원본 · 변수가 든 경로는 마지막 이름이 보통 파일 이름이면 통과). ② 그 상위 폴더(`docs`·프로젝트 루트·그 위·홈·루트)로는 **폴더째 복사이면서** 원본이 와일드카드·`/.`·`/`·변수이거나, 이름이 `refactor`·`docs`·목적지에서 기록 폴더로 가는 첫 칸(프로젝트 위 폴더면 프로젝트 이름)일 때만 — 원본 안쪽을 그대로 붓는 `cp -rT`·`--no-target-directory`·`robocopy`·`xcopy /s` 와, 있던 폴더를 갈아 끼우는 `mv -T`·`mv -b`(`--backup`)도 여기에 듭니다. ③ **압축 풀기**(`tar -x`·`unzip`·`7z x`·`Expand-Archive`)의 풀 곳이 기록 폴더나 그 상위일 때 — 풀 곳을 안 적으면 지금 폴더라 프로젝트 루트의 `tar xzf pkg.tgz` 도 막힙니다(`-C vendor` 처럼 하위 폴더를 적으면 됩니다). ④ **링크**(`ln`·`mklink`·`New-Item` 링크·`cp -l`/`-s`) 중 기록 폴더(또는 상위)를 가리키는 링크(상대 원본은 지금 폴더와 링크가 놓일 폴더 둘 다 기준으로 봅니다)와, 기록 폴더·상위 폴더 **자리에** 만드는 링크(목적지로 그 폴더를 적은 `ln -s /tmp/x .`·`ln -sfn /tmp/d docs`).
-- 막힘 예: `cp -r /tmp/d/. docs/refactor` · `cp /tmp/d/.t* docs/refactor/` · `cp -r /tmp/refactor docs/` · `tar xf x.tar`(루트에서) · `ln -s ../docs/refactor src/r`
-- 통과 예: `cp /tmp/notes.md docs/refactor/notes.md` · `cp *.md docs/` · `cp -r assets docs/` · `cp -a /tmp/config.json .` · `tar xf x.tar -C vendor` · `ln -s /tmp/d docs/refactor/x`
+- 막힘 예: `cp -r /tmp/d/. docs/refactor` · `cp /tmp/d/.t* docs/refactor/` · `cp -r /tmp/refactor docs/` · `tar xf x.tar`(루트에서) · `ln -s ../docs/refactor src/r` · `git restore docs/refactor` · `git checkout HEAD~1 -- docs/refactor` · `python -c "shutil.copytree('/tmp/x','docs/refactor')"`
+- 통과 예: `cp /tmp/notes.md docs/refactor/notes.md` · `cp *.md docs/` · `cp -r assets docs/` · `cp -a /tmp/config.json .` · `tar xf x.tar -C vendor` · `ln -s /tmp/d docs/refactor/x` · `git restore docs/refactor/REPORT.md` · `git restore --staged docs/refactor/REPORT.md`
 
 명령이 끝난 뒤에도(PostToolUse 훅) 한 번 더 확인해서, **이번 턴에** 커밋된 기준선·마이그레이션 파일이나 승인 기록이 바뀌었으면 그 턴의 Claude에게 바로 알립니다. 이어서 실행 중 이미 커밋한 앞 단계 카드에 적힌 기준선이 바뀌어도 알립니다 — 앞 단계가 건드리지 않은 기준선 파일이 완료 뒤 바뀌어 있어도 알립니다(그 기준선을 고칠 수 있는 열린 단계의 것은 조용 · "이미 커밋됨"은 이번 묶음 안의 `refactor: <ID> …` 커밋으로 봅니다). 승인 기록은 `/refactor:approve`가 쓸 때마다 봉인되므로, 그 밖에서 바뀐 기록은 사람이 `/refactor:approve 확인`을 입력하기 전까지 인정되지 않습니다.
 
@@ -500,6 +501,13 @@ claude-code-refactor/
 
 ## 13. 변경점
 
+### 0.4.3 (2026-10-06)
+
+- **기록 폴더 git 되돌리기 막음(R1)** — 리팩토링 중 `git checkout [커밋] -- docs/refactor`·`git restore [--source X] docs/refactor`처럼 기록 폴더 자체·그 상위(`docs`·프로젝트·`.`·`:/`)·사람 전용 파일(`STATE.md`·`APPROVALS.log`·`approved/`·`.turn*`·`.allow-*`)·실행 기록(`EXECUTION_LOG.md`, 되돌리기에만)을 되돌리는 것을 막았습니다. 이름을 적어 그 밖 파일(`docs/refactor/REPORT.md`)을 되돌리거나 `--staged`만 쓰는 것은 그대로 통과합니다.
+- **인터프리터 복사·풀기 막음(R2)** — `python -c`·`node -e`·히어독 등에서 `shutil.copytree`·`fs.cpSync`·`Copy-Item`·`extractall` 같은 복사·옮기기·풀기 함수로 기록 폴더(자체·상위·사람 전용 파일)에 넣는 것을 막았습니다. 이름을 적은 그 밖 파일로의 복사는 그대로 통과합니다.
+- **되돌리기 판정 보강** — `--` 없이 경로 하나만 적은 `git checkout <경로>` · 와일드카드(`'docs/refactor/*'`) · 홑 `&` 로 이은 명령 · `--pathspec-from-file` · ruby/php/perl/pwsh 복사 함수 · `python -m zipfile/tarfile -e` · 문자열 50개 초과 안내도 R1·R2 와 같은 문구로 막습니다.
+- **인터프리터 복사 판정은 목적지 자리만** — 복사·옮기기 함수는 **목적지 자리**(둘째 인자·`dst=`·`path=`)만 봅니다 — 기록 폴더 밖으로 복사·변수 이름 `docs`·문자열 `.replace()` 는 통과, 지금 폴더(`'.'`·인자 없는 `extractall()`)와 `'doc*'` 같은 패턴은 막습니다.
+
 ### 0.4.2 (2026-10-06)
 
 - **기준선 백틱 설명 오탐 고침** — 기준선 칸이 "없음(그 밖에 `console.warn`…)"처럼 백틱 설명을 괄호로 덧붙이면 그 백틱까지 경로로 읽어 허용이 열리던 것을 고쳤습니다. 백틱 값이 `/` 가 든 경로 꼴(`:` 없음)일 때만 경로로 봅니다.
@@ -518,7 +526,8 @@ claude-code-refactor/
 - **잔류 표시 정리** — 검증이 실패로 끝나도 다음 가지 표시 파일(`.turn-nextok`)을 지웁니다.
 - **시험** — 안전장치 75건·스크립트 19건 추가(끝 표시만으로 허락되지 않음 · 2시간 지난 허락 무시 · 위 다섯 가지 재현과 반대 방향). 0.4.0 때 "못 잡음"으로 남아 있던 변이 "판 표지 안 봄"(WA M17)은 다시 돌려 보니 0.4.0 에 추가된 시험이 잡습니다(새 시험을 더한 것은 아님).
 - **막는 대상의 기준**([§6-4](#6-4-한계) 맨 앞) — 안전장치는 "Claude 가 평소 칠 만한 꼴"을 막습니다. 아래 알려진 빈틈은 일부러 꼬아 써야 터지는 꼴이라 목록으로 남겨 두고, 실제로 겪어 신고해 주시면 그 항목부터 고칩니다.
-- **알려진 빈틈(0.4.1 기준 — 신고 오면 우선)** — 절대경로로 부른 실행기(`/usr/bin/gh`·vercel·claude) · 따옴표를 엇갈리게 꼬은 안의 `npm publish`(평범한 `npm publish`·`pnpm publish` 는 막힘) · `gh -R 'o r'` 류 · 겹친 `$( )` 안의 복사 · busybox cp·gtar·7zz·ditto·jar xf·cpio·pax·`find -exec sh -c`·setsid·ionice·flock·parallel 로 감싼 복사·풀기 · `git clone`·`git worktree add` 로 기록 폴더 안에 저장소 만들기 · 환경 변수(`TAR_OPTIONS`·`UNZIP`)를 다른 조각에 두기·대문자 옵션·bsdtar `s` · 옵션 값·파일 이름 안의 글자로 풀기 모드를 속이기(평범한 풀기 명령은 막힘) · 묶음 보류 뒤 다시 승인하면 그 사이 따로 끝낸 카드는 묶음 밖으로 봄 · 다른 묶음 번호로 막힐 때 안내가 "정해진 꼴로…"라 번호가 다름을 말해 주지 않음. **다음 판(0.4.3 — 0.4.2 는 실사용 신고를 먼저 고쳤다)에서 고치기로 한 것**: `git checkout <커밋> -- docs/refactor`·`git restore docs/refactor` 로 기록 폴더 되돌리기 · 파이썬·노드 한 줄로 기록 폴더에 폴더째 복사.
+- **알려진 빈틈(0.4.1 기준 — 신고 오면 우선)** — 절대경로로 부른 실행기(`/usr/bin/gh`·vercel·claude) · 따옴표를 엇갈리게 꼬은 안의 `npm publish`(평범한 `npm publish`·`pnpm publish` 는 막힘) · `gh -R 'o r'` 류 · 겹친 `$( )` 안의 복사 · busybox cp·gtar·7zz·ditto·jar xf·cpio·pax·`find -exec sh -c`·setsid·ionice·flock·parallel 로 감싼 복사·풀기 · `git clone`·`git worktree add` 로 기록 폴더 안에 저장소 만들기 · 환경 변수(`TAR_OPTIONS`·`UNZIP`)를 다른 조각에 두기·대문자 옵션·bsdtar `s` · 옵션 값·파일 이름 안의 글자로 풀기 모드를 속이기(평범한 풀기 명령은 막힘) · 묶음 보류 뒤 다시 승인하면 그 사이 따로 끝낸 카드는 묶음 밖으로 봄 · 다른 묶음 번호로 막힐 때 안내가 "정해진 꼴로…"라 번호가 다름을 말해 주지 않음. **0.4.3 에서 고침(R1·R2)**: `git checkout <커밋> -- docs/refactor`·`git restore docs/refactor` 로 기록 폴더 되돌리기 · 파이썬·노드 한 줄로 기록 폴더에 폴더째 복사.
+- **알려진 빈틈(0.4.3 기준 — 신고 오면 우선)** — `git -C <폴더> checkout -- …`(기준 폴더 이동 미반영) · `:(top)`·`':!src'` 표기 · `git restore --source=X`·`git merge`·plumbing 으로 기록 폴더 교체 · `python -c "print(open('docs/refactor/APPROVALS.log').read())"` 처럼 **인자 자리에 기록 파일 경로를 적은** 읽기 한 줄이 "실행"으로 막힘(0.4.2 S4 와 같은 결). 별칭 두 단계(`s2 = shutil; s2.copytree`) · distutils `copy_tree`·`Path.copy_into` · `"doc"'s/refactor'` 이어 붙임은 아직 막지 못합니다.
 - **알려진 헛막힘(신고 오면 우선)** — `claude -p hi --model $M`·`claude -p "$Q"` 꼴 · `rsync --no-times`·루트에서 `tar xf`·`unzip`·`ln -s /tmp/x` · 따옴표 안 `;` 뒤의 풀기 한 줄 · 16KB 넘는 한 조각 cp 판정이 부하 때 8~12초.
 
 ### 0.4.0 (2026-10-05)
