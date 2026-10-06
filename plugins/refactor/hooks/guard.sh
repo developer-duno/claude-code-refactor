@@ -422,9 +422,12 @@ allow_migration=0; [ -f "$rdir/.allow-migration-edit" ] && allow_migration=1
 paused=0
 if [ "$refactor_on" = 1 ] && [ "$go_turn" = 0 ] && [ -f "$rdir/.allow-pause" ] && [ -f "$rdir/APPROVALS.log" ] && [ -n "${REFACTOR_ROOT:-}" ] && [ -f "$lib" ]; then
   p_ep=""; p_n=""; p_h=""; p_x=""; p_last=""
-  { IFS=' ' read -r p_ep p_n p_h p_x; } < "$rdir/.allow-pause" 2>/dev/null
+  # 보완(검사 A 🟢 · lib rl_pause_state 와 같게): 둘째 줄이 있으면(빈 줄이라도) 멈춤 아님 · 만료 epoch 글자 수도 lib 와 같은 1~12
+  p_l2=""; p_two=0
+  { IFS=' ' read -r p_ep p_n p_h p_x; IFS= read -r p_l2 && p_two=1; [ -n "$p_l2" ] && p_two=1; } < "$rdir/.allow-pause" 2>/dev/null
+  [ "$p_two" = 1 ] && p_x=2
   p_h=${p_h%$'\r'}
-  p_re1='^[0-9]{9,12}$'; p_re2='^([1-9]|1[0-2])$'; p_re3='^[0-9a-f]{40}$'; p_re4='^[0-9]{1,12}$'
+  p_re1='^[0-9]{1,12}$'; p_re2='^([1-9]|1[0-2])$'; p_re3='^[0-9a-f]{40}$'; p_re4='^[0-9]{1,12}$'
   if [[ $p_ep =~ $p_re1 ]] && [[ $p_n =~ $p_re2 ]] && [[ $p_h =~ $p_re3 ]] && [ -z "$p_x" ]; then
     p_now=$(date +%s 2>/dev/null)
     if [[ $p_now =~ $p_re4 ]] && [ "$p_now" -lt "$p_ep" ]; then
@@ -440,6 +443,9 @@ if [ "$refactor_on" = 1 ] && [ "$go_turn" = 0 ] && [ -f "$rdir/.allow-pause" ] &
 fi
 # 잠깐 멈춤 중 건너뛰는 규칙 — 이 목록 밖(승인 위조·사람 전용 파일·.claude/settings·플러그인 끄기·비밀값·기록 폴더 지우기·길이 상한·하위 에이전트 지시문·
 #   되돌릴 수 없는 git·DB 삭제·원격 저장소 설정)은 멈춤과 상관없이 그대로 본다.
+#   deploy 갈래 안에서도 PR 합치기(gh pr merge·API 합치기)·원격 가지 참조 바꾸기(…/git/refs 쓰기·updateRef·deleteRef)와 되돌릴 수 없는 지우기
+#   (DB 초기화·heroku pg:reset·apps:destroy·netlify sites:delete·kubectl delete·wrangler pages deployment delete·gh release delete·릴리스 DELETE·
+#   docker compose down -v·git push --prune)는 멈춤 중에도 막는다(hv_deploy 의 PS=1 갈래 — 사장님 결정 S7-3·S7-4)
 #   push · stash · branch(다른 가지·커밋으로 옮기기) · deploy(배포·마이그 적용·원격 DB) · fmt(전체 포맷터·자동 수정) · baseline(기준선 폴더 쓰기·스냅숏 갱신) ·
 #   migration(마이그레이션 폴더 쓰기). 원격 저장소 설정(rmt_write)은 넣지 않는다 — 바꾼 주소는 멈춤이 끝난 뒤에도 남아 그 뒤 사람이 허락한 push 가 다른 저장소로 갈 수 있다
 pause_skips() {
@@ -679,10 +685,10 @@ check_file_tool() {
     # 이미 커밋된 기준선은 기준선 작성 단계에서도 고치지 않는다(새 기준선 파일은 커밋 전까지 고쳐도 된다)
     # 0.4.2 F5: 잠깐 멈춤 중에는 기준선·마이그레이션 보호(파일 도구)도 건너뛴다(pause_skips — 셸 쓰기와 같은 목록)
     if [ -e "$path" ] && ! pause_skips baseline && is_baseline_path "$path" && ! abl_file_ok "$path" && is_tracked "$path"; then
-      abl_hint; block "이미 커밋된 기준선 테스트($name)는 허용 없이 고치지 않습니다.${abl_why:+ $abl_why}" "$AH 이번 단계의 새 테스트는 tests/baseline 밖(예: tests/refactor/)에 만드세요."
+      abl_hint; block "이미 커밋된 기준선 테스트($name)는 허용 없이 고치지 않습니다.${abl_why:+ $abl_why}" "$AH 이번 단계의 새 테스트는 tests/baseline 밖(예: tests/refactor/)에 만드세요. $MSG_PAUSE_HINT"
     fi
     if [ -e "$path" ] && ! pause_skips migration && is_migration_path "$path" && [ "$allow_migration" = 0 ] && is_tracked "$path"; then
-      block "이미 커밋된 마이그레이션 파일($name)은 고치지 않습니다(운영 DB에 이미 적용됐을 수 있음)." "$MSG_ALLOW_M"
+      block "이미 커밋된 마이그레이션 파일($name)은 고치지 않습니다(운영 DB에 이미 적용됐을 수 있음)." "$MSG_ALLOW_M $MSG_PAUSE_HINT"
     fi
     if [ "$fence" = 1 ] && under_proj "$path" && ! under_refactor_docs "$path"; then
       block "$fence_why docs/refactor 밖의 파일을 고치지 않습니다." "발견한 문제는 보고서와 계획서 후보로만 적으세요. 고치는 일은 승인된 단계 실행에서 합니다. (리팩토링과 상관없는 평소 작업이면 사용자에게 \`/refactor:approve 잠깐 멈춤 1시간\` 을 부탁하세요 — 새 대화를 열어도 이 폴더는 막힙니다)"
@@ -1001,6 +1007,13 @@ RE_MIG_CMD='(supabase/migrations|prisma/migrations|alembic/versions|db/migrate|d
 writes_to() {
   # 0.4.2 F2: sponge(받은 내용을 그 파일에) · dd of=<파일> 도 쓰기
   has "$lq" "${S}dd[[:space:]][^;&|]*of=[\"']?[^[:space:];&|\"']*($1)" && return 0
+  # 보완(검사 A 🔴2): sed 의 파일 쓰기 — w·W 명령(주소·스크립트 처음·; 뒤) · s///w 플래그(/ 또는 다른 구분자) — 와 e(명령 실행 — 무엇을 쓰는지 판정할 수 없어
+  #   어느 대상이든 쓰기로 본다: 'e cmd' · 1e cmd · s/…/…/e). sed 낱말이 있을 때만(따옴표 안 ; | 를 넘어 보려고 명령 전체에서)
+  if has "$lq" "${S}sed[[:space:]]"; then
+    local sw="[[:space:]]*[\"']?[^[:space:]\"';}]*($1)"
+    has "$lq" "(s/[^/]*/[^/]*/[gpime0-9]*|[^A-Za-z0-9_./~[:space:]-][gpime0-9]*|[0-9])w$sw|[[:space:]]w[[:space:]]+[\"']?[^[:space:]\"';}]*($1)" && return 0
+    has "$lq" "(s/[^/]*/[^/]*/[gpimw0-9]*|[^A-Za-z0-9_./~[:space:]-][gpimw0-9]*|[0-9])e([[:space:]\"';}]|\$)" && return 0
+  fi
   has "$lq" "${S}(rm|unlink|mv|ln|truncate|shred|chmod|chown|patch|tee|sponge|touch|sed[[:space:]]+(-[a-z]*i|--in-place)|perl[[:space:]]+-[a-z]*i|g?awk[[:space:]]+-i[[:space:]]+inplace|git[[:space:]]+(checkout|restore|rm|mv)|set-content|add-content|out-file|remove-item|move-item|new-item)[[:space:]][^;&|]*($1)" && return 0
   has "$lq" ">>?[[:space:]]*[\"']?[^[:space:];&|]*($1)" && return 0
   has "$lq" "${S}find[[:space:]][^;&|]*($1)[^;&|]*[[:space:]](-delete|-exec|-execdir|-ok)([[:space:]]|$)" && return 0
@@ -1892,6 +1905,13 @@ MSG_REPOSET="리팩토링 중에는 저장소 설정(기본 가지·이름·공�
 MSG_REPOSET2="읽기(gh repo view · gh api repos/<주인>/<저장소>)는 됩니다. 꼭 지금 바꿔야 하면 멈추고 사람에게 부탁하세요."
 MSG_GHW="리팩토링 진행 중에는 GitHub API 로 가지·파일을 직접 쓰지 않습니다(PR 없이 합치는 길)."
 MSG_GHW2="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요. 가지·파일 변경은 git 커밋과 /refactor:approve 푸시 로 합니다."
+# 0.4.2 보완(사장님 결정 S7-3·S7-4): 잠깐 멈춤 중에도 막는 것 — PR 합치기·원격 가지 참조 바꾸기 · 되돌릴 수 없는 지우기
+MSG_PMERGE="잠깐 멈춤 중에도 PR 합치기와 원격 가지 참조 바꾸기(API 로 가지 옮기기·지우기)는 Claude 가 하지 않습니다."
+MSG_PMERGE2="급하면 사람이 GitHub 화면에서 합치게 안내하세요. 플러그인으로 합치려면 사용자에게 /refactor:approve 다시 시작 뒤 /refactor:approve 합치기 를 입력해 달라고 하세요. 푸시·PR 만들기는 멈춤 중에도 됩니다."
+MSG_PDEL="잠깐 멈춤 중에도 되돌릴 수 없는 지우기(DB 초기화·앱·사이트·릴리스·원격 가지 삭제·볼륨 지우기)는 Claude 가 하지 않습니다."
+MSG_PDEL2="꼭 필요하면 사람이 터미널에서 직접 실행하게 안내하세요(CLI 라면 입력창에 ! <명령> 도 됨). 배포·푸시는 멈춤 중에도 됩니다."
+# 0.4.2 보완(검사 C 🟡): 잠깐 멈춤으로 풀리는 일곱 규칙(push·stash·가지 바꾸기·배포·포맷터·기준선·마이그)의 차단 문구 둘째 줄에 붙이는 한 줄
+MSG_PAUSE_HINT="평소 작업이면 사용자에게 \`/refactor:approve 잠깐 멈춤 1시간\` 을 부탁하세요(새 대화를 열어도 이 폴더는 막힙니다)."
 # 0.4.0 보완(검사 A#9): gh api 조각의 %XX 중 영문·숫자·/ - _ . 를 풀어 판정한다(deploy%6Dents = deployments) → PD. 그 밖의 %XX 는 그대로
 pct_dec() {
   local s=$1 out="" h c m re='%([0-9A-Fa-f]{2})'
@@ -2037,13 +2057,22 @@ hv_deploy() {
   # 0.4.2 F5: 잠깐 멈춤 중(pause_skips deploy)에는 배포·합치기·배포 기록·워크플로 실행·API 커밋·마이그 적용·원격 DB 를 건너뛴다.
   #   저장소 설정(MSG_REPOSET — 가지 보호·이름·환경)·gh 별칭·파일에서 읽는 GraphQL 은 멈춤이 끝난 뒤에도 남거나 판정할 수 없어 그대로 막는다
   local PS=0; pause_skips deploy && PS=1
+  #   보완(사장님 결정 S7-3·S7-4): 멈춤 중에도 PR 합치기(gh pr merge · API 합치기)·원격 가지 참조 바꾸기(…/git/refs 쓰기 · GraphQL updateRef·deleteRef)와
+  #   되돌릴 수 없는 지우기(DB 초기화·앱·사이트·릴리스·원격 가지 삭제·push --prune · docker compose down -v · kubectl delete)는 막는다 — 사람이 직접(GitHub 화면·터미널)
+  if [ "$PS" = 1 ]; then
+    has "$t" "${S}gh[[:space:]]+pr${ghr}[[:space:]]+merge" && block "$MSG_PMERGE" "$MSG_PMERGE2"
+    if has "$t" "${S}(heroku[[:space:]]+(pg:reset|apps:destroy)([^A-Za-z0-9]|$)|(netlify|ntl)[[:space:]]+sites:delete([^A-Za-z0-9]|$)|kubectl[[:space:]]+delete|wrangler[[:space:]]+pages[[:space:]]+deployment[[:space:]]+delete|gh[[:space:]]+release${ghr}[[:space:]]+delete|docker(-compose|[[:space:]]+compose)[^;&|]*[[:space:]]down[^;&|]*[[:space:]](-v|--volumes)([[:space:]]|$)|git[[:space:]]+push[^;&|]*[[:space:]]--prune([[:space:]=\"')]|$)|(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?[a-z0-9_:-]*(db|prisma|supabase|drizzle)[:_-](reset|drop))" \
+      || has "$t" '(^|[[:space:]:])db:(reset|drop|wipe|purge)([[:space:]]|$)'; then
+      block "$MSG_PDEL" "$MSG_PDEL2"
+    fi
+  fi
   if [ "$PS" = 0 ] && { has "$tv" "$re_deploy" || has "$t" "$re_pkg_deploy"; }; then
     # 0.3.4 §10-5: PR 합치기(gh pr merge)가 걸렸을 때만 입력창 명령을 안내한다(합치기는 승인 스크립트가 검사 뒤 직접 한다)
-    local dh="필요한 명령을 사람에게 안내하세요."
+    local dh="필요한 명령을 사람에게 안내하세요. $MSG_PAUSE_HINT"
     has "$t" "${S}gh[[:space:]]+pr${ghr}[[:space:]]+merge" && dh="PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요."
     block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "$dh"
   fi
-  [ "$PS" = 0 ] && netlify_api_write "$t" && block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요. 읽기는 netlify api get…·list… 로 됩니다."
+  [ "$PS" = 0 ] && netlify_api_write "$t" && block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요. 읽기는 netlify api get…·list… 로 됩니다. $MSG_PAUSE_HINT"
   # 0.3.5 X1: gh api 로 PR 합치기(REST pulls/<번호>/merge · 가지 합치기 /merges · graphql mergePullRequest·enablePullRequestAutoMerge·mergeBranch)
   #   — gh pr merge 차단을 비껴가는 길. 방식 옵션(-X·--method)과 상관없이 막는다(합쳐졌는지 보는 읽기 GET 도 — 안내에 조회 대안).
   #   번호 칸은 숫자가 아니어도(변수·따옴표) 본다. gh.exe·경로 붙은 gh 도(조각 = gh api 부터 ; & | 앞까지)
@@ -2058,7 +2087,10 @@ hv_deploy() {
     if quote_odd "$mseg"; then gha_scan "$mseg$mrest"; mrest=${mseg}${mrest}; mrest=${mrest:${#GS}}; mseg=$GS; fi
     mn=$mseg; case "$mn" in *%*) pct_dec "$mn"; mn=$PD ;; esac
     while [[ $mn == *"$d2"* ]]; do mn=${mn//"$d2"/$d1}; done
-    if [ "$PS" = 0 ] && has "$mn" "pulls/[^/[:space:]]*/merge([^A-Za-z0-9_]|$)|/merges([^A-Za-z0-9_]|$)|mergepullrequest|enablepullrequestautomerge|mergebranch|enqueuepullrequest|updateref|createcommitonbranch|deleteref"; then
+    #   (보완 S7-3: 합치기·updateRef·deleteRef 는 멈춤 중에도 — API 로 직접 커밋하는 createCommitOnBranch 만 멈춤 중 풀림(push 와 같은 묶음))
+    if has "$mn" "pulls/[^/[:space:]]*/merge([^A-Za-z0-9_]|$)|/merges([^A-Za-z0-9_]|$)|mergepullrequest|enablepullrequestautomerge|mergebranch|enqueuepullrequest|updateref|deleteref" \
+      || { [ "$PS" = 0 ] && has "$mn" "createcommitonbranch"; }; then
+      [ "$PS" = 1 ] && block "$MSG_PMERGE" "$MSG_PMERGE2"
       block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "PR 합치기는 사용자에게 /refactor:approve 합치기 를 입력해 달라고 하세요(자동 검사가 모두 초록이고 기본 가지에 새 커밋이 없을 때만 합쳐짐). 그 밖의 명령은 사람에게 안내하세요. 합쳐졌는지 보려면 gh pr view <번호> --json state,mergedAt 를 쓰세요."
     fi
     # 0.3.7 G3: 저장소 설정 쓰기 — 저장소 뿌리(repos/<주인>/<저장소> 뒤가 ? · 공백 · 따옴표 · 끝: 기본 가지·이름·보관·공개 여부) ·
@@ -2069,26 +2101,35 @@ hv_deploy() {
       && gha_write "$mn"; then
       block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
-    if [ "$PS" = 0 ] && has "$mn" "/git/refs([/\"'[:space:]?)]|$)|/contents([/\"'[:space:]?)]|$)" && gha_write "$mn"; then
+    #   (보완 S7-3: …/git/refs 쓰기 = 가지 참조 강제 변경·삭제는 멈춤 중에도 · …/contents(API 커밋)만 멈춤 중 풀림)
+    if has "$mn" "/git/refs([/\"'[:space:]?)]|$)" && gha_write "$mn"; then
+      [ "$PS" = 1 ] && block "$MSG_PMERGE" "$MSG_PMERGE2"
       block "$MSG_GHW" "$MSG_GHW2"
+    fi
+    if [ "$PS" = 0 ] && has "$mn" "/contents([/\"'[:space:]?)]|$)" && gha_write "$mn"; then
+      block "$MSG_GHW" "$MSG_GHW2 $MSG_PAUSE_HINT"
+    fi
+    # 보완(S7-4): 멈춤 중 릴리스 지우기(REST -X DELETE …/releases/…) = gh release delete 와 같은 것
+    if [ "$PS" = 1 ] && has "$mn" "/releases/" && has "$mn" "[[:space:]][\"']?(-i*x[[:space:]]*=?|--method([[:space:]]+|=))[\"']?delete([\"'[:space:]]|$)"; then
+      block "$MSG_PDEL" "$MSG_PDEL2"
     fi
     # 0.4.0 G4(#11): 배포 기록(…/deployments · …/deployments/<번호>/statuses) · 워크플로 실행(…/actions/workflows/<x>/dispatches · repos/<o>/<r>/dispatches) ·
     #   릴리스(…/releases · …/releases/<번호>/assets) · Pages 빌드(…/pages/builds) 쓰기 = 배포 명령(gh workflow run · gh release create 와 같은 묶음).
     #   쓰기 판정은 gha_write(-X·--method 가 GET 이 아님 · 방식 없이 -f·-F·--field·--raw-field·--input) — 읽기(GET)는 통과
     if [ "$PS" = 0 ] && has "$mn" "/(deployments|dispatches|releases)([/?\"'[:space:])]|$)|/pages/builds([/?\"'[:space:])]|$)" && gha_write "$mn"; then
-      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요. $MSG_PAUSE_HINT"
     fi
     # 0.4.0 보완(검사 C#5·A#9): 워크플로 다시 돌리기(…/actions/runs|jobs/<번호>/rerun · rerun-failed-jobs) 쓰기 = 배포(gh run rerun 과 같은 묶음) ·
     #   배포 환경 설정(…/environments/<이름>(/…) — 보호 규칙·대기 시간·비밀값) 쓰기 = 저장소 설정 · GraphQL 변이 createDeployment(배포 기록) ·
     #   updateRepository·create|update|deleteBranchProtectionRule(저장소 설정) — 질의 글자에서 본다. 읽기(GET·query)는 통과
     if [ "$PS" = 0 ] && has "$mn" "/actions/(runs|jobs)/[^/[:space:]\"']+/(rerun|rerun-failed-jobs)([/?\"'[:space:])]|$)" && gha_write "$mn"; then
-      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+      block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요. $MSG_PAUSE_HINT"
     fi
     if has "$mn" "/environments/[^/[:space:]\"'?]+" && gha_write "$mn"; then
       block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
     if has "$mn" "[[:space:]][\"']?/?graphql([\"'[:space:]?)]|$)"; then
-      [ "$PS" = 0 ] && has "$mn" "createdeployment" && block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요."
+      [ "$PS" = 0 ] && has "$mn" "createdeployment" && block "리팩토링 진행 중에는 배포·원격 서버 명령을 사람이 직접 합니다." "필요한 명령을 사람에게 안내하세요. $MSG_PAUSE_HINT"
       has "$mn" "updaterepository|(create|update|delete)branchprotectionrule" && block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
     if has "$mn" "[[:space:]][\"']?/?graphql([\"'[:space:]?)]|$)" \
@@ -2110,7 +2151,7 @@ hv_deploy() {
     || has "$t" "${S}docker(-compose|[[:space:]]+compose)[^;&|]*[[:space:]]down[^;&|]*[[:space:]](-v|--volumes)([[:space:]]|$)" \
     || has "$t" '(^|[[:space:]:])db:(reset|drop|wipe|purge)([[:space:]]|$)' \
     || { has "$t" 'prisma[[:space:]]+migrate[[:space:]]+dev' && ! has "$t" '--create-only'; }; then
-    block "리팩토링 진행 중에는 DB 구조 변경(마이그레이션 적용)을 사람이 직접 합니다." "로컬 테스트 DB라면 사람이 터미널에서 <명령> 으로 실행합니다(CLI 라면 입력창에 ! <명령> 도 됨)."
+    block "리팩토링 진행 중에는 DB 구조 변경(마이그레이션 적용)을 사람이 직접 합니다." "로컬 테스트 DB라면 사람이 터미널에서 <명령> 으로 실행합니다(CLI 라면 입력창에 ! <명령> 도 됨). $MSG_PAUSE_HINT"
   fi
   if has "$t" "${S}(psql|mysql|mariadb|mongosh|mongo|redis-cli|sqlcmd)${E}"; then
     has "$r" '[$][{]?[A-Za-z_]*(URL|URI|DSN|DATABASE|DB_|CONN)' && remote_db=1
@@ -2118,7 +2159,7 @@ hv_deploy() {
     if has "$r" '[[:space:]](-h|--host)([[:space:]=]|$)'; then has "$r" '[[:space:]](-h|--host)(=|[[:space:]]+)["'"'"']?(localhost|127[.]0[.]0[.]1|::1)([[:space:]"'"'"']|$)' || remote_db=1; fi
   fi
   if [ "$remote_db" = 1 ]; then
-    block "리팩토링 진행 중에는 원격 DB(운영일 수 있음)에 직접 접속해 조회하지 않습니다(고객 개인정보가 화면에 찍힐 수 있음)." "필요한 확인은 사람에게 요청하세요."
+    block "리팩토링 진행 중에는 원격 DB(운영일 수 있음)에 직접 접속해 조회하지 않습니다(고객 개인정보가 화면에 찍힐 수 있음)." "필요한 확인은 사람에게 요청하세요. $MSG_PAUSE_HINT"
   fi
   return 0
 }
@@ -2134,7 +2175,7 @@ hv_deploy() {
 #        sys.argv/stdout/stderr/stdin/exit 만 · 노드는 [ ] 와 / 를 쓰지 않는다(글자로 이름을 만들어 꺼내는 길)
 DEI_PY=' re json os sys io pathlib datetime collections itertools functools textwrap unicodedata hashlib string math time typing '
 DEI_JS=' fs path os '
-DEI_SUB='__|subprocess|popen|child_process|importlib|dlopen|ctypes|pexpect|plumbum|proc_open|check_output|startfile|open3|getattr|setattr|delattr|globals|locals|win32|activex|builtins|mainModule|globalThis'
+DEI_SUB='__|subprocess|popen|child_process|importlib|dlopen|ctypes|pexpect|plumbum|proc_open|check_output|startfile|open3|getattr|setattr|delattr|globals|locals|win32|activex|builtins|mainModule|globalThis|modules|posix|spawn'
 DEI_WORD='system|spawn[A-Za-z_]*|exec[A-Za-z_]*|fork[A-Za-z_]*|child|shell|passthru|pty|commands|eval|compile|module|_load|ffi|wsh|kernel|qx|command|load|use|call|run|deno|Deno|bun|Bun|sh|breakpoint|help|vars|import|require|pickle|marshal|shelve|socket|http|https|net|urllib[0-9]*|requests|httpx|aiohttp|fetch|dgram|tls|dns|ftplib|smtplib|telnetlib|xmlrpc|shutil|rmtree|signal|kill|worker_threads|Worker|vm|binding|Function|constructor|prototype|global|arguments|Reflect|Proxy|WebAssembly|inspect|environ|getenv|putenv|unlink|remove|rename|chmod|chown|symlink|link|mkdir|rmdir|makedirs|removedirs|parent|parents|joinpath|with_name|with_stem|with_suffix|resolve|absolute|expanduser|home|cwd|chdir|glob|rglob|iterdir|walk|listdir|scandir|touch|truncate|copy|move|copyfile|tempfile|process|os|sys|io|fs|open|Path|pathlib'
 dei_path_ok() { # 첫 인자 글자 하나가 docs/refactor 아래 .md 문서인가(사람 전용·숨김 이름·approved/·.. 제외)
   local v=${1#./}
@@ -2227,14 +2268,32 @@ dei_body() { # $1 본문 $2 py|js — 조건 ①②③(nocasematch 끈 채로 �
       fi
       re='^from[[:space:]]+([A-Za-z_][A-Za-z0-9_.]*)[[:space:]]+import[[:space:]]+(.+)$'
       if [[ $t =~ $re ]]; then
-        top=${BASH_REMATCH[1]%%.*}; nm=${BASH_REMATCH[2]//[[:space:]]/}
+        top=${BASH_REMATCH[1]%%.*}; nm=${BASH_REMATCH[2]//[[:space:]]/}; it=${BASH_REMATCH[1]}; mods=${BASH_REMATCH[2]}
         case "$DEI_PY" in *" $top "*) ;; *) return 1 ;; esac
-        case "${BASH_REMATCH[1]}" in
+        # 보완(검사 A 🔴1): 가져오는 이름도 좁게 — from os.path import os as q 처럼 허용 모듈을 거쳐 os 를 꺼내는 길.
+        #   os.path 는 허용 이름(join·exists·isfile·isdir·basename·dirname·splitext·normpath)만 · 그 밖 모듈은 이름이 _ 로 시작하지 않고
+        #   위험 낱말(DEI_WORD — os·sys·io·open·Path …)·DEI_SUB 가 아님 · as(별명)는 어느 모듈이든 아님
+        re='(^|[^A-Za-z0-9_])as([^A-Za-z0-9_]|$)'
+        [[ $mods =~ $re ]] && return 1
+        nm=${nm#"("}; nm=${nm%")"}
+        case "$it" in
           os) [ "$nm" = path ] || return 1 ;;
           io|sys) return 1 ;;
           pathlib) [ "$nm" = Path ] || return 1 ;;
-          os.path) ;;
-          *) case "$nm" in *'*'*) return 1 ;; esac ;;
+          os.path)
+            mods=$nm,
+            while [ -n "$mods" ]; do
+              it=${mods%%,*}; mods=${mods#*,}
+              case "$it" in join|exists|isfile|isdir|basename|dirname|splitext|normpath) ;; *) return 1 ;; esac
+            done ;;
+          *)
+            mods=$nm,
+            while [ -n "$mods" ]; do
+              it=${mods%%,*}; mods=${mods#*,}
+              re='^[A-Za-z][A-Za-z0-9_]*$'; [[ $it =~ $re ]] || return 1
+              [[ $it =~ $DEI_SUB ]] && return 1
+              re="^($DEI_WORD)\$"; [[ $it =~ $re ]] && return 1
+            done ;;
         esac
         C2="$C2$NL"; continue
       fi
@@ -2305,6 +2364,9 @@ dei_body() { # $1 본문 $2 py|js — 조건 ①②③(nocasematch 끈 채로 �
     while [[ $C3 =~ $re ]]; do C3=${C3/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}PROCX${BASH_REMATCH[3]}"}; done
   fi
   [[ $C3 =~ $DEI_SUB ]] && return 1
+  # 보완(검사 A 🔴1): _ 로 시작하는 이름·._ 접근(collections._sys · json._default_decoder — 허용 모듈의 숨은 속성으로 os·sys 꺼내기)은 아님
+  re='(^|[^A-Za-z0-9_$])_'
+  [[ $C3 =~ $re ]] && return 1
   re="(^|[^A-Za-z0-9_\$])($DEI_WORD)([^A-Za-z0-9_\$]|\$)"
   [[ $C3 =~ $re ]] && return 1
   return 0
@@ -3004,11 +3066,12 @@ MSG_RDOC2="다시 하려면 /refactor:go 다시 <단계> 를 쓰세요(이전 �
 RE_PH_TOK='^([^"'"'"'\\$]+|[$]'"'"'([^'"'"'\\]|\\.)*'"'"'|'"'"'[^'"'"']*'"'"'|"([^"\\]|\\.)*"|\\.|[$])'
 # 따옴표 안 | 를 하나로 묶은 조각 중 문자열을 명령으로 실행하는 것(sh/bash/zsh -c '…' · eval · su -c · ssh · cmd /c · powershell -c …)은 옛 방식으로 한 번 더 자른다
 RE_PH_WRAP='(^|[^[:alnum:]_.-])(eval|(ba|z|da|k|fi|tc|c)?sh|su|cmd|powershell|pwsh|ssh|watch|parallel|script|busybox)([.]exe)?([[:space:]"'"'"']|$)'
+#   (보완 F1, 검사 C 🟠: 따옴표 안의 ; · & 도 같은 방식으로 \003 · \004 — awk '{a=1; print $2}' 의 ; 로 잘려 뒷조각이 "모르는 명령 + 인자"가 되던 헛막힘)
 pipe_hide() {
   PHD=$1
-  case "$1" in *'|'*) ;; *) return 0 ;; esac
+  case "$1" in *'|'*|*';'*|*'&'*) ;; *) return 0 ;; esac
   case "$1" in *[\"\'\\]*) ;; *) return 0 ;; esac
-  case "$1" in *$'\002'*) return 0 ;; esac
+  case "$1" in *$'\002'*|*$'\003'*|*$'\004'*) return 0 ;; esac
   if [ "$tool" = PowerShell ]; then case "$1" in *'`'*|*"$BS"*) return 0 ;; esac; fi
   # 히어독(<<)이 있으면 본문 줄이 " ; " 로 이어져(unesc_line) 본문의 ' 와 뒤 명령의 ' 가 짝지어질 수 있다 → 아무것도 바꾸지 않는다
   case "$1" in *'<<'*) return 0 ;; esac
@@ -3023,8 +3086,8 @@ pipe_hide() {
       *"$NL"*|'$') ;;
       "$BS|") [ "$tool" = PowerShell ] || m=$'\002' ;;
       "$BS"*) ;;
-      \"*) if [ "$tool" != PowerShell ]; then case "$m" in *'$('*|*'`'*) ;; *) m=${m//|/$'\002'} ;; esac; fi ;;
-      \'*|'$'\'*) m=${m//|/$'\002'} ;;
+      \"*) if [ "$tool" != PowerShell ]; then case "$m" in *'$('*|*'`'*) ;; *) m=${m//|/$'\002'}; m=${m//;/$'\003'}; m=${m//&/$'\004'} ;; esac; fi ;;
+      \'*|'$'\'*) m=${m//|/$'\002'}; m=${m//;/$'\003'}; m=${m//&/$'\004'} ;;
     esac
     out="$out$m"
   done
@@ -3032,15 +3095,20 @@ pipe_hide() {
 }
 shell_targets() { cd_all shell_targets1 "$1"; }
 shell_targets1() { # $1 판정용 명령(lq, $PWD·$HOME 정리됨) — cd·pushd 를 만나면 뒤 조각의 상대경로는 그 폴더 기준
-  local s=$1 seg tl line kind t b src CWD_BASE=$cwd CD_PREV=$cwd
+  local s=$1 seg tl line kind t b src rs CWD_BASE=$cwd CD_PREV=$cwd
   pipe_hide "$s"; s=$PHD
   s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}
   while [ -n "$s" ]; do
     seg=${s%%"$NL"*}; if [ "$seg" = "$s" ]; then s=""; else s=${s#*"$NL"}; fi
     case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
-    case "$seg" in *$'\002'*)
-      seg=${seg//$'\002'/|}
-      has "$seg" "$RE_PH_WRAP" && s="${seg//|/$NL}$NL$s" ;;
+    case "$seg" in *$'\002'*|*$'\003'*|*$'\004'*)
+      seg=${seg//$'\002'/|}; seg=${seg//$'\003'/;}; seg=${seg//$'\004'/&}
+      # 문자열을 명령으로 실행하는 조각(sh -c '…' 등)은 옛 방식(&& || ; |)으로 한 번 더 자른다 —
+      #   되민 조각에 자리표시가 남아 있으면(되돌리기가 빠진 경우) 넣지 않는다(같은 조각을 끝없이 되밀지 않게, 검사 A 🟡3)
+      if has "$seg" "$RE_PH_WRAP"; then
+        rs=${seg//&&/$NL}; rs=${rs//||/$NL}; rs=${rs//;/$NL}; rs=${rs//|/$NL}
+        case "$rs" in *$'\002'*|*$'\003'*|*$'\004'*) ;; *) s="$rs$NL$s" ;; esac
+      fi ;;
     esac
     cd_seg "$seg" && continue
     seg_targets "$seg"
@@ -4555,23 +4623,23 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   if ! pause_skips push && has "$lq" 'git[[:space:]]+push'; then
     # 0.3.3: 사람이 /refactor:approve 푸시 로 허락한 턴이면 맨 위 명령의 정확한 꼴(git push [-u] origin <허락된 가지>)만 통과.
     #   판정용 사본(원형 cmd0·lq·lz·hv·hvz) 모두가 정확한 꼴이어야 하고, 줄 이어쓰기·역슬래시(JSON 의 \\)가 있으면 막는다
-    local push_hint="단계 커밋은 그대로 두고, 사람이 터미널에서 git push 로 실행하게 하세요(CLI 라면 입력창에 ! git push 도 됨). 원격이라 터미널이 없으면 사용자에게 /refactor:approve 푸시 를 입력해 달라고 하세요(작업 가지만 · 그 차례에만)."
+    local push_hint="단계 커밋은 그대로 두고, 사람이 터미널에서 git push 로 실행하게 하세요(CLI 라면 입력창에 ! git push 도 됨). 원격이라 터미널이 없으면 사용자에게 /refactor:approve 푸시 를 입력해 달라고 하세요(작업 가지만 · 그 차례에만). $MSG_PAUSE_HINT"
     if [ "$PTOP" = 1 ] && push_grant; then
       case "$rawcmd" in *"$BS$BS"*) false ;; *) true ;; esac \
         && push_exact "$cmd0" "$PB" && push_exact "$lq" "$PB" \
         && { [ -z "$lz" ] || push_exact "$lz" "$PB"; } && { [ -z "$hv" ] || push_exact "$hv" "$PB"; } && { [ -z "$hvz" ] || push_exact "$hvz" "$PB"; } \
         || block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음)." "$push_hint 허락된 꼴은 git push -u origin $PB 뿐입니다."
-      push_where || block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음). $PW" "$PWH"
+      push_where || block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음). $PW" "$PWH $MSG_PAUSE_HINT"
     else
       block "리팩토링 진행 중에는 push를 사람이 직접 합니다(push가 자동 배포로 이어질 수 있음)." "$push_hint"
     fi
   fi
   if ! pause_skips stash && has "$lq" 'git[[:space:]]+stash([[:space:]]|$)' && ! has "$lq" 'git[[:space:]]+stash[[:space:]]+(list|show)'; then
-    block "리팩토링 중에는 git stash를 쓰지 않습니다(다른 작업이 섞여 사라질 수 있음)." "커밋이 필요하면 7-execute 5-1 대로 그 단계 파일만 — 단계 밖 변경이면 멈추고 사람에게 알리세요."
+    block "리팩토링 중에는 git stash를 쓰지 않습니다(다른 작업이 섞여 사라질 수 있음)." "커밋이 필요하면 7-execute 5-1 대로 그 단계 파일만 — 단계 밖 변경이면 멈추고 사람에게 알리세요. $MSG_PAUSE_HINT"
   fi
   # 0.3.2: 다른 가지·커밋으로 옮기기 — 기록 폴더(STATE)가 없는 곳으로 가면 안전장치가 통째로 꺼진다. 원형과 사본(lz·hv·hvz) 모두(bash -c "git sw"'itch x')
   if ! pause_skips branch && { br_switch "$lq" || { [ -n "$lz" ] && br_switch "$lz"; } || { [ -n "$hv" ] && br_switch "$hv"; } || { [ -n "$hvz" ] && br_switch "$hvz"; }; }; then
-    block "리팩토링 중에는 다른 가지·커밋으로 옮기지 않습니다(리팩토링 기록이 없는 곳으로 가면 안전장치가 통째로 꺼짐)." "가지를 옮겨야 하면 멈추고 사람에게 부탁하세요(사람이 터미널에서 git switch <가지>). PR 을 합친 뒤 최신 기본 가지에서 새 작업 가지가 필요하면 사용자에게 /refactor:approve 새 가지 를 입력해 달라고 하세요. 지금 위치에서 새 가지 만들기(git switch -c <새 가지>)와 파일 되돌리기(git restore <파일> · git checkout -- <파일>)는 됩니다. 강제 만들기(-C·-B)는 다른 가지를 덮어쓸 수 있어 막습니다 — -c·-b 로 만드세요."
+    block "리팩토링 중에는 다른 가지·커밋으로 옮기지 않습니다(리팩토링 기록이 없는 곳으로 가면 안전장치가 통째로 꺼짐)." "가지를 옮겨야 하면 멈추고 사람에게 부탁하세요(사람이 터미널에서 git switch <가지>). PR 을 합친 뒤 최신 기본 가지에서 새 작업 가지가 필요하면 사용자에게 /refactor:approve 새 가지 를 입력해 달라고 하세요. 지금 위치에서 새 가지 만들기(git switch -c <새 가지>)와 파일 되돌리기(git restore <파일> · git checkout -- <파일>)는 됩니다. 강제 만들기(-C·-B)는 다른 가지를 덮어쓸 수 있어 막습니다 — -c·-b 로 만드세요. $MSG_PAUSE_HINT"
   fi
   if has "$lq" "$re_glp" && ! has "$lq" 'git[[:space:]]+log[^;&|]*[[:space:]]--[[:space:]]+[^[:space:]-]'; then
     block "리팩토링 진행 중에는 파일을 지정하지 않은 git log -p 를 쓰지 않습니다(옛 비밀값이 찍힐 수 있음)." "파일을 지정하세요: git log -p -- <파일>, 또는 목록만: git log --oneline"
@@ -4591,7 +4659,7 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
   if ! pause_skips fmt && { has "$lq" "${S}(prettier[^;&|]*[[:space:]](--write|-w)|eslint[^;&|]*--fix|biome[^;&|]*[[:space:]](--write|--apply|format)|ruff[[:space:]]+format|ruff[^;&|]*--fix|black|isort|autopep8[^;&|]*(-i|--in-place)|standard[^;&|]*--fix|dprint[[:space:]]+fmt|gofmt[^;&|]*-w|rubocop[^;&|]*[[:space:]](-a|-A|--autocorrect))[^;&|]*[[:space:]](\\.|\\./|[*]|[*][*]|\\./src/?|src/?|tests?/?)([[:space:]]|$)" \
     || has "$lq" "${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?(lint|format|fmt|prettier|fix)[^;&|]*(--fix|--write)" \
     || has "$lq" "${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?(format|fmt|fix)([[:space:]]|$)"; }; then
-    block "리팩토링 진행 중에는 프로젝트 전체를 한꺼번에 고치는 포맷터·자동 수정을 돌리지 않습니다(단계 범위 밖·기준선까지 바뀜)." "이번 단계 파일만 지정해서 실행하세요(예: npx prettier --write src/price.js)."
+    block "리팩토링 진행 중에는 프로젝트 전체를 한꺼번에 고치는 포맷터·자동 수정을 돌리지 않습니다(단계 범위 밖·기준선까지 바뀜)." "이번 단계 파일만 지정해서 실행하세요(예: npx prettier --write src/price.js). $MSG_PAUSE_HINT"
   fi
 
   if [ "$in_baseline_phase" = 0 ] && [ "$allow_baseline" = 0 ] && ! pause_skips baseline; then
@@ -4604,14 +4672,14 @@ check_shell() { # $1(있으면) = 판정할 명령(JSON 이스케이프 그대�
     done
     has "$lq" '(--snapshot-update|--force-regen|--regen-all|--update-golden|update_snapshots=|update_golden=)' && snap=1
     if [ "$snap" = 1 ] && ! abl_any_open; then
-      abl_hint; block "스냅숏·골든 파일을 새 결과로 덮어쓰는 옵션은 기준선을 바꿀 수 있어 막혀 있습니다.${abl_why:+ $abl_why}" "$AH"
+      abl_hint; block "스냅숏·골든 파일을 새 결과로 덮어쓰는 옵션은 기준선을 바꿀 수 있어 막혀 있습니다.${abl_why:+ $abl_why}" "$AH $MSG_PAUSE_HINT"
     fi
     if { writes_to "$RE_BL_CMD" || interp_writes "$RE_BL_CMD"; } && ! abl_any_open; then
-      abl_hint; block "기준선 테스트 폴더의 파일을 바꾸거나 지우는 명령은 막혀 있습니다.${abl_why:+ $abl_why}" "$AH"
+      abl_hint; block "기준선 테스트 폴더의 파일을 바꾸거나 지우는 명령은 막혀 있습니다.${abl_why:+ $abl_why}" "$AH $MSG_PAUSE_HINT"
     fi
   fi
   if [ "$allow_migration" = 0 ] && ! pause_skips migration && { writes_to "$RE_MIG_CMD" || interp_writes "$RE_MIG_CMD"; }; then
-    block "마이그레이션 폴더의 파일을 셸 명령으로 바꾸거나 지우지 않습니다." "새 마이그레이션은 파일 쓰기 도구로 새 파일을 만드세요(커밋 전의 새 파일은 고쳐도 됩니다). $MSG_ALLOW_M"
+    block "마이그레이션 폴더의 파일을 셸 명령으로 바꾸거나 지우지 않습니다." "새 마이그레이션은 파일 쓰기 도구로 새 파일을 만드세요(커밋 전의 새 파일은 고쳐도 됩니다). $MSG_ALLOW_M $MSG_PAUSE_HINT"
   fi
   # (기록 폴더 안 파일 지우기(rm … docs/refactor/)는 4) 의 hv_del 이 사본마다 본다)
 

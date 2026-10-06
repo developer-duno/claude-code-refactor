@@ -474,7 +474,7 @@ ROUND2 = [  # 3차 재검증에서 나온 오탐·빈틈
 ]
 GO_TURN_EXECUTE = [  # EXECUTE + /refactor:go 턴: 프로젝트 코드 실행은 안전 실행기로만
     (B, bash("npm test")), (B, bash("npx vitest run tests/baseline")), (B, bash("node scripts/report.js")),
-    (OK, bash("python3 -c \"print(1)\"")), (B, bash("python3 -c \"import random; print(1)\"")), (B, bash("cd app && npm run build")),   # 0.4.2 F3: 문서·출력만 하는 한 줄은 통과 (B, bash("pnpm dev")),
+    (OK, bash("python3 -c \"print(1)\"")), (B, bash("python3 -c \"import random; print(1)\"")), (B, bash("cd app && npm run build")), (B, bash("pnpm dev")),   # 0.4.2 F3: 문서·출력만 하는 한 줄은 통과
     (B, bash("npx vitest run 2>&1 | tail -20")), (B, bash("timeout 600 npm test")), (B, bash("./scripts/seed.sh")),
     (OK, bash("bash /x/hooks/run.sh refactor-safe-run -- npm test")),
     (OK, bash("bash /x/hooks/run.sh refactor-safe-run -- npx vitest run tests/baseline 2>&1 | tail -20")),
@@ -867,6 +867,7 @@ def main():
     check_fg_040(res)
     check_copy_dir_040(res)
     check_pipe_quote_042(res)
+    check_sed_write_042(res)
     check_doc_edit_042(res)
     check_pause_042(res)
     check_msgs_042(res)
@@ -5778,6 +5779,10 @@ def _cases_042(res, proj, label, rows, need=None, extra=None):
             res["fails"].append(("0.4.2 " + label, want, code, call[0], json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
 
 
+# 잔치 S4 원문(probe_s.py 와 같은 글자) — 따옴표 안 ; 로 잘려 헛막혔다(검사 C 🟠)
+S4_042 = """grep -n "### \\[P2-37\\]" docs/refactor/REFACTOR_PLAN.md; grep -c 'bot-sweep.test.ts:116-120' docs/refactor/REFACTOR_PLAN.md; grep -c '기준선 폴더에 retention-enabled 글자 0' docs/refactor/REFACTOR_PLAN.md; echo "== 판"; grep -o '"version": *"[0-9.]*"' ~/.claude/plugins/cache/vibe-consulting/refactor/0.4.0/.claude-plugin/plugin.json; echo "== 자동 줄"; grep -c '| 자동 |' docs/refactor/APPROVALS.log; echo "== 24h"; grep -E '^2026-10-0[56]' docs/refactor/APPROVALS.log | awk -F'|' '{gsub(/ /,"",$2); print $2}' | sort | uniq -c; echo "== 10-05 06:20 이후"; awk -F'|' '$1 >= "2026-10-05 06:20" {gsub(/ /,"",$2); print $2}' docs/refactor/APPROVALS.log | sort | uniq -c; echo "== 전체"; awk -F'|' '/^20/{gsub(/ /,"",$2); print $2}' docs/refactor/APPROVALS.log | sort | uniq -c"""
+
+
 def check_pipe_quote_042(res):
     """F2(S4): 따옴표 안 | · 역슬래시 \\| 는 파이프가 아니다 — 읽기만 하는 awk·cut 이 사람 전용 파일 보호에 헛막히지 않는다.
     진짜 파이프(따옴표 밖 · sh -c '…' 안 · "$( … )" 안)로 사람 전용 파일에 쓰는 꼴은 그대로 막힌다. dd of= · sponge 도 쓰기"""
@@ -5786,14 +5791,22 @@ def check_pipe_quote_042(res):
               "awk -F'|' '{print $2}' docs/refactor/approved/P1-2.md", "awk -F'|' '{print $2}' docs/refactor/APPROVALS.log | sort",
               "grep '|' docs/refactor/APPROVALS.log", "tr '|' ',' < docs/refactor/APPROVALS.log", "sed 's/|/,/' docs/refactor/APPROVALS.log",
               "awk -F: '{print $2}' docs/refactor/APPROVALS.log", "grep -c '| 승인 |' docs/refactor/APPROVALS.log", "tail -5 docs/refactor/APPROVALS.log",
-              "awk '{print}' docs/refactor/APPROVALS.log > /tmp/x"]
+              "awk '{print}' docs/refactor/APPROVALS.log > /tmp/x",
+              # 보완(검사 C 🟠·🟡②): 따옴표 안 ; · && 도 명령 구분자가 아니다(S4 원문 포함)
+              S4_042, "awk '{a=1; print $2}' docs/refactor/APPROVALS.log",
+              "awk '{gsub(/ /,\"\",$2); print $2}' docs/refactor/APPROVALS.log | sort | uniq -c",
+              "grep -c 'a;b' docs/refactor/APPROVALS.log", "awk -F'|' '{x=$2; print x}' docs/refactor/APPROVALS.log",
+              "awk '$1==\"x\" && $2==\"y\" {print}' docs/refactor/APPROVALS.log", "grep -E 'a&&b' docs/refactor/APPROVALS.log"]
     blocked = ["awk -i inplace '{print}' docs/refactor/APPROVALS.log", "awk '{print}' docs/refactor/APPROVALS.log > docs/refactor/APPROVALS.log",
                "tee docs/refactor/APPROVALS.log", "cp x docs/refactor/APPROVALS.log",
                "sh -c 'cat x | dd of=docs/refactor/APPROVALS.log'", "sh -c 'cat x | sponge docs/refactor/APPROVALS.log'",
                "cat x | tee docs/refactor/APPROVALS.log", "cat x | dd of=docs/refactor/APPROVALS.log", "cat x | sponge docs/refactor/APPROVALS.log",
                "dd if=/tmp/x of=docs/refactor/.allow-baseline-edit", "bash -c \"cat x | tee docs/refactor/APPROVALS.log\"",
                "echo \"$(cat x | tee docs/refactor/APPROVALS.log)\"", "eval 'cat x | tee docs/refactor/APPROVALS.log'",
-               "awk -F'|' '{print $2}' x | tee docs/refactor/APPROVALS.log", "cut -d'|' -f2 x > docs/refactor/.turn.t"]
+               "awk -F'|' '{print $2}' x | tee docs/refactor/APPROVALS.log", "cut -d'|' -f2 x > docs/refactor/.turn.t",
+               "awk '{print \"x\" > \"docs/refactor/APPROVALS.log\"}' f", "sh -c 'a=1; echo x > docs/refactor/APPROVALS.log'",
+               "echo 'a;b' > docs/refactor/.allow-x", "cat x; echo y > docs/refactor/APPROVALS.log",
+               "sh -c 'a=1 && cp x docs/refactor/APPROVALS.log'", "bash -c \"a=1; cat x | tee docs/refactor/APPROVALS.log\""]
     for go in (False, True):
         proj = make_project(phase="EXECUTE", allow=(".turn",) if go else ())
         try:
@@ -5812,7 +5825,28 @@ def check_pipe_quote_042(res):
                                                 (B, bash("tr a b <<'EOF'\n# it's\nEOF\ncat x | tee src/app.ts; echo 'done'")),
                                                 (B, bash("ls # it's\ncat x | tee src/app.ts; ls 'a'")),
                                                 (B, bash("sh -c 'cat x | sponge src/app.ts'")), (B, bash("bash -c \"cat x | tee src/app.ts\"")),
+                                                (B, bash("sh -c 'a=1; touch src/app.ts'")), (B, bash("eval 'a=1 && touch src/app.ts'")),
+                                                (B, bash("cat 'a;b'; touch src/app.ts")), (B, bash("cat 'a&&b' && touch src/app.ts")),
+                                                (OK, bash("awk '{a=1; print $2}' src/app.ts")),
                                                 (OK, bash("awk -F'|' '{print $2}' src/app.ts"))])
+    finally:
+        rmtree_rw(proj)
+
+
+def check_sed_write_042(res):
+    """보완(검사 A 🔴2): sed 의 파일 쓰기(w·W 명령 · s///w 플래그)와 e(명령 실행)는 쓰기 — 읽기만 하는 sed 는 그대로 통과"""
+    blocked = ["sed 's/a\\|b/c/w docs/refactor/approved/.log-sum' x", "sed 's/a\\|b/c/w docs/refactor/.allow-pause' x",
+               "sed -n 'w docs/refactor/APPROVALS.log' x", "sed 's/x/y/W docs/refactor/.allow-baseline-edit' x",
+               "sed 's|x|y|w docs/refactor/APPROVALS.log' x", "sed '1w docs/refactor/APPROVALS.log' x",
+               "sed -n '1,3 w docs/refactor/APPROVALS.log' x", "sed 's/x/y/wdocs/refactor/APPROVALS.log' x",
+               "sed '1e rm -f docs/refactor/APPROVALS.log' x", "sed 's/.*/echo hi/e' x"]
+    passes = ["sed 's/\\|/,/' docs/refactor/APPROVALS.log", "sed -n '1,3p' x > /tmp/o", "sed -e 's/a/b/' -e 's/c/d/' docs/refactor/APPROVALS.log",
+              "sed -n '/승인/p' docs/refactor/APPROVALS.log | wc -l", "sed 's/x/y/w /tmp/out' docs/refactor/APPROVALS.log",
+              "sed -E 's/(a|b)e/x/' docs/refactor/APPROVALS.log", "sed -ne 's/a/b/p' docs/refactor/APPROVALS.log"]
+    proj = make_project(phase="EXECUTE")
+    try:
+        _cases_042(res, proj, "sed 쓰기·실행 → 막음", [(B, bash(c)) for c in blocked])
+        _cases_042(res, proj, "sed 읽기 → 통과", [(OK, bash(c)) for c in passes])
     finally:
         rmtree_rw(proj)
 
@@ -5827,7 +5861,9 @@ def check_doc_edit_042(res):
               "node -e \"const fs=require('fs');fs.writeFileSync('docs/refactor/STATE.md','x')\"",
               "python3 - <<'EOF'\nimport json, re\nfrom pathlib import Path\nt = Path('docs/refactor/STATE.md').read_text(encoding='utf-8')\nprint(json.dumps(re.findall('gate: (.*)', t)))\nEOF",
               "python - <<'EOF'\n# it's a doc edit\nimport os\nif os.path.exists('docs/refactor/STATE.md'):\n    print(open('docs/refactor/STATE.md').read().count('run shell'))\nEOF",
-              "node -e \"require('fs').appendFileSync('./docs/refactor/NOTES.md','x')\""]
+              "node -e \"require('fs').appendFileSync('./docs/refactor/NOTES.md','x')\"",
+              "python -c \"import json; print(json.dumps({'a':1}))\"", "python -c \"from os.path import join; print(join('docs/refactor','STATE.md'))\"",
+              "python -c \"from datetime import datetime; print(datetime.now())\"", "python -c \"from os.path import exists, isfile; print(exists('x'))\""]
     path_bad = ["python -c \"open('src/app.ts','w').write('x')\"", "python -c \"open('docs/refactor/../../.env').read()\"",
                 "python -c \"open('docs/refactor/APPROVALS.log','w').write('x')\"", "python -c \"open('docs/refactor/notes.txt','w')\"",
                 "python - <<'EOF'\np='docs/refactor/STATE.md'\nq=p\nopen(q,'w').write('x')\nEOF",
@@ -5838,13 +5874,27 @@ def check_doc_edit_042(res):
                 "node -e \"const {writeFileSync}=require('fs');writeFileSync('src/a.ts','x')\""]
     import_bad = ["python -c \"import random; print(random.random())\"", "python -c \"import subprocess; subprocess.run(['ls'])\"",
                   "python -c \"import requests; requests.get('http://x')\"", "python -c \"import shutil; shutil.rmtree('src')\"",
-                  "python -c \"__import__('os').system('ls')\"", "node -e \"require('child_process')\"", "python -c \"import os as o; o.system('ls')\""]
+                  "python -c \"__import__('os').system('ls')\"", "node -e \"require('child_process')\"", "python -c \"import os as o; o.system('ls')\"",
+                  # 보완(검사 A 🔴1): from … import 이름도 좁게 — 허용 모듈을 거쳐 os·sys 꺼내기 · as 별명
+                  "python -c \"from os.path import os as q; q.posix_spawnp('sh',['sh','-c','npm test'],{})\"",
+                  "python -c \"from os.path import os as q; q.replace('src/app.ts','src/b.ts')\"", "python -c \"from os.path import os; os.getcwd()\"",
+                  "python -c \"from typing import sys; sys.exit(0)\"", "python -c \"from datetime import datetime as d; print(d)\"",
+                  "python -c \"from os.path import abspath; print(abspath('x'))\""]
     word_bad = ["python -c \"import os; os.system('ls')\"", "python -c \"requests.get('http://x')\"", "python -c \"shutil.rmtree('src')\"",
                 "python - <<'EOF'\nimport sys\nsys.modules['os'].system('ls')\nEOF", "python - <<'EOF'\nimport os\nos.path.os.system('ls')\nEOF",
                 "py -c \"exec('import os')\"", "node -e \"arguments[1]('child_'+'process')\"", "node -e \"const fs=require('fs');fs['writeFileSync']('src/a.ts','x')\"",
-                "python - <<'EOF'\nprint(f'{1}')\nEOF"]
+                "python - <<'EOF'\nprint(f'{1}')\nEOF",
+                # 보완(검사 A 🔴1): _ 로 시작하는 이름·._ 접근 · modules·posix·spawn 부분 글자
+                "python -c \"import collections; collections._sys.modules['posix'].posix_spawnp('sh',['sh','-c','rm -rf src'],{})\"",
+                "python -c \"import json; print(json._default_decoder)\"", "python -c \"import json; json.decoder.sys.exit(0)\"",
+                "python -c \"import os; print(os.path.posixpath)\"", "python -c \"import json; print(json.modules_x)\"", "python -c \"import json; json.x_spawnp('sh')\"",
+                # 보완(검사 C 🟡②): 위험 꼴마다 1건
+                "python -c \"import os; os.execv('/bin/sh',['sh'])\"", "python -c \"import os; os.posix_spawn('/bin/sh',['sh'],{})\"",
+                "python -c \"import importlib; importlib.import_module('os')\"", "node -e \"import('child_process').then(m=>m.execSync('ls'))\"",
+                "node -e \"process.dlopen(module,'x.node')\"", "python -c \"__import__('os').getcwd()\""]
     form_bad = ["python scripts/x.py", "node -r x -e \"console.log(1)\"", "NODE_OPTIONS=--require=x node -e \"console.log(1)\"",
                 "python -c \"print(1)\" ; python -c \"print(2)\"", "python -X dev -c \"print(1)\"", "python -I -c \"print(1)\"",
+                "node --import x -e \"console.log(1)\"", "NODE_OPTIONS=--import=x node -e \"console.log(1)\"",
                 "python - <<EOF\nprint('$(rm -rf src)')\nEOF", "python -c \"print('$(rm -rf src)')\"", "python - <<'EOF'\nprint(1)\nEOF\nrm -rf src",
                 "python - <<'EOF'\nprint(1)\nEOF\nnpm test\nEOF", "cd docs/refactor && python -c \"print(1)\""]
     proj = make_project(phase="EXECUTE", allow=(".turn",))
@@ -5865,13 +5915,13 @@ def check_doc_edit_042(res):
         rmtree_rw(proj)
 
 
-def _pause_proj_042(until, n=2, log_until=None, extra_log="", seal=True, go=False, last_resume=False):
+def _pause_proj_042(until, n=2, log_until=None, extra_log="", seal=True, go=False, last_resume=False, tail=""):
     """잠깐 멈춤 시험 재료: EXECUTE 프로젝트 + .allow-pause 1줄 + 승인 기록의 잠깐 멈춤 줄(봉인은 lib rl_log_seal 로)"""
     proj = make_project(phase="EXECUTE", allow=(".turn",) if go else ())
     head = subprocess.run(["git", "-C", str(proj), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     rd = proj / "docs/refactor"
     with open(rd / ".allow-pause", "w", encoding="utf-8", newline="") as fh:
-        fh.write(f"{until} {n} {head}\n")
+        fh.write(f"{until} {n} {head}\n{tail}")
     lu = until if log_until is None else log_until
     log = (f"2026-10-06 09:00 KST | 잠깐 멈춤 | - | - | until={lu} {n}시간 head={head[:7]} | 사용자가 /refactor:approve 로 실행\n")
     if last_resume:
@@ -5895,7 +5945,8 @@ def check_pause_042(res):
     edit = lambda p: ("Edit", {"file_path": p, "old_string": "1", "new_string": "2"})
     open_rows = [bash("git push origin x"), bash("git stash"), bash("git switch other"), bash("vercel --prod"), bash("prettier --write ."),
                  bash("echo x > tests/baseline/x.test.ts"), bash("echo x > supabase/migrations/x.sql"),
-                 bash("git push -u origin feat/x"), bash("supabase db push"), bash("gh pr merge 5 --squash"), bash("npx vitest run -u"),
+                 bash("git push -u origin feat/x"), bash("supabase db push"), bash("npx vitest run -u"), bash("railway up"), bash("gh pr create --title x --body y"),
+                 bash("gh release create v2"), bash("gh api -X PUT repos/o/r/contents/a.txt -f message=x -f content=eA=="),
                  edit("tests/baseline/money.test.ts"), ("Edit", {"file_path": "supabase/migrations/0001_init.sql", "old_string": "x", "new_string": "y"})]
     keep_rows = [bash("bash /x/hooks/run.sh refactor-approve \"$proj\" --from-hook <<<'P1-1 승인'"), bash("bash /x/scripts/refactor-approve.sh /p"),
                  bash("claude -p '/refactor:approve P1-1'"), bash("python -c \"open('docs/refactor/APPROVALS.log','a').write('x')\""),
@@ -5903,7 +5954,19 @@ def check_pause_042(res):
                  ("Write", {"file_path": "docs/refactor/.allow-pause", "content": "9999999999 12 x"}),
                  ("Write", {"file_path": ".claude/settings.local.json", "content": "{}"}), bash("cat .env"), ("Read", {"file_path": ".env"}),
                  bash("git push --force origin x"), bash("git remote set-url origin https://example.com/x.git"),
-                 bash("gh api -X PATCH repos/o/r -f default_branch=x"), bash("gh alias set pm 'pr merge'"), bash("rm -rf docs/refactor")]
+                 bash("gh api -X PATCH repos/o/r -f default_branch=x"), bash("gh alias set pm 'pr merge'"), bash("rm -rf docs/refactor"),
+                 # 보완(사장님 결정 S7-3): 멈춤 중에도 PR 합치기·원격 가지 참조 바꾸기
+                 bash("gh pr merge 5"), bash("gh pr merge 5 --squash"), bash("gh api -X PUT repos/o/r/pulls/5/merge"),
+                 bash("gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc"), bash("gh api -X DELETE repos/o/r/git/refs/heads/x"),
+                 bash("gh api graphql -f query='mutation{updateRef(input:{refId:\"x\",oid:\"y\",force:true}){clientMutationId}}'"),
+                 # 보완(사장님 결정 S7-4): 멈춤 중에도 되돌릴 수 없는 지우기(검사 A 가 "통과"로 적은 10꼴 + 릴리스 REST DELETE · "막힘" 7꼴)
+                 bash("npm run db:drop"), bash("npm run db:reset"), bash("docker compose down -v"), bash("heroku pg:reset DATABASE_URL"),
+                 bash("heroku apps:destroy myapp"), bash("netlify sites:delete abc"), bash("kubectl delete namespace prod"),
+                 bash("wrangler pages deployment delete abc"), bash("gh release delete v1"),
+                 bash("gh api graphql -f query='mutation{deleteRef(input:{refId:\"r\"}){clientMutationId}}'"), bash("git push --prune origin"),
+                 bash("gh api -X DELETE repos/o/r/releases/12"),
+                 bash("supabase db reset"), bash("prisma migrate reset"), bash("rails db:drop"), bash("terraform destroy"), bash("drizzle-kit drop"),
+                 bash("git push --delete origin x")]
     proj = _pause_proj_042(fut)
     try:
         _cases_042(res, proj, "F5 멈춤 중 풀리는 규칙 → 통과", [(OK, c) for c in open_rows])
@@ -5917,7 +5980,9 @@ def check_pause_042(res):
                       ("봉인 없음", dict(until=fut, seal=False)),
                       ("마지막 줄이 다시 시작", dict(until=fut, last_resume=True)),
                       ("go 차례", dict(until=fut, go=True)),
-                      ("N 이 13(꼴 밖)", dict(until=fut, n=13))]:
+                      ("N 이 13(꼴 밖)", dict(until=fut, n=13)),
+                      ("파일이 두 줄(lib rl_pause_state 와 같게)", dict(until=fut, tail="x\n")),
+                      ("파일 둘째 줄이 빈 줄", dict(until=fut, tail="\n"))]:
         proj = _pause_proj_042(**kw)
         try:
             _cases_042(res, proj, "F5 안 쉼: " + label, [(B, c) for c in closed])
@@ -5932,6 +5997,17 @@ def check_msgs_042(res):
         need = "/refactor:approve 잠깐 멈춤 1시간` 을 부탁하세요 — 새 대화를 열어도 이 폴더는 막힙니다"
         _cases_042(res, proj, "안내 잠깐 멈춤", [(B, ("Edit", {"file_path": "src/app.ts", "old_string": "export {}", "new_string": "x"})),
                                               (B, bash("touch src/new.ts")), (B, bash("git commit -m x"))], need=need)
+    finally:
+        rmtree_rw(proj)
+    # 보완(검사 C 🟡): 멈춤으로 풀리는 일곱 규칙의 차단 문구 둘째 줄에도(리팩토링 중 · go 차례 아님)
+    proj = make_project(phase="EXECUTE")
+    try:
+        need = "평소 작업이면 사용자에게 `/refactor:approve 잠깐 멈춤 1시간` 을 부탁하세요(새 대화를 열어도 이 폴더는 막힙니다)."
+        _cases_042(res, proj, "안내 잠깐 멈춤(일곱 규칙)", [(B, bash("git push origin x")), (B, bash("git stash")), (B, bash("git switch other")),
+                                                       (B, bash("vercel --prod")), (B, bash("supabase db push")), (B, bash("prettier --write .")),
+                                                       (B, bash("echo x > tests/baseline/x.test.ts")), (B, bash("echo x > supabase/migrations/x.sql")),
+                                                       (B, ("Edit", {"file_path": "tests/baseline/money.test.ts", "old_string": "1", "new_string": "2"}))],
+                   need=need)
     finally:
         rmtree_rw(proj)
 
