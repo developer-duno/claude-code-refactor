@@ -75,6 +75,18 @@ unesc_line() {
     return 0
   }
   function cmdw(s) { sub(/^[ \t({]*(sudo[ \t]+)?/, "", s); sub(/[ \t].*$/, "", s); gsub(/["\047]/, "", s); sub(/^.*[\/\002]/, "", s); return tolower(s) }
+  function gitview(s,   w) {   # git 조각 s 의 하위 명령(앞 옵션은 -C <폴더>·--no-pager 만 건너뜀, -c 등 다른 옵션이면 0)이 add·diff·status·log·show·commit 이면 1
+    if (s ~ /(^|[ \t])["\047]?--(ext-diff|textconv|output|exec)([ \t="\047]|$)/) return 0   # 바깥 프로그램을 돌리거나 파일로 쓰는 옵션은 보기 아님
+    sub(/^[ \t({]*(sudo[ \t]+)?[^ \t]+/, "", s)
+    while (1) {
+      sub(/^[ \t]+/, "", s)
+      if (s ~ /^-C[ \t]+[^ \t]/) { sub(/^-C[ \t]+[^ \t]+/, "", s); continue }
+      if (s ~ /^--no-pager([ \t]|$)/) { sub(/^--no-pager/, "", s); continue }
+      break
+    }
+    w = s; sub(/[ \t].*$/, "", w)
+    return (w ~ /^(add|diff|status|log|show|commit)$/)
+  }
   function mdrun(s, t,   q, n, P, j, pc, k, W, i2) {   # 줄 s 에서 문서 t 가 나오는 조각 중 하나라도 "보기 전용"이 아니면 1(= 실행될 수 있음)
     if (!index(s, t)) return 0
     q = s; gsub(/&&|\|\||;/, "\005", q); n = split(q, P, "\005")
@@ -88,7 +100,8 @@ unesc_line() {
       if (pc ~ />/) return 1
       if (tolower(pc) ~ /(^|[ \t|])(eval|xargs|cp|mv|ln|install|source|tee|\.)([ \t]|$)/) return 1
       k = split(pc, W, "|")
-      if (cmdw(W[1]) !~ /^(wc|tail|head|cat|ls|grep|stat|du)$/) return 1
+      if (cmdw(W[1]) == "git") { if (!gitview(W[1])) return 1 }   # 0.4.7 F6 — 잔치 신고: git add·diff 로 그 문서를 다시 부르는 것도 보기
+      else if (cmdw(W[1]) !~ /^(wc|tail|head|cat|ls|grep|stat|du)$/) return 1
       for (i2 = 2; i2 <= k; i2++) if (cmdw(W[i2]) ~ /^(bash|sh|zsh|dash|ksh|fish|python[0-9.]*|py|pypy3?|node|nodejs|ruby|perl|php|deno|bun|tsx|ts-node|pwsh|powershell|source|\.|eval|exec|xargs|sudo|env|tee|parallel)$/) return 1
     }
     return 0

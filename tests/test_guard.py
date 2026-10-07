@@ -882,6 +882,7 @@ def main():
     check_heroku_047(res)
     check_approvals_guard_047(res)
     check_config_name_only_047(res)
+    check_heredoc_md_git_047(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -6541,6 +6542,48 @@ def check_config_name_only_047(res):
            "git config --get-regexp 'remote\\..*\\.url' 'x --name-only y'"]
     _rows_047(res, "F4 config --name-only", [(ph, OK, c) for ph in (None, "EXECUTE") for c in ok]
               + [(ph, B, c) for ph in (None, "EXECUTE") for c in bad])
+
+
+def check_heredoc_md_git_047(res):
+    """0.4.7 F6(사용자 신고): 문서(.md)를 따옴표 구분자 heredoc 으로 쓴 뒤 git add·diff·status·log·show·commit 으로 그 문서를 다시 불러도
+    본문(백틱 글자)은 글이다(go 턴 통과). git 앞 옵션은 -C <폴더>·--no-pager 만 건너뛴다. 실행으로 넘기는 꼴(bash x.md · | bash ·
+    > 파일 · -c 옵션 · difftool · && source)과 따옴표 없는 <<EOF(백틱이 진짜 실행됨)는 그대로 막힌다"""
+    doc = "docs/refactor/EXECUTION_LOG.md"
+    head = "cat >> %s <<'EOF'\n" % doc
+    # 신고 원문에서 백틱 든 줄 2개 + 뒤 git add 줄을 그대로 복사(줄이지 않음)
+    report = (head + "\n## P2-57 카카오 봇: 대화 기록 읽기가 왜 0.5초를 넘는지 재는 기록 남기기 — 2026-10-08 (B15 2/2 마지막 · 자동 모드)\n"
+              "- 검증: 새 시험 고치기 전 3 빨강·1 초록 → 후 초록 · `lib/bot-kakao-route.test.ts` 포함 56/56 · **묶음 끝 전체 `npm test` 130파일 2572/2572**"
+              "(검사관 반영 시험 1 더해 지금은 2573) · tsc 0 · lint 오류 0(경고 4 기존) · **변이** `>=` → `<` → 새 시험 2 빨강 → 원복. 빌드는 안 돌림(PR CI 가 함).\n"
+              "- 되돌리는 법: 커밋은 `git log --grep \"^refactor: P2-57 \"` 로 찾는다. 이 묶음의 마지막 단계라 `git revert --no-edit <해시>`"
+              "(기록도 그 전으로 — 다시 안 할 거면 `/refactor:approve 보류 P2-57`).\n"
+              "EOF\n"
+              "git add -- lib/bot-store.ts lib/bot-store.test.ts docs/refactor/REFACTOR_PLAN.md docs/refactor/STATE.md docs/refactor/EXECUTION_LOG.md"
+              " && git diff --cached --stat")
+    bodies = ["- `vitest` 로 봄", "- `lib/x.test.ts` 새 파일"]
+    ok_tails = ["git add -- %s" % doc, "git diff -- %s" % doc, "git status --short %s" % doc, "git log --oneline -- %s" % doc,
+                "git show HEAD:%s" % doc, "git commit --only -m x -- %s" % doc, "git -C ./ add %s" % doc, "git --no-pager diff %s" % doc,
+                "git commit -o -m x -- %s" % doc]
+    bad_tails = ["bash %s" % doc, "git show HEAD:%s | bash" % doc, "git diff %s > x.sh" % doc, "git -c core.pager=sh diff %s" % doc,
+                 "git difftool %s" % doc, "git add %s && source %s" % (doc, doc),
+                 # 메인 추가(자동 보안 검사): 바깥 프로그램을 돌리거나 파일로 쓰는 옵션
+                 "git diff --ext-diff %s" % doc, "git diff --textconv %s" % doc, "git diff --output=x.sh %s" % doc,
+                 "git log --output x %s" % doc,
+                 "git diff $(sh %s)" % doc, "git diff `sh %s`" % doc]
+    rows = [(OK, report, "신고 원문")]
+    for b in bodies:
+        rows += [(OK, head + b + "\nEOF\n" + t, "따옴표 EOF + " + t) for t in ok_tails]
+        rows += [(B, head + b + "\nEOF\n" + t, "따옴표 EOF + " + t) for t in bad_tails]
+        rows.append((B, "cat >> %s <<EOF\n%s\nEOF\ngit add %s" % (doc, b, doc), "따옴표 없는 EOF + git add"))
+    rows.append((B, "npm test", "대조군 npm test 단독"))
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        for want, cmd, what in rows:
+            code, err = run(proj, *bash(cmd))
+            res["total"] += 1
+            if code != want:
+                res["fails"].append(("0.4.7 F6 문서 heredoc 뒤 git 보기(%s)" % what, want, code, "Bash", cmd[:120], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
 
 
 if __name__ == "__main__":

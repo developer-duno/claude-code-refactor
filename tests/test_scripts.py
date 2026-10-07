@@ -7234,7 +7234,7 @@ def check_docs_046(check):
 
 def check_docs_047(check):
     """0.4.7 문서: 판 번호 네 곳(0.4.7) · README '0.4.7에서 달라진 점' 줄(0.4.6 줄 위 · 0.4.6 줄 남김 · 승인 기록 읽기 문구 없음 — F3 은 이번 판에서 뺌) ·
-    §13 0.4.7 변경 이력 절(0.4.6 절 위 · 글머리 셋 · 사용자 이름 없음)."""
+    §13 0.4.7 변경 이력 절(0.4.6 절 위 · 글머리 넷 · 사용자 이름 없음) · F6 문구."""
     rd = (ROOT / "README.md").read_text(encoding="utf-8")
     pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
     mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
@@ -7250,10 +7250,13 @@ def check_docs_047(check):
           and "승인 기록" not in line, line)
     c, e = rd.find("### 0.4.7 (2026-10-08)"), rd.find("### 0.4.6 (2026-10-07)")
     sec = rd[c:e] if 0 <= c < e else ""
-    check("0.4.7 문구 README §13 0.4.7 변경 이력 절(0.4.6 절 위) · 글머리 셋 · 사용자 이름 없음",
-          sec.count("\n- **") == 3 and "**전체 주소로 부르는 gh api 와 `-X=` 철자도 짧은 경로와 같게**" in sec
+    check("0.4.7 문구 README §13 0.4.7 변경 이력 절(0.4.6 절 위) · 글머리 넷 · 사용자 이름 없음",
+          sec.count("\n- **") == 4 and "**전체 주소로 부르는 gh api 와 `-X=` 철자도 짧은 경로와 같게**" in sec
           and "**heroku 앱 넘기기·이름 바꾸기 = 배포 명령**" in sec and "**`git config --name-only` 는 통과**" in sec
           and "사용자 신고" in sec and "잔치" not in sec and "flowershop" not in sec and "승인 기록" not in sec, sec)
+    check("0.4.7 F6 문구 README 달라진 점 줄 + §13 글머리(문서 heredoc 뒤 git add·diff 헛막힘)",
+          "문서를 heredoc 으로 쓴 뒤 `git add`·`git diff` 로 그 문서를 다시 부를 때 본문 글자를 실행으로 읽던 헛막힘도 고쳤습니다" in line
+          and "**문서 heredoc 뒤 git add·diff 로 그 문서를 불러도 본문은 글**" in sec, sec)
 
 
 # 가짜 playwright(0.4.6 시험용): goto 순간부터 지난 시간에 따라 globalThis.document 를 바꾸고, evaluate·waitForFunction 은 그 document 로 fn(arg) 를 부른다.
