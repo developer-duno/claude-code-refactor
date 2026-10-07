@@ -1002,6 +1002,7 @@ EOF
 
     acted=""; lines=""; aw_want=""
     ra_ids=""; [ "$mode" = "approve" ] && [ -f "$af" ] && ra_ids=$(rl_allow_ids "$dir")   # 0.4.4 ①(b) 🔒 안내용(읽기만)
+    ra_pend=""   # 0.4.5: 빈 허용 파일일 때 다시 승인한 🛠 카드("ID=순번") — 이번 승인으로 좁혀져 닫히면 🔒 안내
     for id in $targets; do
       found=0
       while IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st; do
@@ -1028,6 +1029,7 @@ EOF
                   *) ra_show=0
                      if [ ! -f "$af" ]; then ra_show=1
                      elif [ -n "$ra_ids" ]; then case " $ra_ids " in *" $id "*) ;; *) ra_show=1 ;; esac
+                     else ra_pend="$ra_pend $id=$n_"   # 0.4.5: 빈 허용 파일(전부 허용) — 이번 승인으로 좁혀져 닫히면 아래에서 🔒
                      fi
                      [ "$ra_show" = 1 ] && say "   🔒 기준선 허용이 닫혀 있습니다(고칠 기준선: $BLV) — 이 단계가 기준선을 고쳐야 하면 /refactor:approve 허용 $id" ;;
                 esac ;;
@@ -1116,6 +1118,14 @@ EOF
         say "⚠️ 기준선 허용 파일을 쓰지 못했습니다 — 승인은 됐습니다. 실행 전에 /refactor:approve 허용${aw_want}"
       else
         allow_notes
+        # 0.4.5: 빈 허용 파일(전부 허용)이 이번 승인으로 좁혀져 이미 승인된 단계의 허용이 닫혔으면 그 단계마다 여는 명령 한 줄(허용 파일·기록은 그대로)
+        if [ "$AW_NARROWED" = 1 ] && [ "$AW_WROTE" = 1 ]; then
+          for x in $ra_pend; do
+            case " $AW_NEW " in *" ${x%%=*} "*) continue ;; esac
+            bl_of "${x#*=}"
+            say "   🔒 [${x%%=*}] 기준선 허용이 이번에 닫혔습니다(고칠 기준선: $BLV) — 이 단계가 기준선을 고쳐야 하면 /refactor:approve 허용 ${x%%=*}"
+          done
+        fi
       fi
     fi
     # 0.3.4 보류: 허용 파일에 그 ID 가 있으면 뺀다(남는 ID 가 없으면 파일을 지운다 — 닫는 쪽이라 기록에는 줄을 남기지 않는다)
