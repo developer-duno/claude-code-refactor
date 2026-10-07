@@ -883,6 +883,7 @@ def main():
     check_approvals_guard_047(res)
     check_config_name_only_047(res)
     check_heredoc_md_git_047(res)
+    check_fix_047(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -6542,6 +6543,53 @@ def check_config_name_only_047(res):
            "git config --get-regexp 'remote\\..*\\.url' 'x --name-only y'"]
     _rows_047(res, "F4 config --name-only", [(ph, OK, c) for ph in (None, "EXECUTE") for c in ok]
               + [(ph, B, c) for ph in (None, "EXECUTE") for c in bad])
+
+
+def check_fix_047(res):
+    """0.4.7 보완(검사 A 🔴2·보안 검사): ① F4 예외는 조각의 명령 자리가 git config(사이 -C <폴더>·--no-pager 만)일 때만 —
+    # 주석·단독 -- 뒤·다른 git 명령(remote get-url·-v·show)·env·VAR=·--no-name-only 는 막힘 ② F6 git 보기 예외는 명령 전체(heredoc 본문 제외)에
+    git 설정·외부 diff·pager·git 폴더 바꾸기 글자가 없을 때만 ③ 줄인 긴 옵션(--outp·--ext·--textc·--exe)·끼운 따옴표·역슬래시도 보기 아님"""
+    f4_ok = ["git config --name-only -l", "  git config --name-only --get-regexp 'remote\\..*\\.url'",
+             "git -C ./x config --name-only --get-regexp 'remote\\..*\\.url'",
+             "git --no-pager config --name-only --get-regexp 'remote\\..*\\.url'",
+             "git -C x --no-pager config --name-only --get-regexp 'remote\\..*\\.url'",
+             "git config --name-only --get-regexp 'remote\\..*\\.url' | grep remote"]
+    f4_bad = ["git remote get-url origin # git config --name-only -l", "git remote -v # git config --name-only -l",
+              "git remote show -n origin -- git config --name-only -l",
+              "git config --name-only --no-name-only --get-regexp 'remote\\..*\\.url'",
+              "git config --name-only --get-regexp 'remote\\..*\\.url' # x", "git config --name-only --get-regexp 'remote\\..*\\.url' -- x",
+              "git config --get-regexp 'remote\\..*\\.url' # --name-only", "git config --get-regexp 'remote\\..*\\.url' -- --name-only",
+              "env git config --name-only --get-regexp 'remote\\..*\\.url'",
+              "FOO=1 git config --name-only --get-regexp 'remote\\..*\\.url'"]
+    _rows_047(res, "보완 F4 명령 자리·주석·-- ", [(ph, OK, c) for ph in (None, "EXECUTE") for c in f4_ok]
+              + [(ph, B, c) for ph in (None, "EXECUTE") for c in f4_bad])
+    doc = "docs/refactor/EXECUTION_LOG.md"
+    head = "cat >> %s <<'EOF'\ngit push --force origin main\nEOF\n" % doc
+    bad = ["git config diff.external sh && git diff " + doc, "export GIT_EXTERNAL_DIFF=sh; git diff " + doc,
+           "GIT_PAGER=sh git log -p " + doc, "git --git-dir=.git add " + doc, "git -C x config diff.external sh\ngit diff " + doc,
+           "git config core.pager sh\ngit log " + doc, "PAGER=sh git log " + doc, "git config filter.a.clean sh && git add " + doc,
+           "echo '* diff=x' > .gitattributes && git diff " + doc, "git config diff.x.textconv sh && git diff " + doc,
+           "git config core.fsmonitor sh && git status " + doc, "export GIT_CONFIG_GLOBAL=x; git diff " + doc,
+           "GIT_DIR=.git git add " + doc, "git --work-tree=. add " + doc, "GIT_WORK_TREE=. git add " + doc,
+           "git diff --outp=x.sh " + doc, "git diff --ext " + doc, "git diff --textc " + doc, "git diff --out\"put\"=x.sh " + doc,
+           "git diff --o\\utput=x.sh " + doc, "git diff --exe " + doc]
+    ok = ["git add -- " + doc, "git --no-pager diff " + doc, "git diff --stat " + doc, "git diff --cached " + doc,
+          "git status --short " + doc, "git log --oneline " + doc, "git commit -o -m x -- " + doc,
+          "git commit --only -m x -- " + doc, "git diff --exit-code " + doc]
+    rows = [(B, head + t, t) for t in bad] + [(OK, head + t, t) for t in ok]
+    # 본문(heredoc 안)의 git config·pager 글자는 판정에 쓰지 않는다(글)
+    #   (본문을 보면 막히는 줄 git push --force · `vitest` 를 같이 넣어 둔다 — 본문 글자를 GVX 에 넣으면 빨강)
+    rows.append((OK, "cat >> %s <<'EOF'\ngit push --force origin main\n- `vitest` 로 봄 · `git config diff.external` 은 위험\n"
+                     "- GIT_PAGER 도 · --git-dir 도\nEOF\ngit add %s" % (doc, doc), "본문에 git config"))
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        for want, cmd, what in rows:
+            code, err = run(proj, *bash(cmd))
+            res["total"] += 1
+            if code != want:
+                res["fails"].append(("0.4.7 보완 F6 git 보기 좁히기(%s)" % what, want, code, "Bash", cmd[:120], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
 
 
 def check_heredoc_md_git_047(res):

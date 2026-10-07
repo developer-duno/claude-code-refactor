@@ -75,8 +75,11 @@ unesc_line() {
     return 0
   }
   function cmdw(s) { sub(/^[ \t({]*(sudo[ \t]+)?/, "", s); sub(/[ \t].*$/, "", s); gsub(/["\047]/, "", s); sub(/^.*[\/\002]/, "", s); return tolower(s) }
-  function gitview(s,   w) {   # git 조각 s 의 하위 명령(앞 옵션은 -C <폴더>·--no-pager 만 건너뜀, -c 등 다른 옵션이면 0)이 add·diff·status·log·show·commit 이면 1
-    if (s ~ /(^|[ \t])["\047]?--(ext-diff|textconv|output|exec)([ \t="\047]|$)/) return 0   # 바깥 프로그램을 돌리거나 파일로 쓰는 옵션은 보기 아님
+  function gitview(s,   w, nw, WV, iv) {   # git 조각 s 의 하위 명령(앞 옵션은 -C <폴더>·--no-pager 만 건너뜀, -c 등 다른 옵션이면 0)이 add·diff·status·log·show·commit 이면 1
+    # 바깥 프로그램을 돌리거나 파일로 쓰는 옵션(--ext-diff·--textconv·--output·--exec 와 git 이 받는 줄임 꼴)은 보기 아님 —
+    #   낱말에서 따옴표·역슬래시를 지운 뒤 --ou·--ext·--te·--exe 로 시작하면(--out"put"=x · --o\utput · --outp · --textc)
+    nw = split(s, WV, /[ \t]+/)
+    for (iv = 1; iv <= nw; iv++) { w = WV[iv]; gsub(/["\047\002\\]/, "", w); if (w ~ /^--(ou|ext|te|exe)/) return 0 }
     sub(/^[ \t({]*(sudo[ \t]+)?[^ \t]+/, "", s)
     while (1) {
       sub(/^[ \t]+/, "", s)
@@ -100,7 +103,7 @@ unesc_line() {
       if (pc ~ />/) return 1
       if (tolower(pc) ~ /(^|[ \t|])(eval|xargs|cp|mv|ln|install|source|tee|\.)([ \t]|$)/) return 1
       k = split(pc, W, "|")
-      if (cmdw(W[1]) == "git") { if (!gitview(W[1])) return 1 }   # 0.4.7 F6 — 잔치 신고: git add·diff 로 그 문서를 다시 부르는 것도 보기
+      if (cmdw(W[1]) == "git") { if (GVX || !gitview(W[1])) return 1 }   # 0.4.7 F6 — 잔치 신고: git add·diff 로 그 문서를 다시 부르는 것도 보기(GVX = 명령에 git 설정·외부 diff·pager 글자)
       else if (cmdw(W[1]) !~ /^(wc|tail|head|cat|ls|grep|stat|du)$/) return 1
       for (i2 = 2; i2 <= k; i2++) if (cmdw(W[i2]) ~ /^(bash|sh|zsh|dash|ksh|fish|python[0-9.]*|py|pypy3?|node|nodejs|ruby|perl|php|deno|bun|tsx|ts-node|pwsh|powershell|source|\.|eval|exec|xargs|sudo|env|tee|parallel)$/) return 1
     }
@@ -170,9 +173,11 @@ unesc_line() {
   } {
     s = $0; gsub(/\\\\\\r\\n|\\\\\\n/, "", s); gsub(/\\\\/, "\002", s); gsub(/\\"/, "\"", s); gsub(/\\\//, "/", s); gsub(/\\r/, "", s); gsub(/\\t/, " ", s)
     n = split(s, L, /\\n/); nh = 0; delim = ""; QS = 0; QD = 0
+    NB = ""
     for (i = 1; i <= n; i++) {
       line = L[i]
       if (delim != "") { t = line; sub(/^[ \t]+/, "", t); if (t == delim) { HE[nh] = i; delim = "" }; continue }
+      NB = NB "\n" line   # heredoc 본문 밖의 줄(아래 GVX 판정용)
       if (!hdfind(line)) continue   # 따옴표·주석 밖의 << 만(cat "x <<'EOF'" · cat > a.md # <<'EOF' 는 히어독이 아님)
       pre = substr(line, 1, HDP - 1); post = substr(line, HDP + HDL); tok = substr(line, HDP, HDL)
       nh++; HS[nh] = i; HE[nh] = n + 1
@@ -187,6 +192,12 @@ unesc_line() {
       }
       HT[nh] = tg; HP[nh] = post
     }
+    # 0.4.7 W3: 명령 전체(heredoc 본문 제외)에 git 이 다른 프로그램을 돌리게 하는 설정·환경변수 글자가 있으면 git 보기 예외를 쓰지 않는다(GVX)
+    #   — git config(사이 옵션 포함)·외부 diff·textconv·filter·fsmonitor·gitattributes·pager(--no-pager 는 제외)·GIT_CONFIG*·alias·git 폴더 바꾸기
+    t = tolower(NB); gsub(/["\047\002\\]/, "", t); gsub(/--no-pager/, " ", t); GVX = 0
+    if (t ~ /(^|[^a-z0-9_.-])git([ \t]+-[cC][ \t]+[^ \t;&|]+|[ \t]+-[^ \t;&|]*)*[ \t]+config([ \t;&|]|$)/) GVX = 1
+    nx = split("diff.external git_external_diff textconv filter. fsmonitor gitattributes pager git_config alias. git_dir= --git-dir --work-tree git_work_tree", GW, " ")
+    for (j = 1; j <= nx; j++) if (index(t, GW[j])) GVX = 1
     for (h = 1; h <= nh; h++) {
       DROP[h] = 0
       if (!HC[h]) continue
@@ -4296,7 +4307,7 @@ ps_wide_search() {
 #   밖으로 나가는 건 개수뿐이라 통과, 안에서 원문이 나오면(echo "$(git remote -v)" · x=$(git remote -v)) 차단. 원격 주소 조회였던 자리는 _CS_ 로,
 #   그 밖의 치환은 괄호만 벗겨 안쪽 낱말을 바깥 판정에 남긴다
 remote_url_out() {
-  local s=$1 m names nm ok c pl k i p nx inner pq pre qc qr
+  local s=$1 m names nm ok c pl k i p nx inner pq pre qc qr cw cf
   local re_ru='git[[:space:]]+(remote([[:space:]]+(-v|--verbose|get-url|show))|config[^;&|]*(--get-regexp|remote[.][^[:space:]]*[.]url))'
   local re_gr='--get-regexp[[:space:]]+("\^\(([[:alnum:]|-]+)\)\\\."|'"'"'\^\(([[:alnum:]|-]+)\)\\\.'"'"')'
   local re_cnt='^[[:space:]]*(grep([[:space:]]+-[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[cq][a-zA-Z]*|--count|--quiet|--silent)([[:space:]]|$)|wc[[:space:]]+-[lc]+([[:space:]]|$))'
@@ -4340,7 +4351,24 @@ remote_url_out() {
           qc=${pq:${#pre}:1}; qr=${pq:$((${#pre} + 1))}
           case "$qr" in *"$qc"*) pq="$pre ${qr#*"$qc"}" ;; *) pq=$pre; break ;; esac
         done
-        if has "$pq" "git[[:space:]]+config[[:space:]]" && has "$pq" "(^|[[:space:]])--name-only([[:space:]]|$)" \
+        # W3: 조각의 명령 자리(앞 공백만 건너뜀 — env·VAR= 없이)가 git config 일 때만(사이 옵션은 -C <폴더>·--no-pager 만).
+        #   # (주석 — 뒤 글자는 인자가 아님)·단독 -- (뒤는 인자)·--no-name-only(앞 --name-only 를 무름)가 있으면 예외 없음
+        cw=${pq#"${pq%%[![:space:]]*}"}; cf=0
+        case "$cw" in git[[:space:]]*)
+          cw=${cw#git}
+          while :; do
+            cw=${cw#"${cw%%[![:space:]]*}"}
+            case "$cw" in
+              -C[[:space:]]*) cw=${cw#-C}; cw=${cw#"${cw%%[![:space:]]*}"}; cw=${cw#"${cw%%[[:space:]]*}"} ;;
+              --no-pager[[:space:]]*) cw=${cw#--no-pager} ;;
+              *) break ;;
+            esac
+          done
+          case "$cw" in config[[:space:]]*) cf=1 ;; esac ;;
+        esac
+        case "$pq" in *'#'*|*--no-name-only*) cf=0 ;; esac
+        has "$pq" "(^|[[:space:]])--([[:space:]]|$)" && cf=0
+        if [ "$cf" = 1 ] && has "$pq" "(^|[[:space:]])--name-only([[:space:]]|$)" \
           && has "$pq" "(^|[[:space:]])(--get-regexp|--list|-l)([[:space:]]|$)"; then continue; fi ;;
       esac
       # (a) git 으로 시작하는 조각의 출력을 개수만 세는 조각 하나로 받고 끝
