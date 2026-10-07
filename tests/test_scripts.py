@@ -1064,6 +1064,9 @@ def main():
     check_docs_fix_042(check)
     check_deploy_env_042(check)
     check_docs_043(check)
+    check_session_allow_notice_044(check)
+    check_reapprove_closed_notice_044(check)
+    check_docs_044(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -7148,15 +7151,9 @@ def check_pause_fix_042(check):
 
 
 def check_docs_043(check):
-    """0.4.3 문서: 판 번호 네 곳(0.4.3) · §6-1 되돌리기·복사 예시 추가 · §6-4 33 기존 문장(중복 없음) · §13 0.4.3 변경 이력 절(보강 글머리·알려진 빈틈)."""
+    """0.4.3 문서: §6-1 되돌리기·복사 예시 추가 · §6-4 33 기존 문장(중복 없음) · §13 0.4.3 변경 이력 절(보강 글머리·알려진 빈틈).
+    (판 번호 네 곳 단언은 0.4.4 에서 check_docs_044 로 옮김)"""
     rd = (ROOT / "README.md").read_text(encoding="utf-8")
-    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
-    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
-    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
-    check("0.4.3 판 번호: plugin.json", '"version": "0.4.3"' in pj, "")
-    check("0.4.3 판 번호: marketplace.json", '"version": "0.4.3"' in mk, "")
-    check("0.4.3 판 번호: bug.yml placeholder", 'placeholder: "0.4.3"' in bg, "")
-    check("0.4.3 판 번호: README 배지", "version-0.4.3-blue" in rd, "")
     check("0.4.3 문구 README 달라진 점 줄 존재 + 이웃 꼴 구절(X-4)",
           "> **0.4.3에서 달라진 점**:" in rd
           and "되돌리기·복사 판정의 이웃 꼴(경로 하나·와일드카드·pathspec-from-file·python -m zipfile 등)도 함께 막습니다." in rd, "")
@@ -7181,6 +7178,26 @@ def check_docs_043(check):
           and "별칭 두 단계(`s2 = shutil; s2.copytree`) · distutils `copy_tree`·`Path.copy_into` · `\"doc\"'s/refactor'` 이어 붙임은 아직 막지 못합니다." in rd, "")
     check("0.4.3 문구 README §13 인터프리터 목적지 자리 설명 글머리(Y-2)",
           "**인터프리터 복사 판정은 목적지 자리만** — 복사·옮기기 함수는 **목적지 자리**(둘째 인자·`dst=`·`path=`)만 봅니다 — 기록 폴더 밖으로 복사·변수 이름 `docs`·문자열 `.replace()` 는 통과, 지금 폴더(`'.'`·인자 없는 `extractall()`)와 `'doc*'` 같은 패턴은 막습니다." in rd, "")
+
+
+def check_docs_044(check):
+    """0.4.4 문서: 판 번호 네 곳(0.4.4) · README '0.4.4에서 달라진 점' 줄(0.4.3 줄 위 · 0.4.3 줄 남김) · §13 0.4.4 변경 이력 절(글머리 셋)."""
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
+    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
+    check("0.4.4 판 번호: plugin.json", '"version": "0.4.4"' in pj, "")
+    check("0.4.4 판 번호: marketplace.json", '"version": "0.4.4"' in mk, "")
+    check("0.4.4 판 번호: bug.yml placeholder", 'placeholder: "0.4.4"' in bg, "")
+    check("0.4.4 판 번호: README 배지", "version-0.4.4-blue" in rd, "")
+    a, b = rd.find("> **0.4.4에서 달라진 점**:"), rd.find("> **0.4.3에서 달라진 점**:")
+    check("0.4.4 문구 README 달라진 점 줄 존재(0.4.3 줄 위 · 0.4.3 줄 남김) + 세 안내",
+          0 <= a < b and all(w in rd[a:b] for w in ('"지우지 마세요"', "`/refactor:approve 허용 <ID>`", '"Edit 도구로"')), rd[a:b] if a >= 0 else "")
+    c, e = rd.find("### 0.4.4 (2026-10-07)"), rd.find("### 0.4.3 (2026-10-06)")
+    sec = rd[c:e] if 0 <= c < e else ""
+    check("0.4.4 문구 README §13 0.4.4 변경 이력 절(0.4.3 절 위) · 글머리 셋",
+          sec.count("\n- **") == 3 and "**세션 시작 안내가 기준선 허용 파일 상태를 가림**" in sec
+          and "**닫힌 허용을 다시 승인할 때 안내 한 줄**" in sec and '**인터프리터 쓰기 차단 안내에 "Edit 도구로"**' in sec, sec)
 
 
 def check_docs_fix_042(check):
@@ -7297,6 +7314,133 @@ def check_deploy_env_042(check):
             check(f"0.4.2 F6 같은 환경 결과 {title} → 0(덮음 아님)", rc == 0 and "다른 배포가 덮었습니다" not in out, out)
     finally:
         site.close()
+        for m_ in made:
+            shutil.rmtree(m_, ignore_errors=True)
+
+
+# 0.4.4 ①(a) 시작 훅의 기준선 허용 파일 안내(사용자에게 보이는 글자 그대로)
+SS_LEFT_044 = ") 중 아직 안 끝난 단계가 있습니다 — 단계가 모두 끝나면 저절로 지워지니 지우지 마세요(사용자에게 지우라고 하지 않는다)."
+SS_HEAD_044 = "[주의] 기준선 허용 파일(docs/refactor/.allow-baseline-edit)에 적힌 단계("
+SS_DONE_044 = "[안내] 기준선 허용 파일(docs/refactor/.allow-baseline-edit)의 단계가 모두 끝나 다음 입력 때 저절로 지워집니다(지우지 않아도 됩니다)."
+SS_OLD_044 = "— 그 작업이 끝났고 커밋했다면"
+
+
+def check_session_allow_notice_044(check):
+    """0.4.4 ①(a): 시작 훅의 허용 파일 안내 — 기준선 허용 파일을 rl_allow_baseline 첫 줄로 가른다.
+    OPEN·WAIT·SHUT = 아직 안 끝남(지우지 마세요) · DONE = 저절로 지워짐 · ALL·UNKNOWN·lib 없음·다른 .allow-* = 옛 문구(지우라) · .allow-pause = 없음."""
+    rd = lambda d: d / "docs/refactor"
+
+    def allow(d, text, name=".allow-baseline-edit"):
+        lf(rd(d) / name, text)
+
+    def cur(d, cs):
+        lf(rd(d) / "STATE.md", STATE.replace("updated:", f'current_step: "{cs}"\nupdated:'))
+
+    def nolib(d):
+        # 플러그인 폴더(REFACTOR_ROOT)를 모르는 채 시작 훅을 직접 부름 → lib 없음
+        e = env()
+        e.pop("REFACTOR_ROOT", None)
+        e["CLAUDE_PROJECT_DIR"] = str(d)
+        r = subprocess.run([BASH, (ROOT / "plugins/refactor/hooks/session-start.sh").as_posix()], input=b"{}",
+                           capture_output=True, env=e, timeout=90)
+        return r.stdout.decode("utf-8", "replace")
+
+    def ap11(d):
+        approve(d, "P1-1")
+
+    # (제목, 준비, 기대 상태 첫 글자, 기대: ("new", ID 글) / "done" / "old" / "none", 시작 훅 부르기)
+    cases = [
+        ("ALL(빈 파일)", lambda d: (ap11(d), allow(d, "")), "ALL", "old", None),
+        ("OPEN(current_step = P1-1)", lambda d: (ap11(d), cur(d, "P1-1 (진행 중)")), "OPEN P1-1", ("new", "P1-1"), None),
+        ("WAIT(current_step 없음)", ap11, "WAIT P1-1", ("new", "P1-1"), None),
+        ("WAIT 둘(적힌 ID 전부 표시)", lambda d: (ap11(d), allow(d, "P1-1 P1-3\n")), "WAIT P1-1", ("new", "P1-1 P1-3"), None),
+        ("SHUT(승인 안 된 카드)", lambda d: allow(d, "P1-3\n"), "SHUT P1-3", ("new", "P1-3"), None),
+        ("DONE(완료 카드)", lambda d: (ap11(d), _done033(d, "P1-1")), "DONE P1-1", "done", None),
+        ("UNKNOWN(P9-9)", lambda d: allow(d, "P9-9\n"), "UNKNOWN P9-9", "old", None),
+        ("lib 없음(WAIT 이어도 옛 문구)", ap11, "WAIT P1-1", "old", nolib),
+    ]
+    for title, prep, want_st, want, call in cases:
+        d = project(plan=PLAN_033)
+        try:
+            prep(d)
+            st = _lib033(d, 'rl_allow_baseline "$R"')[0].split("\n")[0]
+            so = call(d) if call else hook("session-start", d, {"session_id": "s1"})[0]
+            new_line = SS_HEAD_044 + want[1] + SS_LEFT_044 if isinstance(want, tuple) else None
+            ok = st.startswith(want_st)
+            ok = ok and ((new_line in so) if new_line else (SS_HEAD_044 not in so and SS_LEFT_044 not in so))
+            ok = ok and ((SS_DONE_044 in so) == (want == "done"))
+            ok = ok and ((SS_OLD_044 in so) == (want == "old"))
+            if want == "old":
+                ok = ok and "[주의] 허용 파일이 남아 있습니다: docs/refactor/.allow-baseline-edit " in so
+            check(f"0.4.4 ①(a) 시작 훅 허용 파일 안내: {title}", ok, f"상태 {st!r}\n{so}")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    # 기준선 허용 파일이 아닌 허용 파일(.allow-migration-edit) → 옛 문구 · 멈춤 파일(.allow-pause) → 허용 파일 문구 없음
+    d = project(plan=PLAN_033)
+    try:
+        allow(d, "", ".allow-migration-edit")
+        so = hook("session-start", d, {"session_id": "s1"})[0]
+        check("0.4.4 ①(a) .allow-migration-edit → 옛 문구 그대로",
+              "[주의] 허용 파일이 남아 있습니다: docs/refactor/.allow-migration-edit " in so and SS_OLD_044 in so
+              and SS_HEAD_044 not in so and SS_DONE_044 not in so, so)
+        (rd(d) / ".allow-migration-edit").unlink()
+        allow(d, "", ".allow-pause")
+        so = hook("session-start", d, {"session_id": "s1"})[0]
+        check("0.4.4 ①(a) .allow-pause → 허용 파일 문구 없음", "허용 파일" not in so and SS_OLD_044 not in so, so)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def check_reapprove_closed_notice_044(check):
+    """0.4.4 ①(b): 이미 승인된 🛠 카드를 다시 승인할 때 기준선 허용이 닫혀 있으면(허용 파일 없음 · 파일에 그 ID 없음) 다시 열지 않고 🔒 안내 한 줄.
+    허용 파일·기록·봉인은 그대로(0.3.4 v9 — 사장님 결정). 🔧 카드·경로 없는 카드·파일에 그 ID 있음·빈 파일(전부 허용) → 🔒 없음."""
+    af = lambda d: d / "docs/refactor/.allow-baseline-edit"
+    lock = lambda bl, cid: f"   🔒 기준선 허용이 닫혀 있습니다(고칠 기준선: {bl}) — 이 단계가 기준선을 고쳐야 하면 /refactor:approve 허용 {cid}"
+    L11 = lock("`tests/baseline/money.test.ts`", "P1-1")
+
+    def run(title, prep, args, want_lock, plan=PLAN_033, same=True):
+        d = project(plan=plan)
+        try:
+            prep(d)
+            snap = rdir_files(d)
+            out = approve(d, args)
+            ok = ("이미 승인됨: [" in out) and ((want_lock in out) if want_lock else ("🔒" not in out))
+            if same:
+                ok = ok and rdir_files(d) == snap   # 허용 파일·기록(줄 수)·봉인·계획서 전부 그대로
+            check(f"0.4.4 ①(b) {title}", ok, out)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    # ⓐ 승인 → 허용 파일 rm → 다시 승인: 🔒 · 파일 안 생김 · 아무것도 안 바뀜
+    run("ⓐ 승인→rm→다시 승인 → 🔒 · 파일·기록·봉인 그대로", lambda d: (approve(d, "P1-1"), af(d).unlink()), "P1-1", L11)
+    # ⓑ 허용 닫기 뒤 다시 승인(v9 와 같은 상태) → 🔒(🔓 없음)
+    run("ⓑ 허용 닫기 뒤 다시 승인 → 🔒", lambda d: (approve(d, "P1-1"), approve(d, "허용 닫기")), "P1-1", L11)
+    # ⓔ 허용 파일에 다른 ID 만 → 🔒 + 파일 바이트 그대로
+    run("ⓔ 허용 파일에 다른 ID(P1-2)만 → 🔒 · 파일 그대로", lambda d: (approve(d, "P1-1 P1-2"), lf(af(d), "P1-2\n")), "P1-1", L11)
+    # ⓓ 🔒 없음: 파일에 그 ID 있음 · 빈 파일(전부 허용) · 경로 '없음'(P1-4 🔧)·글만(P1-5 🛠) · 🔧 카드에 경로 있음
+    run("ⓓ 허용 파일에 그 ID 있음 → 🔒 없음", lambda d: approve(d, "P1-1"), "P1-1", None)
+    run("ⓓ 빈 허용 파일(전부 허용) → 🔒 없음", lambda d: (approve(d, "P1-1"), lf(af(d), "")), "P1-1", None)
+    run("ⓓ 경로 없는 카드(P1-4 없음·P1-5 글만) → 🔒 없음", lambda d: approve(d, "P1-4 P1-5"), "P1-4 P1-5", None)
+    i = PLAN_033.index("### [P1-2]")
+    plan_fix = PLAN_033[:i] + PLAN_033[i:].replace("- **종류**: 🛠 개선", "- **종류**: 🔧 리팩토링", 1)
+    run("ⓓ 🔧 카드(경로 있음) → 🔒 없음", lambda d: approve(d, "P1-2"), "P1-2", None, plan=plan_fix)
+    plan_none = PLAN_033[:i] + PLAN_033[i:].replace("- **종류**: 🛠 개선", "- **종류**: 📝 문서", 1)
+    run("ⓓ 종류 칸에 🛠·🔧 없음(경로 있음) → 🔒 없음", lambda d: approve(d, "P1-2"), "P1-2", None, plan=plan_none)
+
+    # ⓒ 묶음 'B1 자동' 다시 승인(묶음 카드는 targets 에 들어감) → 🛠 P1-1 에만 🔒 · 허용 파일 안 생김
+    made = []
+    fg = _fake035(made)
+    try:
+        d, _ = _mkauto040(made, "https://shop.example.com/")
+        out = _ap040(d, "B1 자동", path_front=[fg])
+        opened = af(d).exists()
+        af(d).unlink(missing_ok=True)
+        out = _ap040(d, "B1 자동", path_front=[fg])
+        check("0.4.4 ①(b) ⓒ 묶음 'B1 자동' 다시 승인 → P1-1 🔒 한 줄(🔧 P3-1 없음) · 허용 파일 안 생김",
+              opened and "이미 승인됨: [P1-1]" in out and "이미 승인됨: [P3-1]" in out and out.count("🔒") == 1
+              and lock("`tests/baseline/money.test.ts` `tests/baseline/golden/d.json`", "P1-1") in out and not af(d).exists(), out)
+    finally:
         for m_ in made:
             shutil.rmtree(m_, ignore_errors=True)
 

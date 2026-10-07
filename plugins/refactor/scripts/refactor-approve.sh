@@ -987,6 +987,9 @@ EOF
           case " $targets " in *" $id_ "*) set -- "$@" "$cdir/c$n_" ;; esac
         elif [ -f "$af" ] && [ "${cnt:-1}" = 1 ] && [ "$box" != none ]; then
           set -- "$@" "$cdir/c$n_"
+        elif [ "${cnt:-1}" = 1 ] && [ "$box" != none ]; then
+          # 0.4.4 ①(b): 이번에 다시 승인하는 이미 승인된 카드는 허용 파일이 없어도 경로를 읽어 둔다(닫힌 허용 안내 🔒 용 — 읽기만)
+          case " $targets " in *" $id_ "*) set -- "$@" "$cdir/c$n_" ;; esac
         fi
       done <<EOF
 $recs
@@ -998,6 +1001,7 @@ EOF
     fi
 
     acted=""; lines=""; aw_want=""
+    ra_ids=""; [ "$mode" = "approve" ] && [ -f "$af" ] && ra_ids=$(rl_allow_ids "$dir")   # 0.4.4 ①(b) 🔒 안내용(읽기만)
     for id in $targets; do
       found=0
       while IFS="$US" read -r kind_ n_ id_ t box done_ cnt k r h hv st; do
@@ -1011,7 +1015,24 @@ EOF
       if [ "$done_" = 1 ]; then say "ℹ️ 이미 완료된 단계라 바꾸지 않음: [$id] $t"; continue; fi
       if [ "$mode" = "approve" ]; then
         case "$st" in
-          approved) say "ℹ️ 이미 승인됨: [$id] $t"; continue ;;
+          approved)
+            say "ℹ️ 이미 승인됨: [$id] $t"
+            # 0.4.4 ①(b): 다시 승인은 닫힌 허용을 다시 열지 않는다(0.3.4 v9) — 🛠 카드(🔧 없음)·기준선 경로 있음·허용 파일이 없거나
+            #   파일의 ID 목록에 그 ID 가 없으면(빈 파일 = 전부 허용이면 안 띄움) 여는 명령만 한 줄 알린다. 허용 파일·기록·봉인은 안 바뀐다
+            case "$k" in
+              *🔧*) ;;
+              *🛠*)
+                bl_of "$n_"
+                case "$BLV" in
+                  ""|"?") ;;
+                  *) ra_show=0
+                     if [ ! -f "$af" ]; then ra_show=1
+                     elif [ -n "$ra_ids" ]; then case " $ra_ids " in *" $id "*) ;; *) ra_show=1 ;; esac
+                     fi
+                     [ "$ra_show" = 1 ] && say "   🔒 기준선 허용이 닫혀 있습니다(고칠 기준선: $BLV) — 이 단계가 기준선을 고쳐야 하면 /refactor:approve 허용 $id" ;;
+                esac ;;
+            esac
+            continue ;;
           changed) say "🔁 승인한 뒤 카드 내용이 바뀐 단계를 바뀐 내용으로 다시 승인: [$id] $t" ;;
         esac
         lines="$lines$now KST | 승인 | $id | $hv | 사용자가 /refactor:approve 로 실행"$'\n'

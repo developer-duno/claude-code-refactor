@@ -2823,7 +2823,7 @@ go_runner() {
     # 0.4.0 G2: 자동 마감은 인자 없는 /refactor:go 차례 안에서 돈다 — 허락된 자동 모드 스크립트 꼴 그대로(AOK — 명령 전체가 그 한 줄)일 때만
     [ "${AOK:-0}" = 1 ] && has "$rseg" "run\\.sh[\"']?[[:space:]]+refactor-auto([[:space:]]|$)" && continue
     if runs_project_code "$rseg"; then
-      block "리팩토링(/refactor:go) 중에는 테스트·빌드·앱 실행을 안전 실행기로만 합니다 — 운영 DB·운영 키 대신 가짜 값(127.0.0.1:9 등)을 넣어, 실수로 운영 데이터를 바꾸거나 알림을 보내지 않게 합니다." "명령 앞에 붙이세요(&&·; 로 이은 명령마다 각각): bash \"$runsh\" refactor-safe-run -- <명령>   예) bash \"$runsh\" refactor-safe-run -- npm test   · 무엇이 가짜 값으로 바뀌는지(이름만): bash \"$runsh\" refactor-safe-run --check$NL  → 문서(docs/refactor/*.md) 편집은 Edit 도구나 docs/refactor 문서만 다루는 파이썬 한 줄로"
+      block "리팩토링(/refactor:go) 중에는 테스트·빌드·앱 실행을 안전 실행기로만 합니다 — 운영 DB·운영 키 대신 가짜 값(127.0.0.1:9 등)을 넣어, 실수로 운영 데이터를 바꾸거나 알림을 보내지 않게 합니다." "명령 앞에 붙이세요(&&·; 로 이은 명령마다 각각): bash \"$runsh\" refactor-safe-run -- <명령>   예) bash \"$runsh\" refactor-safe-run -- npm test   · 무엇이 가짜 값으로 바뀌는지(이름만): bash \"$runsh\" refactor-safe-run --check$NL  → 파일을 고치려는 것이면(코드·시험 파일 포함) Edit 도구로 — 문서(docs/refactor/*.md)는 docs/refactor 문서만 다루는 파이썬 한 줄도 됨"
     fi
   done
   return 0
