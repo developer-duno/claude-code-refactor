@@ -1068,6 +1068,8 @@ def main():
     check_reapprove_closed_notice_044(check)
     check_docs_044(check)
     check_docs_045(check)
+    check_verify_pw_wait_046(check)
+    check_docs_046(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -7196,15 +7198,9 @@ def check_docs_044(check):
 
 
 def check_docs_045(check):
-    """0.4.5 문서: 판 번호 네 곳(0.4.5) · README '0.4.5에서 달라진 점' 줄(0.4.4 줄 위 · 0.4.4 줄 남김) · §13 0.4.5 변경 이력 절(0.4.4 절 위 · 글머리 하나)."""
+    """0.4.5 문서: README '0.4.5에서 달라진 점' 줄(0.4.4 줄 위 · 0.4.4 줄 남김) · §13 0.4.5 변경 이력 절(0.4.4 절 위 · 글머리 하나).
+    (판 번호 네 곳 단언은 0.4.6 에서 check_docs_046 로 옮김)"""
     rd = (ROOT / "README.md").read_text(encoding="utf-8")
-    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
-    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
-    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
-    check("0.4.5 판 번호: plugin.json", '"version": "0.4.5"' in pj, "")
-    check("0.4.5 판 번호: marketplace.json", '"version": "0.4.5"' in mk, "")
-    check("0.4.5 판 번호: bug.yml placeholder", 'placeholder: "0.4.5"' in bg, "")
-    check("0.4.5 판 번호: README 배지", "version-0.4.5-blue" in rd, "")
     a, b = rd.find("> **0.4.5에서 달라진 점**:"), rd.find("> **0.4.4에서 달라진 점**:")
     check("0.4.5 문구 README 달라진 점 줄 존재(0.4.4 줄 위 · 0.4.4 줄 남김) + 여는 명령",
           0 <= a < b and "`/refactor:approve 허용 <ID>`" in rd[a:b], rd[a:b] if a >= 0 else "")
@@ -7212,6 +7208,151 @@ def check_docs_045(check):
     sec = rd[c:e] if 0 <= c < e else ""
     check("0.4.5 문구 README §13 0.4.5 변경 이력 절(0.4.4 절 위) · 글머리 하나",
           sec.count("\n- **") == 1 and "**빈 허용 파일이 좁혀져 닫힌 단계에도 🔒 안내**" in sec, sec)
+
+
+def check_docs_046(check):
+    """0.4.6 문서: 판 번호 네 곳(0.4.6) · README '0.4.6에서 달라진 점' 줄(0.4.5 줄 위 · 0.4.5 줄 남김) · §13 0.4.6 변경 이력 절(0.4.5 절 위 · 글머리 하나) ·
+    라이브 검증 설명(기대 글자 = 화면 글자나 제목 · 기다림) · PROFILE 템플릿 기대 글자 설명."""
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
+    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
+    pf = (ROOT / "plugins/refactor/skills/go/templates/PROFILE.md").read_text(encoding="utf-8")
+    check("0.4.6 판 번호: plugin.json", '"version": "0.4.6"' in pj, "")
+    check("0.4.6 판 번호: marketplace.json", '"version": "0.4.6"' in mk, "")
+    check("0.4.6 판 번호: bug.yml placeholder", 'placeholder: "0.4.6"' in bg, "")
+    check("0.4.6 판 번호: README 배지", "version-0.4.6-blue" in rd, "")
+    a, b = rd.find("> **0.4.6에서 달라진 점**:"), rd.find("> **0.4.5에서 달라진 점**:")
+    check("0.4.6 문구 README 달라진 점 줄 존재(0.4.5 줄 위 · 0.4.5 줄 남김) + 화면 글자·제목·기다림",
+          0 <= a < b and all(w in rd[a:b] for w in ("화면에 보이는 글자와 페이지 제목", "나올 때까지 기다립니다")), rd[a:b] if a >= 0 else "")
+    c, e = rd.find("### 0.4.6 (2026-10-07)"), rd.find("### 0.4.5 (2026-10-07)")
+    sec = rd[c:e] if 0 <= c < e else ""
+    check("0.4.6 문구 README §13 0.4.6 변경 이력 절(0.4.5 절 위) · 글머리 하나 · 사용자 이름 없음",
+          sec.count("\n- **") == 1 and "**자동 마감 화면 열기의 기대 글자 = 화면 글자 또는 제목 · 나올 때까지 기다림**" in sec
+          and "사용자 신고" in sec and "잔치" not in sec, sec)
+    check("0.4.6 문구 README 라이브 검증 설명: 화면 열기 = 기대 글자(화면 글자나 제목 · 기다림) · 콘솔 오류 0 · 스크린샷",
+          "프로젝트에 playwright 가 있으면 화면마다 열어 기대 글자(화면 글자나 제목 — 늦게 그려지면 화면당 시간 안에서 기다림) · 콘솔 오류 0 · 스크린샷 `docs/refactor/verify/B1/`" in rd
+          and "열어 콘솔 오류 0 과 스크린샷" not in rd, "")
+    check("0.4.6 문구 PROFILE 템플릿 기대 글자 = 옛 판·새 판 모두에 나오고 화면이나 페이지 제목에 보이는 글자",
+          "기대 글자 = 옛 판·새 판 모두에 나오고 화면이나 페이지 제목에 보이는 글자" in pf, "")
+
+
+# 가짜 playwright(0.4.6 시험용): goto 순간부터 지난 시간에 따라 globalThis.document 를 바꾸고, evaluate·waitForFunction 은 그 document 로 fn(arg) 를 부른다.
+#   waitForFunction 은 50ms 마다 확인 · timeout 0 은 진짜처럼 무제한 · 부른 것(종류·인자·timeout·함수 원문)은 calls.jsonl 에 남긴다
+FAKE_PW_046 = r"""const fs = require('fs'), path = require('path');
+const scen = JSON.parse(fs.readFileSync(path.join(__dirname, 'scen.json'), 'utf8'));
+const logf = path.join(__dirname, 'calls.jsonl');
+const log = o => fs.appendFileSync(logf, JSON.stringify(o) + '\n');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function newPage() {
+  let cur = null, t0 = 0, p = '';
+  const refresh = () => {
+    const el = Date.now() - t0;
+    const body = (cur.late != null && el >= cur.late) ? cur.body1 : cur.body0;
+    const html = cur.html != null ? cur.html : ('<html><head><title>' + cur.title + '</title></head><body>' + body + '</body></html>');
+    globalThis.document = { body: { innerText: body }, title: cur.title, documentElement: { outerHTML: html } };
+  };
+  return {
+    on() {},
+    async route() {},
+    async goto(url, opt) {
+      p = new URL(url).pathname; cur = scen[p]; t0 = Date.now();
+      if (cur.gotoMs) await sleep(cur.gotoMs);
+      log({ k: 'goto', p });
+      return { status: () => 200 };
+    },
+    async waitForFunction(fn, arg, opt) {
+      const timeout = opt ? opt.timeout : undefined;
+      log({ k: 'wait', p, arg, timeout, src: String(fn) });
+      const run = (0, eval)('(' + String(fn) + ')');
+      const lim = timeout === undefined ? 30000 : timeout;
+      const start = Date.now();
+      for (;;) {
+        refresh();
+        if (run(arg)) return true;
+        if (lim !== 0 && Date.now() - start >= lim) throw new Error('Timeout ' + lim + 'ms exceeded');
+        await sleep(50);
+      }
+    },
+    async evaluate(fn, arg) { log({ k: 'eval', p, arg, src: String(fn) }); refresh(); return (0, eval)('(' + String(fn) + ')')(arg); },
+    async screenshot() { log({ k: 'shot', p }); },
+    async close() {},
+  };
+}
+module.exports = { chromium: { launch: async () => ({ newPage: async () => newPage(), close: async () => {} }) } };
+"""
+
+
+def check_verify_pw_wait_046(check):
+    """0.4.6 A-1·A-2: 자동 마감 verify 의 브라우저 스크립트(pw.js)를 refactor-auto.sh 에서 꺼내 진짜 node 로 돌린다(가짜 playwright) —
+    기대 글자 = 화면 글자 또는 제목 · 나올 때까지 기다림(상한 = 화면당 남은 시간 · 최소 0.5초) · 기다림과 마지막 판정이 같은 함수·want 는 인자."""
+    node = shutil.which("node")
+    check("0.4.6 pw.js 시험: node 있음(node 없음이면 실패 — CI 네 칸에 node 가 있다고 봄)", node is not None, "node 없음")
+    if not node:
+        return
+    sh = (ROOT / "plugins/refactor/scripts/refactor-auto.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
+    js = sh.split("<<'PWJS'\n", 1)[1].split("\nPWJS\n", 1)[0] + "\n"
+    root = pathlib.Path(tempfile.mkdtemp(prefix="pw046-"))
+    try:
+        def run(name, limit, pages):
+            d = root / name
+            (d / "node_modules/playwright").mkdir(parents=True)
+            (d / "shots").mkdir()
+            (d / "pw.js").write_text(js, encoding="utf-8", newline="")
+            (d / "node_modules/playwright/index.js").write_text(FAKE_PW_046, encoding="utf-8", newline="")
+            (d / "node_modules/playwright/scen.json").write_text(json.dumps({p: s for p, _, s in pages}, ensure_ascii=False), encoding="utf-8", newline="")
+            (d / "list").write_text("".join(f"{p}\t{w}\n" for p, w, _ in pages), encoding="utf-8", newline="")
+            env = dict(os.environ, NODE_PATH=str(d / "node_modules"))
+            t = time.monotonic()
+            try:
+                r = subprocess.run([node, str(d / "pw.js"), "http://127.0.0.1:9", str(d / "shots"), "1700000000", str(d / "list"), str(limit)],
+                                   cwd=str(d), env=env, capture_output=True, text=True, encoding="utf-8", timeout=10)
+                out = r.stdout.replace("\r\n", "\n") + r.stderr
+            except subprocess.TimeoutExpired:
+                out = "(10초 안에 안 끝남)"
+            el = time.monotonic() - t
+            cf = d / "node_modules/playwright/calls.jsonl"
+            calls = [json.loads(l) for l in cf.read_text(encoding="utf-8").splitlines() if l] if cf.exists() else []
+            return out, el, calls
+
+        W = "상품 목록"
+        o1, _, c1 = run("r1", 3, [("/t", W, {"body0": "로딩 끝", "title": W + " | 가게"}),
+                                  ("/late", W, {"body0": "불러오는 중", "body1": W + " 3개", "late": 300, "title": "가게"}),
+                                  ("/now", W, {"body0": W + " 3개", "title": "가게"})])
+        check("0.4.6 pw.js ⓐ 기대 글자가 페이지 제목에만 → yes", "PAGE\t/t\t200\tyes\t0\t\n" in o1, o1)
+        check("0.4.6 pw.js ⓑ 기대 글자가 0.3초 뒤에 그려짐(화면당 3초) → yes(기다림)", "PAGE\t/late\t200\tyes\t0\t\n" in o1, o1)
+        check("0.4.6 pw.js ⓔ 대조군: 기대 글자가 바로 있음 → yes", "PAGE\t/now\t200\tyes\t0\t\n" in o1, o1)
+        o2, el2, c2 = run("r2", 1, [("/never", W, {"body0": "점검 중", "title": "가게"})])
+        check("0.4.6 pw.js ⓒ 기대 글자가 끝내 없음(화면당 1초) → no · 4초 안에 끝남",
+              "PAGE\t/never\t200\tno\t0\t\n" in o2 and el2 < 4, f"{el2:.2f}초 · {o2}")
+        o3, _, c3 = run("r3", 1, [("/slow", W, {"body0": "불러오는 중", "body1": W, "late": 1200, "gotoMs": 950, "title": "가게"})])
+        check("0.4.6 pw.js ⓕ 열기에 0.95초(화면당 1초) · 1.2초에 그려짐 → 최소 0.5초 기다림으로 yes",
+              "PAGE\t/slow\t200\tyes\t0\t\n" in o3, o3)
+        c3wait = next((c for c in c3 if c.get("k") == "wait"), None)
+        check("0.4.6 pw.js ⓖ 열기 시간(0.95초)을 뺀 기다림 상한 — 화면당 1초에서 열기 시간을 빼면 남는 시간이 거의 없어 ≤ 600ms",
+              c3wait is not None and c3wait.get("timeout") is not None and c3wait["timeout"] <= 600, c3wait)
+        waits = [(c, lim) for cs, lim in ((c1, 3), (c2, 1), (c3, 1)) for c in cs if c.get("k") == "wait"]
+        check("0.4.6 pw.js ⓓ 기다림 timeout 이 화면마다 하나 · 전부 500 ≤ t ≤ 화면당 초×1000(0 = 무제한 아님)",
+              len(waits) == 5 and all(isinstance(c.get("timeout"), (int, float)) and 500 <= c["timeout"] <= lim * 1000 for c, lim in waits),
+              str([(c.get("p"), c.get("timeout")) for c, _ in waits]))
+        o4, _, c4 = run("r4", 1, [("/hidden", W, {"body0": "점검 중", "title": "가게", "html": '<html><head><title>가게</title></head><body>점검 중<div hidden>' + W + '</div></body></html>'}),
+                                  ("/join", W, {"body0": "오늘의 상품 ", "title": "목록 | 가게"})])
+        check("0.4.6 pw.js ⓗ 기대 글자가 숨은(hidden) HTML 에만 있음(화면 글자·제목엔 없음) → no(innerText·title 만 봄)",
+              "PAGE\t/hidden\t200\tno\t0\t\n" in o4, o4)
+        check("0.4.6 pw.js ⓘ 본문 끝과 제목 앞을 이어 붙여야만 기대 글자가 생김(사이에 줄바꿈이 있어 안 이어짐) → no",
+              "PAGE\t/join\t200\tno\t0\t\n" in o4, o4)
+        bad = []
+        for cs in (c1, c2, c3, c4):
+            for p in sorted({c["p"] for c in cs}):
+                seq = [c for c in cs if c["p"] == p]
+                ks = [c["k"] for c in seq]
+                wv = [c for c in seq if c["k"] in ("wait", "eval")]
+                if ks != ["goto", "wait", "eval", "shot"] or any(c.get("arg") != W for c in wv) or len({c.get("src") for c in wv}) != 1:
+                    bad.append((p, ks, [(c.get("arg"), c.get("src")) for c in wv]))
+        check("0.4.6 pw.js 화면마다 goto → 기다림 → 마지막 판정(evaluate) → 스크린샷 · 기다림과 판정이 같은 함수 · 기대 글자는 인자",
+              not bad and len(c1) + len(c2) + len(c3) + len(c4) == 28, str(bad or [len(c1), len(c2), len(c3), len(c4)]))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def check_docs_fix_042(check):
