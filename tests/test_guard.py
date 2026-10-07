@@ -877,6 +877,11 @@ def main():
     check_run_retry_042b(res)
     check_restore_copy_043(res)
     check_edit_hint_044(res)
+    check_ghapi_url_047(res)
+    check_method_eq_047(res)
+    check_heroku_047(res)
+    check_approvals_guard_047(res)
+    check_config_name_only_047(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -6423,6 +6428,119 @@ def check_edit_hint_044(res):
                                      json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
     finally:
         rmtree_rw(proj)
+
+
+def _rows_047(res, label, rows):
+    """0.4.7 시험 공용: rows = [(phase|"pause", 기대, 명령)] — 단계별로 프로젝트를 하나씩 만들어 돌린다"""
+    fut = int(time.time()) + 3600
+    by = {}
+    for ph, want, cmd in rows:
+        by.setdefault(ph, []).append((want, bash(cmd)))
+    for ph, cases in by.items():
+        proj = _pause_proj_042(fut) if ph == "pause" else make_project(phase=ph)
+        try:
+            for want, call in cases:
+                code, err = run(proj, *call)
+                res["total"] += 1
+                if code != want:
+                    res["fails"].append(("0.4.7 %s(%s)" % (label, ph or "밖"), want, code, call[0],
+                                         json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+        finally:
+            rmtree_rw(proj)
+
+
+def check_ghapi_url_047(res):
+    """0.4.7 F1(사용자 신고): gh api 를 전체 주소(https://api.github.com/… · http:// · 대문자 · GHE https://<호스트>/api/v3/…)로 부르면
+    짧은 경로(repos/o/r)와 판정이 같다 — 저장소 지우기(밖에서도)·저장소 설정 바꾸기(리팩토링 중). 짝마다 경로 꼴과 같은 결과인지 +
+    기대값(막힘 2 · 통과 0)인지 따로 본다(짝만 보면 둘 다 통과여도 초록이 된다)"""
+    heads = ["https://api.github.com/", "http://api.github.com/", "HTTPS://API.GITHUB.COM/", "https://ghe.example.com/api/v3/"]
+    # (단계, 기대, 앞, 경로, 뒤)
+    pairs = [(None, B, "gh api -X DELETE ", "repos/o/r", ""),
+             (None, B, "gh api -X DELETE ", "repos/o/r/git/refs/heads/x", ""),
+             (None, OK, "gh api -X DELETE ", "repos/o/r/issues/comments/1", ""),
+             ("EXECUTE", B, "gh api -X PATCH ", "repos/o/r", " -f name=x"),
+             ("EXECUTE", B, "gh api --method PATCH ", "repositories/123", " -f name=x"),
+             ("EXECUTE", OK, "gh api ", "repos/o/r", ""),
+             ("EXECUTE", OK, "gh api ", "repos/o/r/pulls", "")]
+    for ph, want, pre, path, post in pairs:
+        proj = make_project(phase=ph)
+        try:
+            base, _ = run(proj, *bash(pre + path + post))
+            res["total"] += 1
+            if base != want:
+                res["fails"].append(("0.4.7 F1 경로 꼴 기대값", want, base, "Bash", pre + path + post, ""))
+            for h in heads:
+                cmd = pre + h + path + post
+                code, err = run(proj, *bash(cmd))
+                res["total"] += 2
+                if code != base:
+                    res["fails"].append(("0.4.7 F1 전체 주소 = 경로 꼴(짝)", base, code, "Bash", cmd, err.strip()[:300]))
+                if code != want:
+                    res["fails"].append(("0.4.7 F1 전체 주소 기대값", want, code, "Bash", cmd, err.strip()[:300]))
+        finally:
+            rmtree_rw(proj)
+    u = "https://api.github.com/repos/o/r"
+    _rows_047(res, "F1 따옴표·등호 철자 전체 주소 → 막힘", [
+        (None, B, "gh api -X DELETE '%s'" % u), (None, B, 'gh api -X DELETE "%s"' % u),
+        (None, B, "gh api --method=DELETE %s" % u), (None, B, "gh api -X=DELETE %s" % u),
+        ("EXECUTE", B, "gh api -X PATCH '%s' -f name=x" % u), ("EXECUTE", B, 'gh api -X PATCH "%s" -f name=x' % u)])
+    _rows_047(res, "F1 멈춤 중 저장소 설정 전체 주소 → 막힘", [
+        ("pause", B, "gh api -X PATCH %s -f default_branch=x" % u),
+        ("pause", B, "gh api --method PATCH https://api.github.com/repositories/123 -f name=x"),
+        ("pause", B, "gh api -X PATCH https://ghe.example.com/api/v3/repos/o/r -f name=x")])
+
+
+def check_method_eq_047(res):
+    """0.4.7 F5: 지우기 판정의 방법 옵션 철자를 gha_write 와 같게 — -X=DELETE · -X='DELETE' · -iX DELETE 도 막고, -X=GET 은 통과(밖)"""
+    _rows_047(res, "F5 -X= 철자", [
+        (None, B, "gh api -X=DELETE repos/o/r"), (None, B, "gh api -X='DELETE' repos/o/r"), (None, B, "gh api -iX DELETE repos/o/r"),
+        (None, OK, "gh api -X=GET repos/o/r")])
+
+
+def check_heroku_047(res):
+    """0.4.7 F2: heroku apps:transfer(앱 넘기기)·apps:rename(이름 바꾸기) = 배포 묶음 — 리팩토링 중 막고, 멈춤 중 풀리고,
+    apps:info 는 통과, 리팩토링 밖은 같은 꼴 apps:destroy 의 밖 결과와 같다"""
+    xs = ["heroku apps:transfer -a app x@example.com", "heroku apps:rename new -a app"]
+    rows = []
+    for ph in ("EXECUTE", "CHECKUP"):
+        rows += [(ph, B, c) for c in xs]
+    rows += [("pause", OK, c) for c in xs] + [("EXECUTE", OK, "heroku apps:info -a app")]
+    _rows_047(res, "F2 heroku 넘기기·이름 바꾸기", rows)
+    proj = make_project()
+    try:
+        ref, _ = run(proj, *bash("heroku apps:destroy -a app --confirm app"))
+        for c in xs:
+            code, err = run(proj, *bash(c))
+            res["total"] += 1
+            if code != ref:
+                res["fails"].append(("0.4.7 F2 밖 = apps:destroy 밖 결과", ref, code, "Bash", c, err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
+
+
+def check_approvals_guard_047(res):
+    """0.4.7(F3 은 이번 판에서 뺌 — 사장님 결정): 승인 기록을 파이썬으로 읽기·쓰기는 지금처럼 막힌다(회귀 가드).
+    쓰기는 'a'·'w'·write_text 와 'r+'(interp_writes 의 방식 글자 판정 밖 — 다른 겹이 막는다)"""
+    cmds = ["python -c \"print(open('docs/refactor/APPROVALS.log').read())\"",
+            "python -c \"import pathlib; print(pathlib.Path('docs/refactor/APPROVALS.log').read_text())\"",
+            "python -c \"open('docs/refactor/APPROVALS.log','a').write('x')\"",
+            "python -c \"open('docs/refactor/APPROVALS.log','w').write('x')\"",
+            "python -c \"import pathlib; pathlib.Path('docs/refactor/APPROVALS.log').write_text('x')\"",
+            "python -c \"open('docs/refactor/APPROVALS.log','r+').write('x')\""]
+    _rows_047(res, "승인 기록 파이썬 읽기·쓰기 → 막힘", [(ph, B, c) for ph in ("EXECUTE", "CHECKUP") for c in cmds])
+
+
+def check_config_name_only_047(res):
+    """0.4.7 F4: git config --name-only + (--get-regexp·--list·-l)이 같은 조각에 함께면 이름만 나와 통과. --get(값)·다른 조각의 --name-only ·
+    따옴표 안 글자('x --name-only' · "--name-only|.")·--local(-l 아님)은 그대로 막힌다(원격 주소 출력)"""
+    ok = ["git config --local --name-only --get-regexp '^branch\\.'", "git config --name-only --get-regexp 'remote\\..*\\.url'",
+          "git config --name-only -l"]
+    bad = ["git config --get-regexp 'remote\\..*\\.url'", "git config --name-only --get remote.origin.url",
+           "git config --get-regexp 'remote\\..*\\.url'; echo --name-only", "git config --local --name-only --get remote.origin.url",
+           "git config --get-regexp 'remote\\..*\\.url' 'x --name-only'", "git config --get-regexp \"remote\\..*\\.url\" \"--name-only|.\"",
+           "git config --get-regexp 'remote\\..*\\.url' 'x --name-only y'"]
+    _rows_047(res, "F4 config --name-only", [(ph, OK, c) for ph in (None, "EXECUTE") for c in ok]
+              + [(ph, B, c) for ph in (None, "EXECUTE") for c in bad])
 
 
 if __name__ == "__main__":

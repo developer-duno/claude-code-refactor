@@ -1070,6 +1070,7 @@ def main():
     check_docs_045(check)
     check_verify_pw_wait_046(check)
     check_docs_046(check)
+    check_docs_047(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -7212,16 +7213,10 @@ def check_docs_045(check):
 
 def check_docs_046(check):
     """0.4.6 문서: 판 번호 네 곳(0.4.6) · README '0.4.6에서 달라진 점' 줄(0.4.5 줄 위 · 0.4.5 줄 남김) · §13 0.4.6 변경 이력 절(0.4.5 절 위 · 글머리 하나) ·
-    라이브 검증 설명(기대 글자 = 화면 글자나 제목 · 기다림) · PROFILE 템플릿 기대 글자 설명."""
+    라이브 검증 설명(기대 글자 = 화면 글자나 제목 · 기다림) · PROFILE 템플릿 기대 글자 설명.
+    (판 번호 네 곳 단언은 0.4.7 에서 check_docs_047 로 옮김)"""
     rd = (ROOT / "README.md").read_text(encoding="utf-8")
-    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
-    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
-    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
     pf = (ROOT / "plugins/refactor/skills/go/templates/PROFILE.md").read_text(encoding="utf-8")
-    check("0.4.6 판 번호: plugin.json", '"version": "0.4.6"' in pj, "")
-    check("0.4.6 판 번호: marketplace.json", '"version": "0.4.6"' in mk, "")
-    check("0.4.6 판 번호: bug.yml placeholder", 'placeholder: "0.4.6"' in bg, "")
-    check("0.4.6 판 번호: README 배지", "version-0.4.6-blue" in rd, "")
     a, b = rd.find("> **0.4.6에서 달라진 점**:"), rd.find("> **0.4.5에서 달라진 점**:")
     check("0.4.6 문구 README 달라진 점 줄 존재(0.4.5 줄 위 · 0.4.5 줄 남김) + 화면 글자·제목·기다림",
           0 <= a < b and all(w in rd[a:b] for w in ("화면에 보이는 글자와 페이지 제목", "나올 때까지 기다립니다")), rd[a:b] if a >= 0 else "")
@@ -7235,6 +7230,30 @@ def check_docs_046(check):
           and "열어 콘솔 오류 0 과 스크린샷" not in rd, "")
     check("0.4.6 문구 PROFILE 템플릿 기대 글자 = 옛 판·새 판 모두에 나오고 화면이나 페이지 제목에 보이는 글자",
           "기대 글자 = 옛 판·새 판 모두에 나오고 화면이나 페이지 제목에 보이는 글자" in pf, "")
+
+
+def check_docs_047(check):
+    """0.4.7 문서: 판 번호 네 곳(0.4.7) · README '0.4.7에서 달라진 점' 줄(0.4.6 줄 위 · 0.4.6 줄 남김 · 승인 기록 읽기 문구 없음 — F3 은 이번 판에서 뺌) ·
+    §13 0.4.7 변경 이력 절(0.4.6 절 위 · 글머리 셋 · 사용자 이름 없음)."""
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
+    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
+    check("0.4.7 판 번호: plugin.json", '"version": "0.4.7"' in pj, "")
+    check("0.4.7 판 번호: marketplace.json", '"version": "0.4.7"' in mk, "")
+    check("0.4.7 판 번호: bug.yml placeholder", 'placeholder: "0.4.7"' in bg, "")
+    check("0.4.7 판 번호: README 배지", "version-0.4.7-blue" in rd, "")
+    a, b = rd.find("> **0.4.7에서 달라진 점**:"), rd.find("> **0.4.6에서 달라진 점**:")
+    line = rd[a:b] if 0 <= a < b else ""
+    check("0.4.7 문구 README 달라진 점 줄 존재(0.4.6 줄 위 · 0.4.6 줄 남김) + 전체 주소·-X=·heroku·--name-only · 승인 기록 문구 없음",
+          bool(line) and all(w in line for w in ("전체 주소", "`-X=DELETE`", "`apps:transfer`", "`apps:rename`", "`git config --name-only`"))
+          and "승인 기록" not in line, line)
+    c, e = rd.find("### 0.4.7 (2026-10-08)"), rd.find("### 0.4.6 (2026-10-07)")
+    sec = rd[c:e] if 0 <= c < e else ""
+    check("0.4.7 문구 README §13 0.4.7 변경 이력 절(0.4.6 절 위) · 글머리 셋 · 사용자 이름 없음",
+          sec.count("\n- **") == 3 and "**전체 주소로 부르는 gh api 와 `-X=` 철자도 짧은 경로와 같게**" in sec
+          and "**heroku 앱 넘기기·이름 바꾸기 = 배포 명령**" in sec and "**`git config --name-only` 는 통과**" in sec
+          and "사용자 신고" in sec and "잔치" not in sec and "flowershop" not in sec and "승인 기록" not in sec, sec)
 
 
 # 가짜 playwright(0.4.6 시험용): goto 순간부터 지난 시간에 따라 globalThis.document 를 바꾸고, evaluate·waitForFunction 은 그 document 로 fn(arg) 를 부른다.
