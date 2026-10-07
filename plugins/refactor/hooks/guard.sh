@@ -75,6 +75,21 @@ unesc_line() {
     return 0
   }
   function cmdw(s) { sub(/^[ \t({]*(sudo[ \t]+)?/, "", s); sub(/[ \t].*$/, "", s); gsub(/["\047]/, "", s); sub(/^.*[\/\002]/, "", s); return tolower(s) }
+  function gitview(s,   w, nw, WV, iv) {   # git 조각 s 의 하위 명령(앞 옵션은 -C <폴더>·--no-pager 만 건너뜀, -c 등 다른 옵션이면 0)이 add·diff·status·log·show·commit 이면 1
+    # 바깥 프로그램을 돌리거나 파일로 쓰는 옵션(--ext-diff·--textconv·--output·--exec 와 git 이 받는 줄임 꼴)은 보기 아님 —
+    #   낱말에서 따옴표·역슬래시를 지운 뒤 --ou·--ext·--te·--exe 로 시작하면(--out"put"=x · --o\utput · --outp · --textc)
+    nw = split(s, WV, /[ \t]+/)
+    for (iv = 1; iv <= nw; iv++) { w = WV[iv]; gsub(/["\047\002\\]/, "", w); if (w ~ /^--(ou|ext|te|exe)/) return 0 }
+    sub(/^[ \t({]*(sudo[ \t]+)?[^ \t]+/, "", s)
+    while (1) {
+      sub(/^[ \t]+/, "", s)
+      if (s ~ /^-C[ \t]+[^ \t]/) { sub(/^-C[ \t]+[^ \t]+/, "", s); continue }
+      if (s ~ /^--no-pager([ \t]|$)/) { sub(/^--no-pager/, "", s); continue }
+      break
+    }
+    w = s; sub(/[ \t].*$/, "", w)
+    return (w ~ /^(add|diff|status|log|show|commit)$/)
+  }
   function mdrun(s, t,   q, n, P, j, pc, k, W, i2) {   # 줄 s 에서 문서 t 가 나오는 조각 중 하나라도 "보기 전용"이 아니면 1(= 실행될 수 있음)
     if (!index(s, t)) return 0
     q = s; gsub(/&&|\|\||;/, "\005", q); n = split(q, P, "\005")
@@ -88,7 +103,8 @@ unesc_line() {
       if (pc ~ />/) return 1
       if (tolower(pc) ~ /(^|[ \t|])(eval|xargs|cp|mv|ln|install|source|tee|\.)([ \t]|$)/) return 1
       k = split(pc, W, "|")
-      if (cmdw(W[1]) !~ /^(wc|tail|head|cat|ls|grep|stat|du)$/) return 1
+      if (cmdw(W[1]) == "git") { if (GVX || !gitview(W[1])) return 1 }   # 0.4.7 F6 — 잔치 신고: git add·diff 로 그 문서를 다시 부르는 것도 보기(GVX = 명령에 git 설정·외부 diff·pager 글자)
+      else if (cmdw(W[1]) !~ /^(wc|tail|head|cat|ls|grep|stat|du)$/) return 1
       for (i2 = 2; i2 <= k; i2++) if (cmdw(W[i2]) ~ /^(bash|sh|zsh|dash|ksh|fish|python[0-9.]*|py|pypy3?|node|nodejs|ruby|perl|php|deno|bun|tsx|ts-node|pwsh|powershell|source|\.|eval|exec|xargs|sudo|env|tee|parallel)$/) return 1
     }
     return 0
@@ -157,9 +173,15 @@ unesc_line() {
   } {
     s = $0; gsub(/\\\\\\r\\n|\\\\\\n/, "", s); gsub(/\\\\/, "\002", s); gsub(/\\"/, "\"", s); gsub(/\\\//, "/", s); gsub(/\\r/, "", s); gsub(/\\t/, " ", s)
     n = split(s, L, /\\n/); nh = 0; delim = ""; QS = 0; QD = 0
+    NB = ""
     for (i = 1; i <= n; i++) {
       line = L[i]
-      if (delim != "") { t = line; sub(/^[ \t]+/, "", t); if (t == delim) { HE[nh] = i; delim = "" }; continue }
+      if (delim != "") {
+        t = line; sub(/^[ \t]+/, "", t); if (t == delim) { HE[nh] = i; delim = "" }
+        else if (!(HC[nh] && HQ[nh])) NB = NB "\n" line   # 보완 2: cat·tee 의 따옴표 구분자 본문(데이터)만 GVX 판정에서 뺀다 — 실행 본문·<<EOF 본문은 넣는다
+        continue
+      }
+      NB = NB "\n" line   # heredoc 본문 밖의 줄(아래 GVX 판정용)
       if (!hdfind(line)) continue   # 따옴표·주석 밖의 << 만(cat "x <<'EOF'" · cat > a.md # <<'EOF' 는 히어독이 아님)
       pre = substr(line, 1, HDP - 1); post = substr(line, HDP + HDL); tok = substr(line, HDP, HDL)
       nh++; HS[nh] = i; HE[nh] = n + 1
@@ -174,6 +196,12 @@ unesc_line() {
       }
       HT[nh] = tg; HP[nh] = post
     }
+    # 0.4.7 W3: 명령 전체(heredoc 본문 제외)에 git 이 다른 프로그램을 돌리게 하는 설정·환경변수 글자가 있으면 git 보기 예외를 쓰지 않는다(GVX)
+    #   — git config(사이 옵션 포함)·외부 diff·textconv·filter·fsmonitor·gitattributes·pager(--no-pager 는 제외)·GIT_CONFIG*·alias·git 폴더 바꾸기
+    t = tolower(NB); gsub(/["\047\002\\]/, "", t); gsub(/--no-pager/, " ", t); GVX = 0
+    if (t ~ /(^|[^a-z0-9_.-])git([ \t]+-[cC][ \t]+[^ \t;&|]+|[ \t]+-[^ \t;&|]*)*[ \t]+config([ \t;&|]|$)/) GVX = 1
+    nx = split("diff.external git_external_diff textconv filter. fsmonitor gitattributes pager git_config alias. git_dir= --git-dir --work-tree git_work_tree exec_path hookspath attributes editor visual", GW, " ")
+    for (j = 1; j <= nx; j++) if (index(t, GW[j])) GVX = 1
     for (h = 1; h <= nh; h++) {
       DROP[h] = 0
       if (!HC[h]) continue
@@ -2199,10 +2227,11 @@ hv_git() {
   while [[ $grest =~ $re_gha ]]; do
     gseg=${BASH_REMATCH[0]}; grest=${grest#*"$gseg"}
     case "$gseg" in *%*) pct_dec "$gseg"; gseg=$PD ;; esac   # 0.4.0 보완: git/re%66s 같은 %XX 철자
-    # 0.3.7 G2: -H 'X-HTTP-Method-Override: DELETE' 도 DELETE 와 같게
-    if { has "$gseg" "[[:space:]](-X[[:space:]]*|--method([[:space:]]+|=))[\"']?delete([\"'[:space:])]|$)" \
+    gha_url_strip "$gseg"   # 0.4.7 F1: 경로 판정은 전체 주소 머리를 지운 사본(GU)으로
+    # 0.3.7 G2: -H 'X-HTTP-Method-Override: DELETE' 도 DELETE 와 같게 · 0.4.7 F5: 방법 옵션 철자는 gha_write 와 같게(-X=DELETE · -iX DELETE)
+    if { has "$gseg" "[[:space:]](-i*x[[:space:]]*=?|--method([[:space:]]+|=))[\"']?delete([\"'[:space:])]|$)" \
         || { [[ $gseg =~ $RE_HMO ]] && has "$gseg" "x-http-method-override[[:space:]]*:[[:space:]]*[\"']?delete([\"'[:space:])]|$)"; }; } \
-      && has "$gseg" "/git/refs/|[[:space:]][\"']?/?repos/[^/[:space:]\"']+/[^/[:space:]\"']+/?([\"'[:space:])]|$)"; then
+      && has "$GU" "/git/refs/|[[:space:]][\"']?/?repos/[^/[:space:]\"']+/[^/[:space:]\"']+/?([\"'[:space:])]|$)"; then
       block "$MSG_GHDEL" "사용자에게 명령을 안내하고 사람이 직접 실행하게 하세요."
     fi
   done
@@ -2341,6 +2370,23 @@ pct_dec() {
   done
   PD=$out$s
 }
+# 0.4.7 F1: gh api 조각($1) → GU = 주소 머리 http(s)://<호스트> 와 그 뒤 /api/v3(GHE)를 지운 사본(판정용 — 전체 주소를 짧은 경로와 같게).
+#   https://api.github.com/repos/o/r → /repos/o/r · 'https://…/repos/o/r' → '/repos/o/r'. 대소문자 무관(부르는 쪽 nocasematch)
+gha_url_strip() {
+  local r=$1 p h
+  GU=""
+  while [[ $r == *://* ]]; do
+    p=${r%%://*}; r=${r#*://}
+    case "$p" in
+      *https) GU=$GU${p%?????} ;;
+      *http) GU=$GU${p%????} ;;
+      *) GU=$GU$p://; continue ;;
+    esac
+    h=${r%%[/[:space:]\"\']*}; r=${r#"$h"}
+    case "$r" in /api/v3|/api/v3/*|/api/v3[[:space:]\"\']*) r=${r#???????} ;; esac
+  done
+  GU=$GU$r
+}
 # 0.3.5 F16: gh api 조각($1)이 읽기가 아닌 요청인가(0 = 쓰기). gh 공식 문서: 방식을 주지 않으면 GET, 필드(-f·-F·--field·--raw-field)가 있으면 POST ·
 #   --method GET 이면 필드는 질의 문자열. 그래서 -X·--method 값이 하나라도 GET 이 아니면(변수·따옴표로 쪼갠 값 포함) 쓰기 · 방식 값이 모두 GET 이면 읽기 ·
 #   방식이 없으면 필드나 --input 이 있을 때 쓰기. 짧은 옵션 묶음은 gh api 의 켜기 옵션 -i 하나뿐이라 -iX·-if 까지 본다
@@ -2454,10 +2500,11 @@ hv_deploy() {
   #   :·-·=·, 가 붙은 꼴(wrangler secret:put · railway up:x)은 막힌다. vercel aliases 는 alias 와 같이
   #   0.3.7 G1: heroku rollback·releases:rollback·pg:reset · netlify rollback·sites:delete(같은 경계 — heroku releases·releases:info·restart 는 통과)
   #   보완(검사 A#7): heroku apps:destroy(netlify sites:delete 와 같은 성격 — apps:info 는 통과)
+  #   0.4.7 F2: heroku apps:transfer(앱 넘기기)·apps:rename(이름 바꾸기)도 같은 갈래(멈춤 중에는 다른 배포처럼 풀림)
   #   0.4.0 G4: gh release create·delete·edit·upload · gh pr|release|workflow 뒤 하위명령 앞의 -R|--repo <저장소>(옵션 순서만 다른 철자)도 같게
   #   0.4.0 보완(검사 C#5·A#9): vercel --target production(=) · ntl(netlify 별칭) deploy·rollback·sites:delete · gh workflow enable·disable · gh run rerun
   local ghr="([[:space:]]+(-r|--repo)(=|[[:space:]]+)[^[:space:];&|]+)?"
-  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|--target([[:space:]]+|=)[\"']?production|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|(netlify|ntl)[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy)([^A-Za-z0-9]|$)|(netlify|ntl)[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr${ghr}[[:space:]]+merge|release${ghr}[[:space:]]+(create|delete|edit|upload)|workflow${ghr}[[:space:]]+(run|enable|disable)|run${ghr}[[:space:]]+rerun)|ssh[[:space:]]|scp[[:space:]])"
+  local re_deploy="${S}(vercel([[:space:]][^;&|]*)?(--prod|--target([[:space:]]+|=)[\"']?production|[[:space:]](deploy|promote|rollback|alias|aliases|redeploy)([^A-Za-z0-9]|$))|vercel[[:space:]]*($|[;&|])|(netlify|ntl)[[:space:]]+deploy|heroku[[:space:]]+(rollback|releases:rollback|pg:reset|apps:destroy|apps:transfer|apps:rename)([^A-Za-z0-9]|$)|(netlify|ntl)[[:space:]]+(rollback|sites:delete)([^A-Za-z0-9]|$)|firebase[[:space:]]+deploy|wrangler[[:space:]]+(deploy|publish|rollback|versions[[:space:]]+deploy|pages[[:space:]]+(deploy|deployment[[:space:]]+(create|delete))|secret|secrets-store)([^A-Za-z0-9]|$)|(fly|flyctl)[[:space:]]+deploy|railway[[:space:]]+(up|deploy|redeploy|down|restart|deployment[[:space:]]+(up|redeploy))([^A-Za-z0-9]|$)|gcloud[[:space:]][^;&|]*deploy|eb[[:space:]]+deploy|(serverless|sls)[[:space:]]+deploy|amplify[[:space:]]+publish|docker[[:space:]]+push|kubectl[[:space:]]+(apply|delete|rollout)|terraform[[:space:]]+apply|pm2[[:space:]]+(deploy|restart|reload)([^A-Za-z0-9]|$)|gh[[:space:]]+(pr${ghr}[[:space:]]+merge|release${ghr}[[:space:]]+(create|delete|edit|upload)|workflow${ghr}[[:space:]]+(run|enable|disable)|run${ghr}[[:space:]]+rerun)|ssh[[:space:]]|scp[[:space:]])"
   local re_pkg_deploy="${S}(npm|pnpm|yarn|bun)[[:space:]]+((run|run-script)[[:space:]]+)?([a-z0-9_-]+:)?(deploy|release|publish|ship)([[:space:]:]|$)"
   # 0.4.0 G6(#10): vercel 의 첫 하위 명령이 조회(ls·list·inspect·logs)인 조각에서만 --prod 는 배포가 아니다(vercel ls --prod = 운영 배포 목록) —
   #   그 조각(; & | 앞까지)의 --prod 만 지운 사본(tv)으로 배포 규칙을 본다. 하위 명령 앞에 옵션이 있거나(vercel --prod ls) 다른 하위 명령이면 그대로 막는다
@@ -2514,13 +2561,15 @@ hv_deploy() {
   #   F16-f: 경로 판정 전에 // 를 / 로 모은다(pulls/70//merge · git//refs — 판정용 사본만)
   #   F16-a·b: …/git/refs(가지 참조 옮기기 = PR 없이 합치기)·…/contents(API 로 직접 커밋)를 읽기가 아닌 요청으로 겨냥(gha_write)
   #   F16-d: graphql 질의를 파일에서 읽으면(-f·-F·--field·--raw-field 값이 @ 로 시작 · --input) 변이 이름을 볼 수 없어 막는다
-  local mseg mn mrest=$t re_mga="gh([.]exe)?[[:space:]]+api([[:space:]][^;&|]*)?" d2=// d1=/
+  local mseg mn mu mrest=$t re_mga="gh([.]exe)?[[:space:]]+api([[:space:]][^;&|]*)?" d2=// d1=/
   while [[ $mrest =~ $re_mga ]]; do
     mseg=${BASH_REMATCH[0]}; mrest=${mrest#*"$mseg"}
     # 보완: 조각이 따옴표 안의 ; & |(--jq '.a|.b' · -H 'a;b')에서 끊겼으면(따옴표 짝이 안 맞음) 따옴표 밖의 구분자까지 다시 잡는다 — 뒤의 -X·경로·필드를 놓치지 않게
     if quote_odd "$mseg"; then gha_scan "$mseg$mrest"; mrest=${mseg}${mrest}; mrest=${mrest:${#GS}}; mseg=$GS; fi
     mn=$mseg; case "$mn" in *%*) pct_dec "$mn"; mn=$PD ;; esac
+    gha_url_strip "$mn"; mu=$GU   # 0.4.7 F1: 저장소 설정 경로 판정용 사본(주소 머리를 // 모으기 전에 지운다)
     while [[ $mn == *"$d2"* ]]; do mn=${mn//"$d2"/$d1}; done
+    while [[ $mu == *"$d2"* ]]; do mu=${mu//"$d2"/$d1}; done
     #   (보완 S7-3: 합치기·updateRef·deleteRef 는 멈춤 중에도 — API 로 직접 커밋하는 createCommitOnBranch 만 멈춤 중 풀림(push 와 같은 묶음))
     if has "$mn" "pulls/[^/[:space:]]*/merge([^A-Za-z0-9_]|$)|/merges([^A-Za-z0-9_]|$)|mergepullrequest|enablepullrequestautomerge|mergebranch|enqueuepullrequest|updateref|deleteref" \
       || { [ "$PS" = 0 ] && has "$mn" "createcommitonbranch"; }; then
@@ -2530,8 +2579,8 @@ hv_deploy() {
     # 0.3.7 G3: 저장소 설정 쓰기 — 저장소 뿌리(repos/<주인>/<저장소> 뒤가 ? · 공백 · 따옴표 · 끝: 기본 가지·이름·보관·공개 여부) ·
     #   가지 이름 바꾸기(/branches/<가지>/rename) · 가지 보호(/branches/<가지>/protection(/…)) · 강제 동기화(/merge-upstream). 읽기(GET)는 통과
     #   보완(검사 C#4·A#7): 이웃 꼴 — 저장소 규칙 묶음(/rulesets(/<번호>) — 지금 GitHub 가 권하는 가지 보호) · 소유권 넘기기(/transfer) ·
-    #   번호로 부르는 저장소 뿌리(repositories/<번호>)
-    if has "$mn" "[[:space:]][\"']?/?repos/[^/[:space:]\"']+/[^/[:space:]\"'?]+/?([?\"'[:space:])]|$)|[[:space:]][\"']?/?repositories/[0-9]+/?([?\"'[:space:])]|$)|/branches/[^[:space:]\"']+/(rename|protection)([/?\"'[:space:])]|$)|/merge-upstream([?\"'[:space:])]|$)|/rulesets(/[0-9]+)?/?([?\"'[:space:])]|$)|/transfer([?\"'[:space:])]|$)" \
+    #   번호로 부르는 저장소 뿌리(repositories/<번호>) · 0.4.7 F1: 경로는 전체 주소 머리를 지운 사본(mu)으로
+    if has "$mu" "[[:space:]][\"']?/?repos/[^/[:space:]\"']+/[^/[:space:]\"'?]+/?([?\"'[:space:])]|$)|[[:space:]][\"']?/?repositories/[0-9]+/?([?\"'[:space:])]|$)|/branches/[^[:space:]\"']+/(rename|protection)([/?\"'[:space:])]|$)|/merge-upstream([?\"'[:space:])]|$)|/rulesets(/[0-9]+)?/?([?\"'[:space:])]|$)|/transfer([?\"'[:space:])]|$)" \
       && gha_write "$mn"; then
       block "$MSG_REPOSET" "$MSG_REPOSET2"
     fi
@@ -4257,11 +4306,12 @@ ps_wide_search() {
 # 원격 주소(토큰이 들어 있을 수 있음)를 그대로 내보내는가 — git remote -v·get-url·show, git config --get-regexp·remote.<이름>.url.
 # 예외(통과): (a) 그 파이프 조각이 git 으로 시작하고(리다이렉트 > · 명령 치환 없음) 바로 뒤 조각이 개수만 세는 grep -c/-q · wc -l/-c 하나뿐일 때
 #            (b) --get-regexp 인자가 '^(이름|이름…)\.' 꼴이고 이름이 영숫자·- 뿐이며 remote·url 이 들어 있지 않을 때(원격 주소가 나올 수 없는 조회라 뒤 파이프와 무관)
+#            (c) 0.4.7: 같은 조각에 --name-only 와 (--get-regexp·--list·-l)이 함께일 때(이름만 나옴)
 #   명령 치환 $( ) · ` ` · <( ) 는 안쪽(괄호가 더 없는 것)부터 따로 판정한다 — 안에서 개수만 세면(echo "$(git config … | grep -c x || true)")
 #   밖으로 나가는 건 개수뿐이라 통과, 안에서 원문이 나오면(echo "$(git remote -v)" · x=$(git remote -v)) 차단. 원격 주소 조회였던 자리는 _CS_ 로,
 #   그 밖의 치환은 괄호만 벗겨 안쪽 낱말을 바깥 판정에 남긴다
 remote_url_out() {
-  local s=$1 m names nm ok c pl k i p nx inner
+  local s=$1 m names nm ok c pl k i p nx inner pq pre qc qr cw cf ca
   local re_ru='git[[:space:]]+(remote([[:space:]]+(-v|--verbose|get-url|show))|config[^;&|]*(--get-regexp|remote[.][^[:space:]]*[.]url))'
   local re_gr='--get-regexp[[:space:]]+("\^\(([[:alnum:]|-]+)\)\\\."|'"'"'\^\(([[:alnum:]|-]+)\)\\\.'"'"')'
   local re_cnt='^[[:space:]]*(grep([[:space:]]+-[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[cq][a-zA-Z]*|--count|--quiet|--silent)([[:space:]]|$)|wc[[:space:]]+-[lc]+([[:space:]]|$))'
@@ -4295,6 +4345,59 @@ remote_url_out() {
       has "$p" "$re_ru" || continue
       # (b) 좁은 --get-regexp(원격 주소가 나올 수 없음) — 뒤 파이프와 무관
       case "$p" in *'--get-regexp __GRX__'*) has "${p//--get-regexp __GRX__/ }" "$re_ru" || continue ;; esac
+      # (c) 0.4.7 F4: 같은 조각(; & | 로 나뉜 한 덩어리 — & 가 섞인 조각은 예외 없음)의 git config 에 --name-only 와 (--get-regexp·--list·-l)이
+      #   함께면 이름만 나온다(원격 주소 아님) — 뒤 파이프와 무관. --get(값을 냄)은 예외 아님.
+      #   옵션은 따옴표 묶음('…'·"…" — 닫히지 않으면 그 뒤 전부)을 지운 사본에서 앞뒤 공백 경계로만 본다(값 'x --name-only' · --local 을 옵션으로 읽지 않게)
+      case "$p" in *'&'*) ;; *)
+        pq=$p
+        while :; do
+          pre=${pq%%[\"\']*}; [ "$pre" = "$pq" ] && break
+          qc=${pq:${#pre}:1}; qr=${pq:$((${#pre} + 1))}
+          case "$qr" in *"$qc"*) pq="$pre ${qr#*"$qc"}" ;; *) pq=$pre; break ;; esac
+        done
+        # W3: 조각의 명령 자리(앞 공백만 건너뜀 — env·VAR= 없이)가 git config 일 때만(사이 옵션은 -C <폴더>·--no-pager 만).
+        #   # (주석 — 뒤 글자는 인자가 아님)·단독 -- (뒤는 인자)·--no-name-only(앞 --name-only 를 무름)가 있으면 예외 없음
+        cw=${pq#"${pq%%[![:space:]]*}"}; cf=0
+        case "$cw" in git[[:space:]]*)
+          cw=${cw#git}
+          while :; do
+            cw=${cw#"${cw%%[![:space:]]*}"}
+            case "$cw" in
+              -C[[:space:]]*) cw=${cw#-C}; cw=${cw#"${cw%%[![:space:]]*}"}; cw=${cw#"${cw%%[[:space:]]*}"} ;;
+              --no-pager[[:space:]]*) cw=${cw#--no-pager} ;;
+              *) break ;;
+            esac
+          done
+          case "$cw" in config[[:space:]]*) cf=1 ;; esac ;;
+        esac
+        case "$pq" in *'#'*|*--no-name-only*) cf=0 ;; esac
+        # 보완 2·3: 허용 목록 — ① 조각 원문에 $ · 백틱 · { · } 가 있으면(셸 펼침으로 --no-name 등을 만들 수 있음) 예외 없음
+        #   ② 따옴표·역슬래시를 지운 사본에서 config 뒤 - 로 시작하는 낱말은 아래 목록과 정확히 같아야 한다(줄여 쓴 --no-name · --type= 등은 예외 없음)
+        case "$p" in *'$'*|*'`'*|*'{'*|*'}'*) cf=0 ;; esac
+        if [ "$cf" = 1 ]; then
+          cw=${p//\"/}; cw=${cw//\'/}; cw=${cw//\\/}; cw=${cw#"${cw%%[![:space:]]*}"}; cw=${cw#git}
+          while :; do
+            cw=${cw#"${cw%%[![:space:]]*}"}
+            case "$cw" in
+              -C[[:space:]]*) cw=${cw#-C}; cw=${cw#"${cw%%[![:space:]]*}"}; cw=${cw#"${cw%%[[:space:]]*}"} ;;
+              --no-pager[[:space:]]*) cw=${cw#--no-pager} ;;
+              *) break ;;
+            esac
+          done
+          case "$cw" in config[[:space:]]*) cw=${cw#config} ;; *) cf=0; cw="" ;; esac
+          while [ -n "$cw" ]; do
+            cw=${cw#"${cw%%[![:space:]]*}"}; [ -z "$cw" ] && break
+            ca=${cw%%[[:space:]]*}; cw=${cw#"$ca"}
+            case "$ca" in
+              --name-only|--get-regexp|--list|-l|--local|--global|--system|--worktree|--null|-z|--show-origin|--show-scope) ;;
+              -*) cf=0; break ;;
+            esac
+          done
+        fi
+        has "$pq" "(^|[[:space:]])--([[:space:]]|$)" && cf=0
+        if [ "$cf" = 1 ] && has "$pq" "(^|[[:space:]])--name-only([[:space:]]|$)" \
+          && has "$pq" "(^|[[:space:]])(--get-regexp|--list|-l)([[:space:]]|$)"; then continue; fi ;;
+      esac
       # (a) git 으로 시작하는 조각의 출력을 개수만 세는 조각 하나로 받고 끝
       if [ "$((i + 2))" -eq "$k" ]; then
         nx=${P[$((i + 1))]}

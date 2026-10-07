@@ -877,6 +877,14 @@ def main():
     check_run_retry_042b(res)
     check_restore_copy_043(res)
     check_edit_hint_044(res)
+    check_ghapi_url_047(res)
+    check_method_eq_047(res)
+    check_heroku_047(res)
+    check_approvals_guard_047(res)
+    check_config_name_only_047(res)
+    check_heredoc_md_git_047(res)
+    check_fix_047(res)
+    check_fix2_047(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -6421,6 +6429,246 @@ def check_edit_hint_044(res):
             if code != want or "Edit 도구로" not in err or "파일을 고치려는 것이면(코드·시험 파일 포함) Edit 도구로" not in err:
                 res["fails"].append(("0.4.4 ③ go 차례 인터프리터 쓰기 → 막힘 + 'Edit 도구로' 안내", want, code, call[0],
                                      json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
+
+
+def _rows_047(res, label, rows):
+    """0.4.7 시험 공용: rows = [(phase|"pause", 기대, 명령)] — 단계별로 프로젝트를 하나씩 만들어 돌린다"""
+    fut = int(time.time()) + 3600
+    by = {}
+    for ph, want, cmd in rows:
+        by.setdefault(ph, []).append((want, bash(cmd)))
+    for ph, cases in by.items():
+        proj = _pause_proj_042(fut) if ph == "pause" else make_project(phase=ph)
+        try:
+            for want, call in cases:
+                code, err = run(proj, *call)
+                res["total"] += 1
+                if code != want:
+                    res["fails"].append(("0.4.7 %s(%s)" % (label, ph or "밖"), want, code, call[0],
+                                         json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+        finally:
+            rmtree_rw(proj)
+
+
+def check_ghapi_url_047(res):
+    """0.4.7 F1(사용자 신고): gh api 를 전체 주소(https://api.github.com/… · http:// · 대문자 · GHE https://<호스트>/api/v3/…)로 부르면
+    짧은 경로(repos/o/r)와 판정이 같다 — 저장소 지우기(밖에서도)·저장소 설정 바꾸기(리팩토링 중). 짝마다 경로 꼴과 같은 결과인지 +
+    기대값(막힘 2 · 통과 0)인지 따로 본다(짝만 보면 둘 다 통과여도 초록이 된다)"""
+    heads = ["https://api.github.com/", "http://api.github.com/", "HTTPS://API.GITHUB.COM/", "https://ghe.example.com/api/v3/"]
+    # (단계, 기대, 앞, 경로, 뒤)
+    pairs = [(None, B, "gh api -X DELETE ", "repos/o/r", ""),
+             (None, B, "gh api -X DELETE ", "repos/o/r/git/refs/heads/x", ""),
+             (None, OK, "gh api -X DELETE ", "repos/o/r/issues/comments/1", ""),
+             ("EXECUTE", B, "gh api -X PATCH ", "repos/o/r", " -f name=x"),
+             ("EXECUTE", B, "gh api --method PATCH ", "repositories/123", " -f name=x"),
+             ("EXECUTE", OK, "gh api ", "repos/o/r", ""),
+             ("EXECUTE", OK, "gh api ", "repos/o/r/pulls", "")]
+    for ph, want, pre, path, post in pairs:
+        proj = make_project(phase=ph)
+        try:
+            base, _ = run(proj, *bash(pre + path + post))
+            res["total"] += 1
+            if base != want:
+                res["fails"].append(("0.4.7 F1 경로 꼴 기대값", want, base, "Bash", pre + path + post, ""))
+            for h in heads:
+                cmd = pre + h + path + post
+                code, err = run(proj, *bash(cmd))
+                res["total"] += 2
+                if code != base:
+                    res["fails"].append(("0.4.7 F1 전체 주소 = 경로 꼴(짝)", base, code, "Bash", cmd, err.strip()[:300]))
+                if code != want:
+                    res["fails"].append(("0.4.7 F1 전체 주소 기대값", want, code, "Bash", cmd, err.strip()[:300]))
+        finally:
+            rmtree_rw(proj)
+    u = "https://api.github.com/repos/o/r"
+    _rows_047(res, "F1 따옴표·등호 철자 전체 주소 → 막힘", [
+        (None, B, "gh api -X DELETE '%s'" % u), (None, B, 'gh api -X DELETE "%s"' % u),
+        (None, B, "gh api --method=DELETE %s" % u), (None, B, "gh api -X=DELETE %s" % u),
+        ("EXECUTE", B, "gh api -X PATCH '%s' -f name=x" % u), ("EXECUTE", B, 'gh api -X PATCH "%s" -f name=x' % u)])
+    _rows_047(res, "F1 멈춤 중 저장소 설정 전체 주소 → 막힘", [
+        ("pause", B, "gh api -X PATCH %s -f default_branch=x" % u),
+        ("pause", B, "gh api --method PATCH https://api.github.com/repositories/123 -f name=x"),
+        ("pause", B, "gh api -X PATCH https://ghe.example.com/api/v3/repos/o/r -f name=x")])
+
+
+def check_method_eq_047(res):
+    """0.4.7 F5: 지우기 판정의 방법 옵션 철자를 gha_write 와 같게 — -X=DELETE · -X='DELETE' · -iX DELETE 도 막고, -X=GET 은 통과(밖)"""
+    _rows_047(res, "F5 -X= 철자", [
+        (None, B, "gh api -X=DELETE repos/o/r"), (None, B, "gh api -X='DELETE' repos/o/r"), (None, B, "gh api -iX DELETE repos/o/r"),
+        (None, OK, "gh api -X=GET repos/o/r")])
+
+
+def check_heroku_047(res):
+    """0.4.7 F2: heroku apps:transfer(앱 넘기기)·apps:rename(이름 바꾸기) = 배포 묶음 — 리팩토링 중 막고, 멈춤 중 풀리고,
+    apps:info 는 통과, 리팩토링 밖은 같은 꼴 apps:destroy 의 밖 결과와 같다"""
+    xs = ["heroku apps:transfer -a app x@example.com", "heroku apps:rename new -a app"]
+    rows = []
+    for ph in ("EXECUTE", "CHECKUP"):
+        rows += [(ph, B, c) for c in xs]
+    rows += [("pause", OK, c) for c in xs] + [("EXECUTE", OK, "heroku apps:info -a app")]
+    _rows_047(res, "F2 heroku 넘기기·이름 바꾸기", rows)
+    proj = make_project()
+    try:
+        ref, _ = run(proj, *bash("heroku apps:destroy -a app --confirm app"))
+        for c in xs:
+            code, err = run(proj, *bash(c))
+            res["total"] += 1
+            if code != ref:
+                res["fails"].append(("0.4.7 F2 밖 = apps:destroy 밖 결과", ref, code, "Bash", c, err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
+
+
+def check_approvals_guard_047(res):
+    """0.4.7(F3 은 이번 판에서 뺌 — 사장님 결정): 승인 기록을 파이썬으로 읽기·쓰기는 지금처럼 막힌다(회귀 가드).
+    쓰기는 'a'·'w'·write_text 와 'r+'(interp_writes 의 방식 글자 판정 밖 — 다른 겹이 막는다)"""
+    cmds = ["python -c \"print(open('docs/refactor/APPROVALS.log').read())\"",
+            "python -c \"import pathlib; print(pathlib.Path('docs/refactor/APPROVALS.log').read_text())\"",
+            "python -c \"open('docs/refactor/APPROVALS.log','a').write('x')\"",
+            "python -c \"open('docs/refactor/APPROVALS.log','w').write('x')\"",
+            "python -c \"import pathlib; pathlib.Path('docs/refactor/APPROVALS.log').write_text('x')\"",
+            "python -c \"open('docs/refactor/APPROVALS.log','r+').write('x')\""]
+    _rows_047(res, "승인 기록 파이썬 읽기·쓰기 → 막힘", [(ph, B, c) for ph in ("EXECUTE", "CHECKUP") for c in cmds])
+
+
+def check_config_name_only_047(res):
+    """0.4.7 F4: git config --name-only + (--get-regexp·--list·-l)이 같은 조각에 함께면 이름만 나와 통과. --get(값)·다른 조각의 --name-only ·
+    따옴표 안 글자('x --name-only' · "--name-only|.")·--local(-l 아님)은 그대로 막힌다(원격 주소 출력)"""
+    ok = ["git config --local --name-only --get-regexp '^branch\\.'", "git config --name-only --get-regexp 'remote\\..*\\.url'",
+          "git config --name-only -l"]
+    bad = ["git config --get-regexp 'remote\\..*\\.url'", "git config --name-only --get remote.origin.url",
+           "git config --get-regexp 'remote\\..*\\.url'; echo --name-only", "git config --local --name-only --get remote.origin.url",
+           "git config --get-regexp 'remote\\..*\\.url' 'x --name-only'", "git config --get-regexp \"remote\\..*\\.url\" \"--name-only|.\"",
+           "git config --get-regexp 'remote\\..*\\.url' 'x --name-only y'"]
+    _rows_047(res, "F4 config --name-only", [(ph, OK, c) for ph in (None, "EXECUTE") for c in ok]
+              + [(ph, B, c) for ph in (None, "EXECUTE") for c in bad])
+
+
+def check_fix_047(res):
+    """0.4.7 보완(검사 A 🔴2·보안 검사): ① F4 예외는 조각의 명령 자리가 git config(사이 -C <폴더>·--no-pager 만)일 때만 —
+    # 주석·단독 -- 뒤·다른 git 명령(remote get-url·-v·show)·env·VAR=·--no-name-only 는 막힘 ② F6 git 보기 예외는 명령 전체(heredoc 본문 제외)에
+    git 설정·외부 diff·pager·git 폴더 바꾸기 글자가 없을 때만 ③ 줄인 긴 옵션(--outp·--ext·--textc·--exe)·끼운 따옴표·역슬래시도 보기 아님"""
+    f4_ok = ["git config --name-only -l", "  git config --name-only --get-regexp 'remote\\..*\\.url'",
+             "git -C ./x config --name-only --get-regexp 'remote\\..*\\.url'",
+             "git --no-pager config --name-only --get-regexp 'remote\\..*\\.url'",
+             "git -C x --no-pager config --name-only --get-regexp 'remote\\..*\\.url'",
+             "git config --name-only --get-regexp 'remote\\..*\\.url' | grep remote"]
+    f4_bad = ["git remote get-url origin # git config --name-only -l", "git remote -v # git config --name-only -l",
+              "git remote show -n origin -- git config --name-only -l",
+              "git config --name-only --no-name-only --get-regexp 'remote\\..*\\.url'",
+              "git config --name-only --get-regexp 'remote\\..*\\.url' # x", "git config --name-only --get-regexp 'remote\\..*\\.url' -- x",
+              "git config --get-regexp 'remote\\..*\\.url' # --name-only", "git config --get-regexp 'remote\\..*\\.url' -- --name-only",
+              "env git config --name-only --get-regexp 'remote\\..*\\.url'",
+              "FOO=1 git config --name-only --get-regexp 'remote\\..*\\.url'"]
+    _rows_047(res, "보완 F4 명령 자리·주석·-- ", [(ph, OK, c) for ph in (None, "EXECUTE") for c in f4_ok]
+              + [(ph, B, c) for ph in (None, "EXECUTE") for c in f4_bad])
+    doc = "docs/refactor/EXECUTION_LOG.md"
+    head = "cat >> %s <<'EOF'\ngit push --force origin main\nEOF\n" % doc
+    bad = ["git config diff.external sh && git diff " + doc, "export GIT_EXTERNAL_DIFF=sh; git diff " + doc,
+           "GIT_PAGER=sh git log -p " + doc, "git --git-dir=.git add " + doc, "git -C x config diff.external sh\ngit diff " + doc,
+           "git config core.pager sh\ngit log " + doc, "PAGER=sh git log " + doc, "git config filter.a.clean sh && git add " + doc,
+           "echo '* diff=x' > .gitattributes && git diff " + doc, "git config diff.x.textconv sh && git diff " + doc,
+           "git config core.fsmonitor sh && git status " + doc, "export GIT_CONFIG_GLOBAL=x; git diff " + doc,
+           "GIT_DIR=.git git add " + doc, "git --work-tree=. add " + doc, "GIT_WORK_TREE=. git add " + doc,
+           "git diff --outp=x.sh " + doc, "git diff --ext " + doc, "git diff --textc " + doc, "git diff --out\"put\"=x.sh " + doc,
+           "git diff --o\\utput=x.sh " + doc, "git diff --exe " + doc]
+    ok = ["git add -- " + doc, "git --no-pager diff " + doc, "git diff --stat " + doc, "git diff --cached " + doc,
+          "git status --short " + doc, "git log --oneline " + doc, "git commit -o -m x -- " + doc,
+          "git commit --only -m x -- " + doc, "git diff --exit-code " + doc]
+    rows = [(B, head + t, t) for t in bad] + [(OK, head + t, t) for t in ok]
+    # 본문(heredoc 안)의 git config·pager 글자는 판정에 쓰지 않는다(글)
+    #   (본문을 보면 막히는 줄 git push --force · `vitest` 를 같이 넣어 둔다 — 본문 글자를 GVX 에 넣으면 빨강)
+    rows.append((OK, "cat >> %s <<'EOF'\ngit push --force origin main\n- `vitest` 로 봄 · `git config diff.external` 은 위험\n"
+                     "- GIT_PAGER 도 · --git-dir 도\nEOF\ngit add %s" % (doc, doc), "본문에 git config"))
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        for want, cmd, what in rows:
+            code, err = run(proj, *bash(cmd))
+            res["total"] += 1
+            if code != want:
+                res["fails"].append(("0.4.7 보완 F6 git 보기 좁히기(%s)" % what, want, code, "Bash", cmd[:120], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
+
+
+def check_fix2_047(res):
+    """0.4.7 보완 2(자동 보안 검사): ① F4 예외는 따옴표·역슬래시를 지운 낱말이 --no-n 으로 시작하면 없음(줄여 쓴 --no-name 등)
+    ② F6 GVX 는 cat·tee 의 따옴표 구분자 본문만 빼고 실행 heredoc(bash <<'X')·따옴표 없는 <<EOF 본문은 본다
+    ③ GVX 글자에 exec_path·hookspath·attributes·editor·visual"""
+    rx = "--get-regexp 'remote\\..*\\.url'"
+    f4_bad = ["git config --name-only %s %s" % (o, rx) for o in ("--no-name", "--no-name-o", "--no-n", '--"no-name"')]
+    # 보완 3(R7): 셸 펼침($ · { } · 백틱)·목록 밖 옵션(--type= · --includes)이 있으면 예외 없음(허용 목록)
+    f4_bad += ["X=no-name; git config --name-only --$X " + rx, "git config --name-only --{no-name,null} " + rx,
+               "git config --name-only --no-${x}name " + rx, "git config --name-only --type=bool --no-name " + rx,
+               "git config --name-only --includes --no-nam " + rx, "git config --name-only --type=bool " + rx, "git config --name-only --`echo no-name` " + rx,
+               # - 로 시작하지 않는 낱말이 펼쳐져 옵션이 되는 꼴(① 만 잡는다)
+               "X=--no-name-only; git config --name-only $X " + rx, "git config --name-only {--no-name-only,} " + rx,
+               # 재검사 A4: 원문에 --no-name-only 글자가 없어 { } 검사 한 줄만 잡는 꼴
+               "git config --name-only {--no-name,} " + rx]
+    f4_ok = ["git config --name-only " + rx, "git config --global --name-only -l", "git config --name-only -z --get-regexp '^branch\\.'",
+             "git config --name-only --show-origin --show-scope --null " + rx]
+    _rows_047(res, "보완 2 F4 --no-n 줄임", [(ph, B, c) for ph in (None, "EXECUTE") for c in f4_bad]
+              + [(ph, OK, c) for ph in (None, "EXECUTE") for c in f4_ok])
+    doc = "docs/refactor/EXECUTION_LOG.md"
+    head = "cat >> %s <<'EOF'\ngit push --force origin main\nEOF\n" % doc
+    bad = ["bash <<'X'\ngit config diff.external sh\nX\ngit diff " + doc,
+           "cat > /tmp/y <<EOF\n$(git config diff.external sh)\nEOF\ngit diff " + doc,
+           "export GIT_EXEC_PATH=x; git diff " + doc, "echo x >> .git/info/attributes; git diff " + doc,
+           "export GIT_EDITOR=sh; git commit --only -m x -- " + doc, "export VISUAL=sh; git commit --only -m x -- " + doc]
+    rows = [(B, head + t, t) for t in bad]
+    rows.append((OK, "cat >> %s <<'EOF'\ngit push --force origin main\n- `vitest` · git config core.hooksPath · GIT_EXEC_PATH · "
+                     "core.editor · VISUAL · .git/info/attributes\nEOF\ngit add %s" % (doc, doc), "따옴표 cat 본문의 새 글자"))
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        for want, cmd, what in rows:
+            code, err = run(proj, *bash(cmd))
+            res["total"] += 1
+            if code != want:
+                res["fails"].append(("0.4.7 보완 2 F6(%s)" % what, want, code, "Bash", cmd[:120], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
+
+
+def check_heredoc_md_git_047(res):
+    """0.4.7 F6(사용자 신고): 문서(.md)를 따옴표 구분자 heredoc 으로 쓴 뒤 git add·diff·status·log·show·commit 으로 그 문서를 다시 불러도
+    본문(백틱 글자)은 글이다(go 턴 통과). git 앞 옵션은 -C <폴더>·--no-pager 만 건너뛴다. 실행으로 넘기는 꼴(bash x.md · | bash ·
+    > 파일 · -c 옵션 · difftool · && source)과 따옴표 없는 <<EOF(백틱이 진짜 실행됨)는 그대로 막힌다"""
+    doc = "docs/refactor/EXECUTION_LOG.md"
+    head = "cat >> %s <<'EOF'\n" % doc
+    # 신고 원문에서 백틱 든 줄 2개 + 뒤 git add 줄을 그대로 복사(줄이지 않음)
+    report = (head + "\n## P2-57 카카오 봇: 대화 기록 읽기가 왜 0.5초를 넘는지 재는 기록 남기기 — 2026-10-08 (B15 2/2 마지막 · 자동 모드)\n"
+              "- 검증: 새 시험 고치기 전 3 빨강·1 초록 → 후 초록 · `lib/bot-kakao-route.test.ts` 포함 56/56 · **묶음 끝 전체 `npm test` 130파일 2572/2572**"
+              "(검사관 반영 시험 1 더해 지금은 2573) · tsc 0 · lint 오류 0(경고 4 기존) · **변이** `>=` → `<` → 새 시험 2 빨강 → 원복. 빌드는 안 돌림(PR CI 가 함).\n"
+              "- 되돌리는 법: 커밋은 `git log --grep \"^refactor: P2-57 \"` 로 찾는다. 이 묶음의 마지막 단계라 `git revert --no-edit <해시>`"
+              "(기록도 그 전으로 — 다시 안 할 거면 `/refactor:approve 보류 P2-57`).\n"
+              "EOF\n"
+              "git add -- lib/bot-store.ts lib/bot-store.test.ts docs/refactor/REFACTOR_PLAN.md docs/refactor/STATE.md docs/refactor/EXECUTION_LOG.md"
+              " && git diff --cached --stat")
+    bodies = ["- `vitest` 로 봄", "- `lib/x.test.ts` 새 파일"]
+    ok_tails = ["git add -- %s" % doc, "git diff -- %s" % doc, "git status --short %s" % doc, "git log --oneline -- %s" % doc,
+                "git show HEAD:%s" % doc, "git commit --only -m x -- %s" % doc, "git -C ./ add %s" % doc, "git --no-pager diff %s" % doc,
+                "git commit -o -m x -- %s" % doc]
+    bad_tails = ["bash %s" % doc, "git show HEAD:%s | bash" % doc, "git diff %s > x.sh" % doc, "git -c core.pager=sh diff %s" % doc,
+                 "git difftool %s" % doc, "git add %s && source %s" % (doc, doc),
+                 # 메인 추가(자동 보안 검사): 바깥 프로그램을 돌리거나 파일로 쓰는 옵션
+                 "git diff --ext-diff %s" % doc, "git diff --textconv %s" % doc, "git diff --output=x.sh %s" % doc,
+                 "git log --output x %s" % doc,
+                 "git diff $(sh %s)" % doc, "git diff `sh %s`" % doc]
+    rows = [(OK, report, "신고 원문")]
+    for b in bodies:
+        rows += [(OK, head + b + "\nEOF\n" + t, "따옴표 EOF + " + t) for t in ok_tails]
+        rows += [(B, head + b + "\nEOF\n" + t, "따옴표 EOF + " + t) for t in bad_tails]
+        rows.append((B, "cat >> %s <<EOF\n%s\nEOF\ngit add %s" % (doc, b, doc), "따옴표 없는 EOF + git add"))
+    rows.append((B, "npm test", "대조군 npm test 단독"))
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        for want, cmd, what in rows:
+            code, err = run(proj, *bash(cmd))
+            res["total"] += 1
+            if code != want:
+                res["fails"].append(("0.4.7 F6 문서 heredoc 뒤 git 보기(%s)" % what, want, code, "Bash", cmd[:120], err.strip()[:300]))
     finally:
         rmtree_rw(proj)
 
