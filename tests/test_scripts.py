@@ -7489,6 +7489,43 @@ def check_reapprove_closed_notice_044(check):
     # ⓗ P1-2 🔧(경로 있음) 승인 → 빈 파일 → 'P1-2 P1-1'(P1-1 새 🛠 승인이 좁힘) → 🔧 P1-2 엔 🔒 없음
     run045("ⓗ 이미 승인된 🔧 카드(P1-2)는 좁혀져도 🔒 없음", "P1-2", "P1-2 P1-1", b"P1-1\n", False, plan=plan_fix)
 
+    # ⓘ 경로 없는 카드(P1-5 글만)가 이미 승인된 채 좁혀져도 🔒 없음(기준선 칸이 "?"라 애초에 ra_pend 에 안 들어감)
+    d = project(plan=PLAN_033)
+    try:
+        approve(d, "P1-5")
+        lf(af(d), "")
+        out = approve(d, "P1-5 P1-2")
+        got = af(d).read_bytes() if af(d).exists() else None
+        check("0.4.5 ⓘ 경로 없는 카드(P1-5)가 이미 승인된 채 좁혀짐 → 🔒 없음 · 파일 좁혀짐",
+              got == b"P1-2\n" and NARROW in out and "🔒" not in out, f"file={got!r}\n{out}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ⓙ 이미 승인된 🛠 카드 두 장(P1-1·P1-2)이 함께 좁혀져 닫히면 각 카드가 '자기' 기준선으로만 🔒(다른 카드 기준선 재사용 금지)
+    C12 = closed("`tests/baseline/golden/d.json`", "P1-2")
+    d = project(plan=PLAN_033)
+    try:
+        approve(d, "P1-1 P1-2")
+        lf(af(d), "")
+        out = approve(d, "P1-2 P1-1 P1-3")
+        got = af(d).read_bytes() if af(d).exists() else None
+        check("0.4.5 ⓙ 이미 승인된 🛠 카드 두 장이 함께 좁혀짐 → 각자 자기 기준선으로 🔒 한 줄씩",
+              got == b"P1-3\n" and out.count("🔒") == 2 and C11 in out and C12 in out, f"file={got!r}\n{out}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ⓚ 두 겹 방어(ra_ids 조건 + AW_NARROWED 조건) 중 하나가 살아있으면 0.4.4 줄과 0.4.5 줄이 겹치지 않고 1개만 뜬다
+    d = project(plan=PLAN_033)
+    try:
+        approve(d, "P1-1 P1-2")
+        lf(af(d), "P1-2\n")
+        out = approve(d, "P1-1 P1-3")
+        got = af(d).read_bytes() if af(d).exists() else None
+        check("0.4.5 ⓚ 다른 ID만 든 파일 뒤 재승인 → 🔒 정확히 1개(0.4.4 줄)·'이번에 닫혔습니다' 없음",
+              out.count("🔒") == 1 and L11 in out and "이번에 닫혔습니다" not in out, f"file={got!r}\n{out}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
 
 if __name__ == "__main__":
     sys.exit(main())
