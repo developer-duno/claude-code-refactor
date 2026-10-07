@@ -876,6 +876,7 @@ def main():
     check_wrap_case_042b(res)
     check_run_retry_042b(res)
     check_restore_copy_043(res)
+    check_edit_hint_044(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -5915,7 +5916,7 @@ def check_doc_edit_042(res):
         _cases_042(res, proj, "F3 ② 불러오기 허용 목록 밖 → 막음", [(B, bash(c)) for c in import_bad])
         _cases_042(res, proj, "F3 ③ 위험 낱말 → 막음", [(B, bash(c)) for c in word_bad])
         _cases_042(res, proj, "F3 꼴(호출 하나가 아님·셸이 펼침) → 막음", [(B, bash(c)) for c in form_bad])
-        _cases_042(res, proj, "F3 막힐 때 둘째 줄 안내", [(B, bash("python scripts/x.py"))], need="docs/refactor 문서만 다루는 파이썬 한 줄로")
+        _cases_042(res, proj, "F3 막힐 때 둘째 줄 안내", [(B, bash("python scripts/x.py"))], need="docs/refactor 문서만 다루는 파이썬 한 줄도 됨")
         _cases_042(res, proj, "F3 하위 폴더에서는 아님", [(B, bash(passes[2]))], extra={"cwd": str(proj / "src")})
     finally:
         rmtree_rw(proj)
@@ -6404,6 +6405,24 @@ I_PASS_043 = [
 F5_PASS_043 = ["python -c \"print('1.2.3'.replace('.', '_'))\"",
                "python -c \"import json; print('.'.join(['a','b']).replace('a','c'))\"",
                "python -c \"s=open('docs/refactor/REPORT.md').read()" + "".join(".replace('a%d','b%d')" % (i, i) for i in range(60)) + "\""]
+
+
+def check_edit_hint_044(res):
+    """0.4.4 ③(잔치 신고): /refactor:go 차례에 인터프리터 히어독으로 코드·시험 파일을 쓰면 막히고(판정 그대로),
+    둘째 줄이 'Edit 도구로' 를 안내한다(옛 '문서 편집은 Edit 도구나 …' 는 문서 편집만 말해 코드 파일엔 길이 안 보였다)."""
+    rows = [(B, bash("python3 - <<'EOF'\nopen('lib/x.test.ts','w').write('x')\nEOF")),
+            (B, bash("python - <<'EOF'\nfrom pathlib import Path\nPath('src/app.ts').write_text('x')\nEOF")),
+            (B, bash("npm test"))]
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        for want, call in rows:
+            code, err = run(proj, *call)
+            res["total"] += 1
+            if code != want or "Edit 도구로" not in err or "파일을 고치려는 것이면(코드·시험 파일 포함) Edit 도구로" not in err:
+                res["fails"].append(("0.4.4 ③ go 차례 인터프리터 쓰기 → 막힘 + 'Edit 도구로' 안내", want, code, call[0],
+                                     json.dumps(call[1], ensure_ascii=False)[:120], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
 
 
 if __name__ == "__main__":
