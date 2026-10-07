@@ -1067,6 +1067,7 @@ def main():
     check_session_allow_notice_044(check)
     check_reapprove_closed_notice_044(check)
     check_docs_044(check)
+    check_docs_045(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -7181,15 +7182,9 @@ def check_docs_043(check):
 
 
 def check_docs_044(check):
-    """0.4.4 문서: 판 번호 네 곳(0.4.4) · README '0.4.4에서 달라진 점' 줄(0.4.3 줄 위 · 0.4.3 줄 남김) · §13 0.4.4 변경 이력 절(글머리 셋)."""
+    """0.4.4 문서: README '0.4.4에서 달라진 점' 줄(0.4.3 줄 위 · 0.4.3 줄 남김) · §13 0.4.4 변경 이력 절(글머리 셋).
+    (판 번호 네 곳 단언은 0.4.5 에서 check_docs_045 로 옮김)"""
     rd = (ROOT / "README.md").read_text(encoding="utf-8")
-    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
-    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
-    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
-    check("0.4.4 판 번호: plugin.json", '"version": "0.4.4"' in pj, "")
-    check("0.4.4 판 번호: marketplace.json", '"version": "0.4.4"' in mk, "")
-    check("0.4.4 판 번호: bug.yml placeholder", 'placeholder: "0.4.4"' in bg, "")
-    check("0.4.4 판 번호: README 배지", "version-0.4.4-blue" in rd, "")
     a, b = rd.find("> **0.4.4에서 달라진 점**:"), rd.find("> **0.4.3에서 달라진 점**:")
     check("0.4.4 문구 README 달라진 점 줄 존재(0.4.3 줄 위 · 0.4.3 줄 남김) + 세 안내",
           0 <= a < b and all(w in rd[a:b] for w in ('"지우지 마세요"', "`/refactor:approve 허용 <ID>`", '"Edit 도구로"')), rd[a:b] if a >= 0 else "")
@@ -7198,6 +7193,25 @@ def check_docs_044(check):
     check("0.4.4 문구 README §13 0.4.4 변경 이력 절(0.4.3 절 위) · 글머리 셋",
           sec.count("\n- **") == 3 and "**세션 시작 안내가 기준선 허용 파일 상태를 가림**" in sec
           and "**닫힌 허용을 다시 승인할 때 안내 한 줄**" in sec and '**인터프리터 쓰기 차단 안내에 "Edit 도구로"**' in sec, sec)
+
+
+def check_docs_045(check):
+    """0.4.5 문서: 판 번호 네 곳(0.4.5) · README '0.4.5에서 달라진 점' 줄(0.4.4 줄 위 · 0.4.4 줄 남김) · §13 0.4.5 변경 이력 절(0.4.4 절 위 · 글머리 하나)."""
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
+    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
+    check("0.4.5 판 번호: plugin.json", '"version": "0.4.5"' in pj, "")
+    check("0.4.5 판 번호: marketplace.json", '"version": "0.4.5"' in mk, "")
+    check("0.4.5 판 번호: bug.yml placeholder", 'placeholder: "0.4.5"' in bg, "")
+    check("0.4.5 판 번호: README 배지", "version-0.4.5-blue" in rd, "")
+    a, b = rd.find("> **0.4.5에서 달라진 점**:"), rd.find("> **0.4.4에서 달라진 점**:")
+    check("0.4.5 문구 README 달라진 점 줄 존재(0.4.4 줄 위 · 0.4.4 줄 남김) + 여는 명령",
+          0 <= a < b and "`/refactor:approve 허용 <ID>`" in rd[a:b], rd[a:b] if a >= 0 else "")
+    c, e = rd.find("### 0.4.5 (2026-10-07)"), rd.find("### 0.4.4 (2026-10-07)")
+    sec = rd[c:e] if 0 <= c < e else ""
+    check("0.4.5 문구 README §13 0.4.5 변경 이력 절(0.4.4 절 위) · 글머리 하나",
+          sec.count("\n- **") == 1 and "**빈 허용 파일이 좁혀져 닫힌 단계에도 🔒 안내**" in sec, sec)
 
 
 def check_docs_fix_042(check):
@@ -7436,13 +7450,81 @@ def check_reapprove_closed_notice_044(check):
         out = _ap040(d, "B1 자동", path_front=[fg])
         opened = af(d).exists()
         af(d).unlink(missing_ok=True)
+        allow_n = lambda: (d / "docs/refactor/APPROVALS.log").read_text(encoding="utf-8").count("| 허용 |")
+        n_before = allow_n()
         out = _ap040(d, "B1 자동", path_front=[fg])
-        check("0.4.4 ①(b) ⓒ 묶음 'B1 자동' 다시 승인 → P1-1 🔒 한 줄(🔧 P3-1 없음) · 허용 파일 안 생김",
+        check("0.4.4 ①(b) ⓒ 묶음 'B1 자동' 다시 승인 → P1-1 🔒 한 줄(🔧 P3-1 없음) · 허용 파일 안 생김 · 기록 '허용' 줄 수 그대로",
               opened and "이미 승인됨: [P1-1]" in out and "이미 승인됨: [P3-1]" in out and out.count("🔒") == 1
-              and lock("`tests/baseline/money.test.ts` `tests/baseline/golden/d.json`", "P1-1") in out and not af(d).exists(), out)
+              and lock("`tests/baseline/money.test.ts` `tests/baseline/golden/d.json`", "P1-1") in out and not af(d).exists()
+              and allow_n() == n_before, out)
     finally:
         for m_ in made:
             shutil.rmtree(m_, ignore_errors=True)
+
+    # 0.4.5: 빈 허용 파일(전부 허용)이 새 🛠 승인으로 좁혀져 이미 승인된 단계의 허용이 닫히면 그 단계에도 🔒 한 줄(허용 범위는 그대로)
+    closed = lambda bl, cid: f"   🔒 [{cid}] 기준선 허용이 이번에 닫혔습니다(고칠 기준선: {bl}) — 이 단계가 기준선을 고쳐야 하면 /refactor:approve 허용 {cid}"
+    C11 = closed("`tests/baseline/money.test.ts`", "P1-1")
+    NARROW = "이 단계들로 좁혔습니다"
+
+    def run045(title, first, again, want_bytes, want_closed, plan=PLAN_033):
+        d = project(plan=plan)
+        try:
+            approve(d, first)
+            lf(af(d), "")
+            out = approve(d, again)
+            got = af(d).read_bytes() if af(d).exists() else None
+            if want_closed:
+                ok = (got == want_bytes and NARROW in out and out.count(C11) == 1
+                      and out.find(NARROW) < out.find(C11) and out.count("🔒") == 1)
+            else:
+                ok = got == want_bytes and "🔒" not in out and ((NARROW in out) == (want_bytes != b""))
+            check(f"0.4.5 {title}", ok, f"file={got!r}\n{out}")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    # ⓕ 승인 P1-1 → 빈 파일 → 'P1-1 P1-2'(P1-2 새 🛠 승인이 좁힘) → P1-1 🔒 한 줄(좁힘 알림 뒤)
+    run045("ⓕ 빈 허용 파일이 새 승인(P1-2)으로 좁혀짐 → 이미 승인된 P1-1 에 🔒 한 줄(좁힘 알림 뒤)", "P1-1", "P1-1 P1-2", b"P1-2\n", True)
+    # ⓖ 'P1-1 P1-4'(P1-4 = 경로 없는 카드 → 좁힘 없음) → 빈 파일 그대로 · 🔒 없음
+    run045("ⓖ 좁힘 없음(P1-4 경로 없음) → 빈 파일 그대로 · 🔒 없음", "P1-1", "P1-1 P1-4", b"", False)
+    # ⓗ P1-2 🔧(경로 있음) 승인 → 빈 파일 → 'P1-2 P1-1'(P1-1 새 🛠 승인이 좁힘) → 🔧 P1-2 엔 🔒 없음
+    run045("ⓗ 이미 승인된 🔧 카드(P1-2)는 좁혀져도 🔒 없음", "P1-2", "P1-2 P1-1", b"P1-1\n", False, plan=plan_fix)
+
+    # ⓘ 경로 없는 카드(P1-5 글만)가 이미 승인된 채 좁혀져도 🔒 없음(기준선 칸이 "?"라 애초에 ra_pend 에 안 들어감)
+    d = project(plan=PLAN_033)
+    try:
+        approve(d, "P1-5")
+        lf(af(d), "")
+        out = approve(d, "P1-5 P1-2")
+        got = af(d).read_bytes() if af(d).exists() else None
+        check("0.4.5 ⓘ 경로 없는 카드(P1-5)가 이미 승인된 채 좁혀짐 → 🔒 없음 · 파일 좁혀짐",
+              got == b"P1-2\n" and NARROW in out and "🔒" not in out, f"file={got!r}\n{out}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ⓙ 이미 승인된 🛠 카드 두 장(P1-1·P1-2)이 함께 좁혀져 닫히면 각 카드가 '자기' 기준선으로만 🔒(다른 카드 기준선 재사용 금지)
+    C12 = closed("`tests/baseline/golden/d.json`", "P1-2")
+    d = project(plan=PLAN_033)
+    try:
+        approve(d, "P1-1 P1-2")
+        lf(af(d), "")
+        out = approve(d, "P1-2 P1-1 P1-3")
+        got = af(d).read_bytes() if af(d).exists() else None
+        check("0.4.5 ⓙ 이미 승인된 🛠 카드 두 장이 함께 좁혀짐 → 각자 자기 기준선으로 🔒 한 줄씩",
+              got == b"P1-3\n" and out.count("🔒") == 2 and C11 in out and C12 in out, f"file={got!r}\n{out}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ⓚ 두 겹 방어(ra_ids 조건 + AW_NARROWED 조건) 중 하나가 살아있으면 0.4.4 줄과 0.4.5 줄이 겹치지 않고 1개만 뜬다
+    d = project(plan=PLAN_033)
+    try:
+        approve(d, "P1-1 P1-2")
+        lf(af(d), "P1-2\n")
+        out = approve(d, "P1-1 P1-3")
+        got = af(d).read_bytes() if af(d).exists() else None
+        check("0.4.5 ⓚ 다른 ID만 든 파일 뒤 재승인 → 🔒 정확히 1개(0.4.4 줄)·'이번에 닫혔습니다' 없음",
+              out.count("🔒") == 1 and L11 in out and "이번에 닫혔습니다" not in out, f"file={got!r}\n{out}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":
