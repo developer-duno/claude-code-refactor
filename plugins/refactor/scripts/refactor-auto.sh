@@ -686,6 +686,8 @@ const [, , base, shotdir, ep, listFile, limit] = process.argv;
 const fs = require('fs');
 let pw;
 try { pw = require('playwright'); } catch (e) { console.log('NOPW\t' + String(e.message).split('\n')[0]); process.exit(0); }
+// 페이지 안에서 도는 판정 하나 — 기다림과 마지막 판정이 같이 쓴다(기대 글자는 인자로 넘긴다)
+const seen = w => ((document.body ? document.body.innerText : '') + '\n' + document.title).includes(w);
 (async () => {
   const origin = new URL(base).origin;
   let browser;
@@ -707,11 +709,14 @@ try { pw = require('playwright'); } catch (e) { console.log('NOPW\t' + String(e.
     });
     let line;
     try {
+      const t0 = Date.now();
       const res = await page.goto(base + p + '?_=' + ep, { waitUntil: 'load', timeout: Number(limit) * 1000 });
-      const text = await page.evaluate(() => (document.body ? document.body.innerText : ''));
+      // 0.4.6: 기대 글자 = 화면 글자 또는 페이지 제목 · 늦게 그려지면 화면당 남은 시간 안에서 나올 때까지 기다림(최소 0.5초 — playwright 의 timeout 0 은 무제한)
+      await page.waitForFunction(seen, want, { timeout: Math.max(500, Number(limit) * 1000 - (Date.now() - t0)) }).catch(() => {});
+      const has = await page.evaluate(seen, want);
       await page.screenshot({ path: shotdir + '/' + i + '.png', fullPage: true });
       const real = errs.filter(t => !(aborted > 0 && /ERR_FAILED|Failed to load resource/.test(t)));
-      line = ['PAGE', p, res ? res.status() : 0, text.includes(want) ? 'yes' : 'no', real.length, (real[0] || '').replace(/\s+/g, ' ').slice(0, 120)];
+      line = ['PAGE', p, res ? res.status() : 0, has ? 'yes' : 'no', real.length, (real[0] || '').replace(/\s+/g, ' ').slice(0, 120)];
     } catch (e) {
       line = ['PAGE', p, 0, 'no', errs.length, ('열기 실패: ' + String(e.message)).replace(/\s+/g, ' ').slice(0, 120)];
     }
