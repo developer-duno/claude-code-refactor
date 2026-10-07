@@ -7250,8 +7250,8 @@ def check_docs_047(check):
           and "승인 기록" not in line, line)
     c, e = rd.find("### 0.4.7 (2026-10-08)"), rd.find("### 0.4.6 (2026-10-07)")
     sec = rd[c:e] if 0 <= c < e else ""
-    check("0.4.7 문구 README §13 0.4.7 변경 이력 절(0.4.6 절 위) · 글머리 넷 · 사용자 이름 없음",
-          sec.count("\n- **") == 4 and "**전체 주소로 부르는 gh api 와 `-X=` 철자도 짧은 경로와 같게**" in sec
+    check("0.4.7 문구 README §13 0.4.7 변경 이력 절(0.4.6 절 위) · 글머리 다섯(알려진 빈틈 포함) · 사용자 이름 없음",
+          sec.count("\n- **") == 5 and "- **알려진 빈틈(0.4.7 기준 — 신고 오면 우선)** —" in sec and "`XDG_CONFIG_HOME`" in sec and "**전체 주소로 부르는 gh api 와 `-X=` 철자도 짧은 경로와 같게**" in sec
           and "**heroku 앱 넘기기·이름 바꾸기 = 배포 명령**" in sec and "**`git config --name-only` 는 통과**" in sec
           and "사용자 신고" in sec and "잔치" not in sec and "flowershop" not in sec and "승인 기록" not in sec, sec)
     check("0.4.7 F6 문구 README 달라진 점 줄 + §13 글머리(문서 heredoc 뒤 git add·diff 헛막힘)",

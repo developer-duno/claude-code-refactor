@@ -509,8 +509,9 @@ claude-code-refactor/
 
 - **전체 주소로 부르는 gh api 와 `-X=` 철자도 짧은 경로와 같게** — `gh api` 를 전체 주소(`https://api.github.com/repos/<주인>/<저장소>` · `http://` · 대문자 · GitHub Enterprise `https://<호스트>/api/v3/…`)로 부르면 주소 머리를 떼고 짧은 경로와 똑같이 판정합니다 — 저장소·원격 가지 지우기(늘)와 리팩토링 중 저장소 설정 바꾸기(멈춤 중에도). 지우기 판정의 방법 옵션도 `-X=DELETE`·`-X='DELETE'`·`-iX DELETE` 철자를 받습니다(사용자 신고 — 전체 주소·등호 철자로 부르면 판정을 비껴감).
 - **heroku 앱 넘기기·이름 바꾸기 = 배포 명령** — 리팩토링 중 `heroku apps:transfer`·`heroku apps:rename` 을 `heroku apps:destroy` 와 같은 배포 묶음으로 막습니다(잠깐 멈춤 중에는 다른 배포처럼 풀림 · `apps:info` 는 통과).
-- **`git config --name-only` 는 통과** — 같은 명령 조각에 `--name-only` 와 `--get-regexp`·`--list`·`-l` 이 함께면 설정 이름만 나와 원격 주소(토큰)가 찍히지 않으므로 통과합니다(사용자 신고). 값을 내는 `--get`, 따옴표 안 글자, 다른 명령 조각의 `--name-only` 는 지금처럼 막습니다.
-- **문서 heredoc 뒤 git add·diff 로 그 문서를 불러도 본문은 글** — 문서(`.md`)를 따옴표 구분자 heredoc(`<<'EOF'`)으로 쓴 뒤 `git add`·`diff`·`status`·`log`·`show`·`commit` 으로 그 문서를 다시 부르면 본문의 백틱 글자(`` `npm test` `` 등)를 실행으로 읽어 막던 헛막힘을 고쳤습니다(사용자 신고). git 앞 옵션은 `-C <폴더>`·`--no-pager` 만 건너뛰고, `-c`·`--ext-diff`·`--textconv`·`--output`·`--exec`, 파이프로 인터프리터에 넘기기, 파일로 쓰기, 따옴표 없는 `<<EOF` 는 지금처럼 막습니다.
+- **`git config --name-only` 는 통과** — 같은 명령 조각에 `--name-only` 와 `--get-regexp`·`--list`·`-l` 이 함께면 설정 이름만 나와 원격 주소(토큰)가 찍히지 않으므로 통과합니다(사용자 신고). 값을 내는 `--get`, 따옴표 안 글자, 다른 명령 조각의 `--name-only` 는 지금처럼 막습니다. 같은 조각에 `$`·백틱·`{ }`(셸 펼침)이 있거나, 정해진 옵션(`--name-only`·`--get-regexp`·`--list`·`-l`·`--local`·`--global`·`--system`·`--worktree`·`--null`·`-z`·`--show-origin`·`--show-scope`) 밖의 `-` 낱말(줄여 쓴 `--no-name` 등)이 있으면 통과시키지 않습니다.
+- **문서 heredoc 뒤 git add·diff 로 그 문서를 불러도 본문은 글** — 문서(`.md`)를 따옴표 구분자 heredoc(`<<'EOF'`)으로 쓴 뒤 `git add`·`diff`·`status`·`log`·`show`·`commit` 으로 그 문서를 다시 부르면 본문의 백틱 글자(`` `npm test` `` 등)를 실행으로 읽어 막던 헛막힘을 고쳤습니다(사용자 신고). git 앞 옵션은 `-C <폴더>`·`--no-pager` 만 건너뛰고, `-c`·`--ext-diff`·`--textconv`·`--output`·`--exec`, 파이프로 인터프리터에 넘기기, 파일로 쓰기, 따옴표 없는 `<<EOF` 는 지금처럼 막습니다. 실행되는 heredoc(`bash <<'X'` 등)·따옴표 없는 `<<EOF` 의 본문, 그리고 같은 명령의 `GIT_EXEC_PATH`·`core.hooksPath`·`.git/info/attributes`·편집기(`GIT_EDITOR`·`EDITOR`·`VISUAL`) 설정도 git 설정 바꾸기로 보고 막습니다.
+- **알려진 빈틈(0.4.7 기준 — 신고 오면 우선)** — git 설정 바꾸기를 따옴표 구분자 heredoc 으로 파일에 적어 두었다가 그 파일을 실행하는 꼴 · 임시 폴더에 git 설정 파일을 만들고 `HOME`·`XDG_CONFIG_HOME` 을 그쪽으로 바꾸는 꼴은 문서 heredoc 뒤 git 보기 예외에서 알아보지 못합니다.
 
 ### 0.4.6 (2026-10-07)
 

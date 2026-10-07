@@ -176,7 +176,11 @@ unesc_line() {
     NB = ""
     for (i = 1; i <= n; i++) {
       line = L[i]
-      if (delim != "") { t = line; sub(/^[ \t]+/, "", t); if (t == delim) { HE[nh] = i; delim = "" }; continue }
+      if (delim != "") {
+        t = line; sub(/^[ \t]+/, "", t); if (t == delim) { HE[nh] = i; delim = "" }
+        else if (!(HC[nh] && HQ[nh])) NB = NB "\n" line   # 보완 2: cat·tee 의 따옴표 구분자 본문(데이터)만 GVX 판정에서 뺀다 — 실행 본문·<<EOF 본문은 넣는다
+        continue
+      }
       NB = NB "\n" line   # heredoc 본문 밖의 줄(아래 GVX 판정용)
       if (!hdfind(line)) continue   # 따옴표·주석 밖의 << 만(cat "x <<'EOF'" · cat > a.md # <<'EOF' 는 히어독이 아님)
       pre = substr(line, 1, HDP - 1); post = substr(line, HDP + HDL); tok = substr(line, HDP, HDL)
@@ -196,7 +200,7 @@ unesc_line() {
     #   — git config(사이 옵션 포함)·외부 diff·textconv·filter·fsmonitor·gitattributes·pager(--no-pager 는 제외)·GIT_CONFIG*·alias·git 폴더 바꾸기
     t = tolower(NB); gsub(/["\047\002\\]/, "", t); gsub(/--no-pager/, " ", t); GVX = 0
     if (t ~ /(^|[^a-z0-9_.-])git([ \t]+-[cC][ \t]+[^ \t;&|]+|[ \t]+-[^ \t;&|]*)*[ \t]+config([ \t;&|]|$)/) GVX = 1
-    nx = split("diff.external git_external_diff textconv filter. fsmonitor gitattributes pager git_config alias. git_dir= --git-dir --work-tree git_work_tree", GW, " ")
+    nx = split("diff.external git_external_diff textconv filter. fsmonitor gitattributes pager git_config alias. git_dir= --git-dir --work-tree git_work_tree exec_path hookspath attributes editor visual", GW, " ")
     for (j = 1; j <= nx; j++) if (index(t, GW[j])) GVX = 1
     for (h = 1; h <= nh; h++) {
       DROP[h] = 0
@@ -4307,7 +4311,7 @@ ps_wide_search() {
 #   밖으로 나가는 건 개수뿐이라 통과, 안에서 원문이 나오면(echo "$(git remote -v)" · x=$(git remote -v)) 차단. 원격 주소 조회였던 자리는 _CS_ 로,
 #   그 밖의 치환은 괄호만 벗겨 안쪽 낱말을 바깥 판정에 남긴다
 remote_url_out() {
-  local s=$1 m names nm ok c pl k i p nx inner pq pre qc qr cw cf
+  local s=$1 m names nm ok c pl k i p nx inner pq pre qc qr cw cf ca
   local re_ru='git[[:space:]]+(remote([[:space:]]+(-v|--verbose|get-url|show))|config[^;&|]*(--get-regexp|remote[.][^[:space:]]*[.]url))'
   local re_gr='--get-regexp[[:space:]]+("\^\(([[:alnum:]|-]+)\)\\\."|'"'"'\^\(([[:alnum:]|-]+)\)\\\.'"'"')'
   local re_cnt='^[[:space:]]*(grep([[:space:]]+-[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[cq][a-zA-Z]*|--count|--quiet|--silent)([[:space:]]|$)|wc[[:space:]]+-[lc]+([[:space:]]|$))'
@@ -4367,6 +4371,29 @@ remote_url_out() {
           case "$cw" in config[[:space:]]*) cf=1 ;; esac ;;
         esac
         case "$pq" in *'#'*|*--no-name-only*) cf=0 ;; esac
+        # 보완 2·3: 허용 목록 — ① 조각 원문에 $ · 백틱 · { · } 가 있으면(셸 펼침으로 --no-name 등을 만들 수 있음) 예외 없음
+        #   ② 따옴표·역슬래시를 지운 사본에서 config 뒤 - 로 시작하는 낱말은 아래 목록과 정확히 같아야 한다(줄여 쓴 --no-name · --type= 등은 예외 없음)
+        case "$p" in *'$'*|*'`'*|*'{'*|*'}'*) cf=0 ;; esac
+        if [ "$cf" = 1 ]; then
+          cw=${p//\"/}; cw=${cw//\'/}; cw=${cw//\\/}; cw=${cw#"${cw%%[![:space:]]*}"}; cw=${cw#git}
+          while :; do
+            cw=${cw#"${cw%%[![:space:]]*}"}
+            case "$cw" in
+              -C[[:space:]]*) cw=${cw#-C}; cw=${cw#"${cw%%[![:space:]]*}"}; cw=${cw#"${cw%%[[:space:]]*}"} ;;
+              --no-pager[[:space:]]*) cw=${cw#--no-pager} ;;
+              *) break ;;
+            esac
+          done
+          case "$cw" in config[[:space:]]*) cw=${cw#config} ;; *) cf=0; cw="" ;; esac
+          while [ -n "$cw" ]; do
+            cw=${cw#"${cw%%[![:space:]]*}"}; [ -z "$cw" ] && break
+            ca=${cw%%[[:space:]]*}; cw=${cw#"$ca"}
+            case "$ca" in
+              --name-only|--get-regexp|--list|-l|--local|--global|--system|--worktree|--null|-z|--show-origin|--show-scope) ;;
+              -*) cf=0; break ;;
+            esac
+          done
+        fi
         has "$pq" "(^|[[:space:]])--([[:space:]]|$)" && cf=0
         if [ "$cf" = 1 ] && has "$pq" "(^|[[:space:]])--name-only([[:space:]]|$)" \
           && has "$pq" "(^|[[:space:]])(--get-regexp|--list|-l)([[:space:]]|$)"; then continue; fi ;;

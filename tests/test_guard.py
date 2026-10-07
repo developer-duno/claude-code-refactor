@@ -884,6 +884,7 @@ def main():
     check_config_name_only_047(res)
     check_heredoc_md_git_047(res)
     check_fix_047(res)
+    check_fix2_047(res)
 
     res["total"] += 1
     if HOOK_TIMEOUTS:
@@ -6588,6 +6589,44 @@ def check_fix_047(res):
             res["total"] += 1
             if code != want:
                 res["fails"].append(("0.4.7 보완 F6 git 보기 좁히기(%s)" % what, want, code, "Bash", cmd[:120], err.strip()[:300]))
+    finally:
+        rmtree_rw(proj)
+
+
+def check_fix2_047(res):
+    """0.4.7 보완 2(자동 보안 검사): ① F4 예외는 따옴표·역슬래시를 지운 낱말이 --no-n 으로 시작하면 없음(줄여 쓴 --no-name 등)
+    ② F6 GVX 는 cat·tee 의 따옴표 구분자 본문만 빼고 실행 heredoc(bash <<'X')·따옴표 없는 <<EOF 본문은 본다
+    ③ GVX 글자에 exec_path·hookspath·attributes·editor·visual"""
+    rx = "--get-regexp 'remote\\..*\\.url'"
+    f4_bad = ["git config --name-only %s %s" % (o, rx) for o in ("--no-name", "--no-name-o", "--no-n", '--"no-name"')]
+    # 보완 3(R7): 셸 펼침($ · { } · 백틱)·목록 밖 옵션(--type= · --includes)이 있으면 예외 없음(허용 목록)
+    f4_bad += ["X=no-name; git config --name-only --$X " + rx, "git config --name-only --{no-name,null} " + rx,
+               "git config --name-only --no-${x}name " + rx, "git config --name-only --type=bool --no-name " + rx,
+               "git config --name-only --includes --no-nam " + rx, "git config --name-only --type=bool " + rx, "git config --name-only --`echo no-name` " + rx,
+               # - 로 시작하지 않는 낱말이 펼쳐져 옵션이 되는 꼴(① 만 잡는다)
+               "X=--no-name-only; git config --name-only $X " + rx, "git config --name-only {--no-name-only,} " + rx,
+               # 재검사 A4: 원문에 --no-name-only 글자가 없어 { } 검사 한 줄만 잡는 꼴
+               "git config --name-only {--no-name,} " + rx]
+    f4_ok = ["git config --name-only " + rx, "git config --global --name-only -l", "git config --name-only -z --get-regexp '^branch\\.'",
+             "git config --name-only --show-origin --show-scope --null " + rx]
+    _rows_047(res, "보완 2 F4 --no-n 줄임", [(ph, B, c) for ph in (None, "EXECUTE") for c in f4_bad]
+              + [(ph, OK, c) for ph in (None, "EXECUTE") for c in f4_ok])
+    doc = "docs/refactor/EXECUTION_LOG.md"
+    head = "cat >> %s <<'EOF'\ngit push --force origin main\nEOF\n" % doc
+    bad = ["bash <<'X'\ngit config diff.external sh\nX\ngit diff " + doc,
+           "cat > /tmp/y <<EOF\n$(git config diff.external sh)\nEOF\ngit diff " + doc,
+           "export GIT_EXEC_PATH=x; git diff " + doc, "echo x >> .git/info/attributes; git diff " + doc,
+           "export GIT_EDITOR=sh; git commit --only -m x -- " + doc, "export VISUAL=sh; git commit --only -m x -- " + doc]
+    rows = [(B, head + t, t) for t in bad]
+    rows.append((OK, "cat >> %s <<'EOF'\ngit push --force origin main\n- `vitest` · git config core.hooksPath · GIT_EXEC_PATH · "
+                     "core.editor · VISUAL · .git/info/attributes\nEOF\ngit add %s" % (doc, doc), "따옴표 cat 본문의 새 글자"))
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    try:
+        for want, cmd, what in rows:
+            code, err = run(proj, *bash(cmd))
+            res["total"] += 1
+            if code != want:
+                res["fails"].append(("0.4.7 보완 2 F6(%s)" % what, want, code, "Bash", cmd[:120], err.strip()[:300]))
     finally:
         rmtree_rw(proj)
 
