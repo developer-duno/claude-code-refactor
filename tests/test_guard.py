@@ -5966,6 +5966,7 @@ def check_backtick_048(res):
               S3 + "\ngrep -n gate docs/refactor/STATE.md | cut -c1-80",
               S3 + "\nsed -n 1,15p docs/refactor/STATE.md | grep -E \"gate|next\"",
               S3 + "\ngrep -n \"완료 보고(마무리)\\|끝\" docs/refactor/STATE.md | head -20",
+              S3 + "\ngrep 'a=b' docs/refactor/STATE.md", S3 + "\ngrep 'a b' docs/refactor/STATE.md",   # 따옴표 안 = · 공백은 자리표시(- 로 시작 안 함)
               H + "p='docs/refactor/STATE.md'\ns=open(p,encoding='utf-8').read()\nrow='a `b` c'\nopen(p,'w',encoding='utf-8').write(s+row)\nEOF",
               f"bash {_R}/hooks/run.sh refactor-safe-run -- " + H + "s=s.replace('x','a `b` c]** d)**',1)\nEOF"]
     proj = make_project(phase="EXECUTE", allow=(".turn",))
@@ -5987,7 +5988,10 @@ def check_backtick_048(res):
     tails = ["npm test", "rm -rf src", "python x.py", "bash x.sh", "sed -i 's/a/b/' docs/refactor/STATE.md", "sed -n '1e ls' docs/refactor/STATE.md",
              "sed -n -e 1p docs/refactor/STATE.md", "grep x src/app.ts", "cat docs/refactor/APPROVALS.log", "cat docs/refactor/approved/x.md",
              "grep x docs/refactor/STATE.md > out", "grep x docs/refactor/STATE.md | bash", "grep x docs/refactor/STATE.md | tee x",
-             "sort docs/refactor/STATE.md", "grep x docs/refactor/STATE.md &"]
+             "sort docs/refactor/STATE.md", "grep x docs/refactor/STATE.md &",
+             # 따옴표로 감싼 옵션이 자리표시에 숨지 않는다(자동 보안 검토 10-08 18:2x): rg --pre(프로그램 실행) · sed -i(쓰기) · grep -r
+             "rg '--pre=bash' x docs/refactor/STATE.md", "rg \"--pre=bash\" x docs/refactor/STATE.md",
+             "sed -n '1p' '-i=b' docs/refactor/STATE.md", "sed -n '1p' '-i ' docs/refactor/STATE.md", "grep '-r x' docs/refactor/STATE.md"]
     b3 = [f"cd {other} && " + S3, f"cd {P}/src && " + S3, f"cd {P} && cd {P} && " + S3, "cd $PWD && " + S3] + [S3 + "\n" + t for t in tails]
     try:
         _cases_042(res, proj, "0.4.8 작은따옴표 안 백틱·cd 머리·읽기 꼬리 → 통과(go 차례)", [(OK, bash(c)) for c in passes])
