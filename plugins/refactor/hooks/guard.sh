@@ -2716,8 +2716,10 @@ dei_tail_view() {
   while :; do
     case "$s" in *[\'\"]*) ;; *) t="$t$s"; break ;; esac
     pre=${s%%[\'\"]*}; s=${s:${#pre}}; q=${s:0:1}; s=${s:1}
+    case "$pre" in ''|*[[:space:]\;\&\|\(]) ;; *) return 1 ;; esac   # 따옴표 묶음이 앞 글자에 붙어 있으면(--pr'e=bash') 낱말이 갈라져 옵션 검사를 피한다 → 1
     case "$s" in *"$q"*) ;; *) return 1 ;; esac
     qc=${s%%"$q"*}; s=${s#*"$q"}
+    case "$s" in ''|[[:space:]\;\&\|\)]*) ;; *) return 1 ;; esac   # 뒤 글자에 붙어 있어도('a''b' · 'x'y) 1
     case "$qc" in
       *[!A-Za-z0-9_.,/-]*|'') case "$qc" in */*|-*) return 1 ;; esac; t="$t$pre _Q_ " ;;   # - 로 시작하면 옵션(--pre=… · -i=…)이 자리표시에 숨는다 → 1
       *) t="$t$pre $qc " ;;
