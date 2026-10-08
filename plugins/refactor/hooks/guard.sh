@@ -185,7 +185,7 @@ unesc_line() {
   } {
     s = $0; gsub(/\\\\\\r\\n|\\\\\\n/, "", s); gsub(/\\\\/, "\002", s); gsub(/\\"/, "\"", s); gsub(/\\\//, "/", s); gsub(/\\r/, "", s); gsub(/\\t/, " ", s)
     n = split(s, L, /\\n/); nh = 0; delim = ""; QS = 0; QD = 0
-    NB = ""
+    NB = ""; HL = ""
     for (i = 1; i <= n; i++) {
       line = L[i]
       if (delim != "") {
@@ -194,6 +194,7 @@ unesc_line() {
         continue
       }
       NB = NB "\n" line   # heredoc 본문 밖의 줄(아래 GVX 판정용)
+      HB = HL; HL = HL "\n" line   # 보완 5: heredoc 본문 밖 줄만 모은 누적(HB = 이 줄 앞까지) — HI 머리를 명령 전체 머리(앞 줄 포함)로
       if (!hdfind(line)) continue   # 따옴표·주석 밖의 << 만(cat "x <<'EOF'" · cat > a.md # <<'EOF' 는 히어독이 아님)
       pre = substr(line, 1, HDP - 1); post = substr(line, HDP + HDL); tok = substr(line, HDP, HDL)
       nh++; HS[nh] = i; HE[nh] = n + 1
@@ -206,7 +207,7 @@ unesc_line() {
         x = substr(pre, RSTART, RLENGTH); sub(/^[^a-z0-9_.-]?tee/, "", x); k = split(x, W2, /[ \t]+/)
         for (j = 1; j <= k; j++) { y = W2[j]; gsub(/["\047]/, "", y); if (y == "" || y ~ /^[->]/ || y == "/dev/null") continue; tg = tg "\003" y }
       }
-      HT[nh] = tg; HP[nh] = post; HPRE[nh] = pre
+      HT[nh] = tg; HP[nh] = post; HPRE[nh] = HB "\n" pre
     }
     # 0.4.7 W3: 명령 전체(heredoc 본문 제외)에 git 이 다른 프로그램을 돌리게 하는 설정·환경변수 글자가 있으면 git 보기 예외를 쓰지 않는다(GVX)
     #   — git config(사이 옵션 포함)·외부 diff·textconv·filter·fsmonitor·gitattributes·pager(--no-pager 는 제외)·GIT_CONFIG*·alias·git 폴더 바꾸기
@@ -243,7 +244,7 @@ unesc_line() {
       HI[h] = 0; HX[h] = 0
       if (HC[h] || !HQ[h] || HPRE[h] ~ /\$\(|`|[({]/) continue
       t = HP[h]; gsub(/2>&1/, "", t); if (t !~ /^[ \t]*$/) continue
-      np = split(HPRE[h], PC, /[;&|]/); hok = 1
+      np = split(HPRE[h], PC, /[;&|\n]/); hok = 1
       for (j = 1; j < np; j++) if (PC[j] !~ /^[ \t]*$/ && PC[j] !~ /^[ \t]*cd[ \t]+("[^"]*"|\047[^\047]*\047|[^ \t"\047]+)[ \t]*$/) hok = 0
       if (!hok) continue
       t = (np ? tolower(PC[np]) : ""); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)

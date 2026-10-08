@@ -5975,7 +5975,8 @@ def check_backtick_048(res):
               S3.replace("python - ", "python -u - ", 1), "PYTHONIOENCODING=utf-8 " + S3,
               S3.replace("<<'EOF'", "<<\\EOF", 1), S3.replace("<<'EOF'", "<<'EOF' 2>&1", 1),
               H + "p='docs/refactor/STATE.md'\ns=open(p,encoding='utf-8').read()\nrow='a `b` c'\nopen(p,'w',encoding='utf-8').write(s+row)\nEOF",
-              f"bash {_R}/hooks/run.sh refactor-safe-run -- " + H + "s=s.replace('x','a `b` c]** d)**',1)\nEOF"]
+              f"bash {_R}/hooks/run.sh refactor-safe-run -- " + H + "s=s.replace('x','a `b` c]** d)**',1)\nEOF",
+              REPORT_048.replace("{PROJ} && python", "{PROJ} &&\npython", 1).replace("{PROJ}", P)]   # 보완 5: && 뒤 줄바꿈(앞 조각 cd P · 빈 조각)
     proj = make_project(phase="EXECUTE", allow=(".turn",))
     P = proj.as_posix()
     other = (proj.parent / (proj.name + "-other")).as_posix()
@@ -6019,7 +6020,11 @@ def check_backtick_048(res):
               f"perl - <<'EOF'\nsystem 'echo {hk}';\nEOF", f"ruby - <<'EOF'\nsystem 'echo {hk}'\nEOF",
               f"perl - <<'EOF'\n$x=q{{it's}}, $y={hk};\nEOF", f"ruby - <<'EOF'\nm='a\nb' + {hk}\nEOF",
               f"( true; python - <<'EOF'\nprint('{hk}')\nEOF\n) | bash", f"( cd {P} && python - <<'EOF'\nprint('{hk}')\nEOF\n) | bash",
-              f"{{ :; python - <<'EOF'\nprint('{hk}')\nEOF\n}} | bash"]
+              f"{{ :; python - <<'EOF'\nprint('{hk}')\nEOF\n}} | bash",
+              # 보완 5(RC 지적 1 · probe_main_ml M1 원문): 묶음 여는 글자가 heredoc 줄의 앞 줄에 있어도 HI 아님
+              f"(\npython - <<'EOF'\nprint('{hk}')\nEOF\n) | bash", f"{{\npython - <<'EOF'\nprint('{hk}')\nEOF\n}} | bash",
+              f"bash <(\npython - <<'EOF'\nprint('{hk}')\nEOF\n)", f"( true;\npython - <<'EOF'\nprint('{hk}')\nEOF\n) | bash",
+              f"( cd {P} &&\npython - <<'EOF'\nprint('{hk}')\nEOF\n) | bash"]
     b3 = [f"cd {other} && " + S3, f"cd {P}/src && " + S3, f"cd {P} && cd {P} && " + S3, "cd $PWD && " + S3] + [S3 + "\n" + t for t in tails]
     try:
         _cases_042(res, proj, "0.4.8 작은따옴표 안 백틱·cd 머리·읽기 꼬리 → 통과(go 차례)", [(OK, bash(c)) for c in passes])
