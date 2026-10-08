@@ -179,7 +179,7 @@ unesc_line() {
     RVS = "(^|[;&|])[ \t]*[({]*[ \t]*((sudo|then|do|else|elif|if|while|until|!|exec|command|builtin|time|nohup|env|xargs)[ \t]+)*(" RVL ")([ \t;&|)]|$)"
     RVW = "(^|[^a-z0-9_-])(" RVL ")([^a-z0-9_-]|$)"
     CRD = "open[ \t]*\\(|path[ \t]*\\(|read_text|read_bytes|readfile|read_file|fs\\.|load_dotenv|dotenv|require[ \t]*\\([ \t]*[\"\047]fs|fopen|file_get_contents|createreadstream"
-    CEX = "subprocess|popen|system[ \t]*\\(|spawn|exec[a-z_]*[ \t]*\\(|child_process|eval[ \t]*\\(|shutil\\.|os\\.(rename|replace|link|symlink)|copyfile|check_output|getoutput|\\.run[ \t]*\\("
+    CEX = "subprocess|popen|system[ \t]*\\(|spawn|exec[a-z_]*[ \t]*\\(|child_process|eval[ \t]*\\(|shutil\\.|os\\.(rename|replace|link|symlink)|copyfile|check_output|getoutput|\\.run[ \t]*\\(|deno\\.command"
     CALL = "(^|[^a-z0-9_])(open|path|fopen|file_get_contents|load_dotenv|readfile|readfilesync|read_file|createreadstream|system|popen|spawn|spawnsync|execsync|execfile|execfilesync|exec|execv|execvp|check_output|check_call|run|call|getoutput|getstatusoutput|copy|copy2|copyfile|copyfileobj|copytree|move|rename|symlink)[ \t]*\\("
     SEC = "\\.env|\\.dev\\.vars|credential|secret|\\.npmrc|\\.pgpass|\\.netrc|\\.pypirc|\\.git/config|\\.aws/|\\.docker/config|\\.kube/config|/environ|\\.pem|\\.p12|\\.pfx|\\.jks|\\.keystore|id_rsa|id_dsa|id_ecdsa|id_ed25519|service.?account|firebase-adminsdk|\\.key([^a-z0-9_]|$)|~[0-9]|\\.[a-z0-9]*[*?[]"
   } {
@@ -236,12 +236,15 @@ unesc_line() {
     # 0.4.8 B1(사용자 신고): 따옴표 구분자로 코드 인터프리터에 넘긴 본문(HI — cat·tee 아님 · 앞 조각 끝이 python - 등 · 뒤는 공백·2>&1 만 ·
     #   앞에 $( · 백틱 없음)은 셸이 백틱을 풀지 않는다 → 그 본문의 작은따옴표 문자열 안 백틱은 데이터로 본다(아래 출력에서 sqbt).
     #   본문에 프로세스를 띄우는 글자(CEX · getattr · __import__ · importlib)가 하나라도 있으면(HX) 지금처럼 통째로 본다.
+    #   보완 3: 언어는 python·py·pypy·node·nodejs·deno·bun·tsx·ts-node 만(ruby·perl·php 는 백틱이 실행이라 뺀다 — 사장님 결정) ·
+    #   앞 조각에 ( · { 가 있으면(bash <(python - · ( python - · { python - — 출력을 셸에 흘려 넣는 묶음) HI 아님
     for (h = 1; h <= nh; h++) {
       HI[h] = 0; HX[h] = 0
       if (HC[h] || !HQ[h] || HPRE[h] ~ /\$\(|`/) continue
       t = HP[h]; gsub(/2>&1/, "", t); if (t !~ /^[ \t]*$/) continue
-      np = split(HPRE[h], PC, /[;&|(]/); t = (np ? tolower(PC[np]) : ""); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
-      if (t !~ /(^|[ \t])(python[0-9.]*|py|pypy3?|node|nodejs|ruby|perl|php|deno|bun|tsx|ts-node)([ \t]+-[^ \t]*)*[ \t]*$/) continue
+      np = split(HPRE[h], PC, /[;&|]/); t = (np ? tolower(PC[np]) : ""); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
+      if (t ~ /[({]/) continue
+      if (t !~ /(^|[ \t])(python[0-9.]*|py|pypy3?|node|nodejs|deno|bun|tsx|ts-node)([ \t]+-[^ \t]*)*[ \t]*$/) continue
       HI[h] = 1
       for (i = HS[h] + 1; i < HE[h] && i <= n; i++) { t = tolower(L[i]); if (t ~ CEX || t ~ /getattr|__import__|importlib/) HX[h] = 1 }
     }
@@ -2704,11 +2707,12 @@ dei_count() { # $1 글 $2 정규식(앞 경계 괄호 1 · 뒤 경계 괄호가 
 # 0.4.8 B3(사용자 신고): 문서 편집 히어독 뒤 꼬리 $1 이 공백뿐이거나, docs/refactor 의 .md 를 읽기만 하는 grep·egrep·fgrep·rg·head·tail·cat·wc·cut·sed -n
 #   조각(| · ; · && · 줄바꿈으로 이음)뿐이면 0. 쓰기(> <)·명령 치환·백틱·뒤로 돌리기(&)·따옴표 밖 역슬래시·$ 가 있으면 1.
 #   따옴표 묶음: 안이 단순 글자(영숫자 _ . , / -)면 따옴표만 떼고 낱말로 보고, 아니면 / 가 없고 - 로 시작하지 않을 때만 자리표시로 비운다(/ 가 있거나 - 로 시작하면 1).
-#   낱말: 명령 자리는 이름 그대로(경로·감싸기·대입 없음) · rg 의 --pre(파일마다 프로그램 실행)는 1 · 옵션 아닌 낱말에 / 가 있으면 dei_path_ok 통과 문서만
+#   묶음은 앞뒤 글자에 붙지 않아야 하고 안에 $ 가 없어야 한다 · 큰따옴표 안 \" 는 닫는 따옴표가 아니다(보완 3).
+#   낱말: 명령 자리는 이름 그대로(경로·감싸기·대입 없음) · rg 의 --pre·--hostname-bin(프로그램 실행)은 1 · 옵션 아닌 낱말에 / 가 있으면 dei_path_ok 통과 문서만
 #   · sed 는 옵션이 -n·-E·-r(과 묶음)·--quiet·--silent 뿐이고 -n 이 있으며 첫 낱말(스크립트)이 숫자[,숫자]p 또는 /…/p 일 때만(그 낱말은 경로 검사에서 뺀다).
 #   nocasematch 를 끈 채로 부른다(-e 와 -E 를 가른다).
 dei_tail_view() {
-  local s=$1 t="" pre q qc seg w i n sedn sedw
+  local s=$1 t="" pre q qc seg w i n sedn sedw x k
   case "$s" in *[![:space:]]*) ;; *) return 0 ;; esac
   case "$s" in *'>'*|*'<'*|*'$('*|*'`'*) return 1 ;; esac
   t=${s//&&/}; case "$t" in *'&'*) return 1 ;; esac
@@ -2719,6 +2723,16 @@ dei_tail_view() {
     case "$pre" in ''|*[[:space:]\;\&\|\(]) ;; *) return 1 ;; esac   # 따옴표 묶음이 앞 글자에 붙어 있으면(--pr'e=bash') 낱말이 갈라져 옵션 검사를 피한다 → 1
     case "$s" in *"$q"*) ;; *) return 1 ;; esac
     qc=${s%%"$q"*}; s=${s#*"$q"}
+    if [ "$q" = "$Q" ]; then   # 보완 3: 큰따옴표 안 \" 는 닫는 따옴표가 아니다 — 바로 앞 역슬래시 수가 홀수면 문자열이 이어진다(\\ 짝은 글자 둘 · 작은따옴표 안 역슬래시는 글자)
+      while :; do
+        x=$qc; k=0
+        while :; do case "$x" in *"$BS") x=${x%?}; k=$((k + 1)) ;; *) break ;; esac; done
+        [ $((k % 2)) = 1 ] || break
+        case "$s" in *"$q"*) ;; *) return 1 ;; esac
+        qc="$qc$q${s%%"$q"*}"; s=${s#*"$q"}
+      done
+    fi
+    case "$qc" in *'$'*) return 1 ;; esac   # 보완 3: 따옴표 안 $ 는 자리표시에 숨기지 않는다("$F" 는 큰따옴표 안에서 풀린다)
     case "$s" in ''|[[:space:]\;\&\|\)]*) ;; *) return 1 ;; esac   # 뒤 글자에 붙어 있어도('a''b' · 'x'y) 1
     case "$qc" in
       *[!A-Za-z0-9_.,/-]*|'') case "$qc" in */*|-*) return 1 ;; esac; t="$t$pre _Q_ " ;;   # - 로 시작하면 옵션(--pre=… · -i=…)이 자리표시에 숨는다 → 1
@@ -2738,7 +2752,7 @@ dei_tail_view() {
     i=1
     while [ "$i" -lt "$n" ]; do
       w=${SW[$i]}; i=$((i + 1))
-      case "$w" in --pre*) return 1 ;; esac
+      case "$w" in --pre*|--hostname-bin*) return 1 ;; esac   # 보완 3: rg --hostname-bin(프로그램 실행)도
       if [ "$SCMD" = sed ]; then
         case "$w" in
           -n|-nE|-En|-nr|-rn|--quiet|--silent) sedn=1; continue ;;
@@ -2784,11 +2798,14 @@ doc_edit_inline() {
     if [ -n "${BASH_REMATCH[4]}" ] || [ "${BASH_REMATCH[3]}" = "$sq$sq" ]; then body=${BASH_REMATCH[4]}
     else body=${BASH_REMATCH[5]}; body=${body//"$BS$BS"/$PH}; body=${body//"$BS$Q"/$Q}; body=${body//$PH/$BS}; fi
   else
-    re="^(python|python3|py|node)[[:space:]]+-[[:space:]]*<<(-?)[[:space:]]*(${sq}([A-Za-z_][A-Za-z0-9_]*)${sq}|\"([A-Za-z_][A-Za-z0-9_]*)\"|([A-Za-z_][A-Za-z0-9_]*))[[:space:]]*$NL"
+    # 보완 3(사장님 결정): 머리에 환경변수 대입(출력·인코딩 이름만 · 값은 단순 글자)·글자 옵션(-u 등)·구분자 \EOF·뒤 2>&1 을 받는다.
+    #   옵션 글자에서 c·e·m·p·r 은 뺀다(-c·-e·-p 코드 · -m 모듈 · -r require — 본문 말고 다른 코드를 돌린다 · 대소문자 무시로 맞추므로 둘 다 뺀다).
+    #   괄호 번호: 1 대입 2 대입 이름 3 인터프리터 4 옵션 5 - 6 구분자 7 '…' 8 "…" 9 \… 10 따옴표 없음 11 2>&1
+    re="^((PYTHONIOENCODING|PYTHONUTF8|PYTHONUNBUFFERED|PYTHONDONTWRITEBYTECODE|LC_ALL|LANG)=[A-Za-z0-9_.:-]*[[:space:]]+)*(python|python3|py|node)[[:space:]]+(-[abdfghijklnoqstuvwxyzABDFGHIJKLNOQSTUVWXYZ]+[[:space:]]+)*-[[:space:]]*<<(-?)[[:space:]]*(${sq}([A-Za-z_][A-Za-z0-9_]*)${sq}|\"([A-Za-z_][A-Za-z0-9_]*)\"|\\\\([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))([[:space:]]+2>&1)?[[:space:]]*$NL"
     [[ $c =~ $re ]] || return 1
-    case "${BASH_REMATCH[1]}" in node) lang=js ;; *) lang=py ;; esac
-    local dash=${BASH_REMATCH[2]} dl="${BASH_REMATCH[4]}${BASH_REMATCH[5]}${BASH_REMATCH[6]}" quoted=1 rest line t found=0
-    [ -n "${BASH_REMATCH[6]}" ] && quoted=0
+    case "${BASH_REMATCH[3]}" in node) lang=js ;; *) lang=py ;; esac
+    local dash=${BASH_REMATCH[5]} dl="${BASH_REMATCH[7]}${BASH_REMATCH[8]}${BASH_REMATCH[9]}${BASH_REMATCH[10]}" quoted=1 rest line t found=0
+    [ -n "${BASH_REMATCH[10]}" ] && quoted=0
     rest=${c:${#BASH_REMATCH[0]}}
     while :; do
       case "$rest" in *"$NL"*) line=${rest%%"$NL"*}; rest=${rest#*"$NL"} ;; *) line=$rest; rest="" ;; esac
@@ -2963,7 +2980,7 @@ go_runner() {
   # 안전 실행기 뒤에 따옴표로 넘긴 명령(sh -c "npm test && npm run build")은 통째로 감싼 것이니 쪼개지 않는다
   blank_quoted "(refactor-safe-run[[:space:]]+--[[:space:]][^;&|]*)(\"[^\"]*\"|'[^']*')" 2 "$rq"; rq=$BQ
   if [ "${2:-0}" = 1 ]; then join_assign_vals "$rq"; rq=${JA//\'/}; rq=${rq//\"/}; fi   # #7: 대입 값(R='a b.ts')은 따옴표를 빼기 전에 한 단어로
-  rq=${rq//&&/$NL}; rq=${rq//||/$NL}; rq=${rq//;/$NL}; rq=${rq//|/$NL}; rq=${rq//(/$NL}; rq=${rq//\`/$NL}
+  rq=${rq//&&/$NL}; amp_cut "$rq"; rq=$AC; rq=${rq//||/$NL}; rq=${rq//;/$NL}; rq=${rq//|/$NL}; rq=${rq//(/$NL}; rq=${rq//\`/$NL}   # 보완 3: & 하나도(amp_cut)
   local re_cmt='[[:space:]]#.*$'
   while [ -n "$rq" ]; do
     rseg=${rq%%"$NL"*}; if [ "$rseg" = "$rq" ]; then rq=""; else rq=${rq#*"$NL"}; fi
@@ -2989,8 +3006,11 @@ strip_call_opt() {
     SC=${SC/"$m"/"${BASH_REMATCH[1]}$inner"}; k=$((k + 1))
   done
 }
-# 명령을 && || ; | ` $( 로 나눈 조각들 → CUTS(줄바꿈 구분)
-cut_segs() { local s=$1; s=${s//&&/$NL}; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; CUTS=${s//\$(/$NL}; }
+# 0.4.8 보완 3(사장님 결정 — 옛 판부터의 구멍): & 하나(뒤로 돌리기)도 명령 경계다(cd X & npm test). >& · <& · &> 는 넘겨주기라 자르지 않는다.
+#   && 를 먼저 바꾼 뒤 부른다 → AC. 되돌릴 글자는 따옴표 친 변수로(bash 5.2+ 의 patsub_replacement 는 따옴표 없는 & 를 맞은 글자로 바꾼다)
+amp_cut() { local s=$1 a=$'\016' b=$'\017' c=$'\020' ga='>&' la='<&' ag='&>'; s=${s//"$ga"/$a}; s=${s//"$la"/$b}; s=${s//"$ag"/$c}; s=${s//&/$NL}; s=${s//$a/"$ga"}; s=${s//$b/"$la"}; AC=${s//$c/"$ag"}; }
+# 명령을 && || ; | & ` $( 로 나눈 조각들 → CUTS(줄바꿈 구분)
+cut_segs() { local s=$1; s=${s//&&/$NL}; amp_cut "$s"; s=$AC; s=${s//||/$NL}; s=${s//;/$NL}; s=${s//|/$NL}; s=${s//\`/$NL}; CUTS=${s//\$(/$NL}; }
 # 새 Claude 세션(claude -p … · npx claude · node …/claude-code/…)에 승인 명령·--from-hook 을 넘기는가 — 새 세션의 입력 훅이 사람 입력으로 보고 승인한다
 #   $2 = 볼 낱말 정규식(없으면 승인 명령 — 0.4.0 자동 모드 스크립트는 'refactor-auto' 로 따로 부른다: 막는 문구가 다르다)
 nested_claude_approve() {

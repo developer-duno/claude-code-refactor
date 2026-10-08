@@ -870,6 +870,7 @@ def main():
     check_sed_write_042(res)
     check_doc_edit_042(res)
     check_backtick_048(res)
+    check_amp_048(res)
     check_pause_042(res)
     check_pause_destroy_042b(res)
     check_pause_push_042b(res)
@@ -5968,6 +5969,10 @@ def check_backtick_048(res):
               S3 + "\ngrep -n \"완료 보고(마무리)\\|끝\" docs/refactor/STATE.md | head -20",
               S3 + "\ngrep 'a=b' docs/refactor/STATE.md", S3 + "\ngrep 'a b' docs/refactor/STATE.md",   # 따옴표 안 = · 공백은 자리표시(- 로 시작 안 함)
               S3 + "\ngrep 'x' 'docs/refactor/STATE.md'",
+              S3 + "\ngrep \"a\\\"b\" docs/refactor/STATE.md",   # 보완 3: 큰따옴표 안 \" 는 닫는 따옴표가 아니다(묶음 하나 → 자리표시)
+              # 보완 3(사장님 결정): F3 머리 -u · 환경변수 접두 · <<\EOF · 뒤 2>&1
+              S3.replace("python - ", "python -u - ", 1), "PYTHONIOENCODING=utf-8 " + S3,
+              S3.replace("<<'EOF'", "<<\\EOF", 1), S3.replace("<<'EOF'", "<<'EOF' 2>&1", 1),
               H + "p='docs/refactor/STATE.md'\ns=open(p,encoding='utf-8').read()\nrow='a `b` c'\nopen(p,'w',encoding='utf-8').write(s+row)\nEOF",
               f"bash {_R}/hooks/run.sh refactor-safe-run -- " + H + "s=s.replace('x','a `b` c]** d)**',1)\nEOF"]
     proj = make_project(phase="EXECUTE", allow=(".turn",))
@@ -5983,8 +5988,10 @@ def check_backtick_048(res):
           H.replace("'EOF'", "'EOF' | bash") + f"print('`bash {_R}/hooks/tu*n.sh`')\nEOF",
           "python -c \"print('`b` *a **')\"",
           f"node - <<'EOF'\nrequire('child_process').execSync('`bash {_R}/hooks/tu*n.sh`')\nEOF",
-          H + f"print(\"`bash {_R}/hooks/tu*n.sh`\")\nEOF"]
-    b2 = ["python -c \"print('`ls`')\"", H + "p='docs/refactor/STATE.md'\nx=`ls`\nEOF",
+          H + f"print(\"`bash {_R}/hooks/tu*n.sh`\")\nEOF",
+          # 보완 3(사장님 결정): ruby·perl 은 백틱이 실행이라 작은따옴표 안 백틱도 데이터로 보지 않는다
+          "ruby - <<'EOF'\nx='a `b` c]** d)**'\nEOF", "perl - <<'EOF'\nx='a `b` c]** d)**'\nEOF"]
+    b2 =["python -c \"print('`ls`')\"", H + "p='docs/refactor/STATE.md'\nx=`ls`\nEOF",
           "python - <<EOF\np='docs/refactor/STATE.md'\nrow='`x`'\nEOF"]
     tails = ["npm test", "rm -rf src", "python x.py", "bash x.sh", "sed -i 's/a/b/' docs/refactor/STATE.md", "sed -n '1e ls' docs/refactor/STATE.md",
              "sed -n -e 1p docs/refactor/STATE.md", "grep x src/app.ts", "cat docs/refactor/APPROVALS.log", "cat docs/refactor/approved/x.md",
@@ -5995,7 +6002,17 @@ def check_backtick_048(res):
              "sed -n '1p' '-i=b' docs/refactor/STATE.md", "sed -n '1p' '-i ' docs/refactor/STATE.md", "grep '-r x' docs/refactor/STATE.md",
              # 따옴표 묶음이 낱말 가운데 끼면(--pr'e=bash') 앞 조각만 검사된다 → 앞뒤 글자에 붙은 따옴표는 거부
              "rg --pr'e=bash' x docs/refactor/STATE.md", "rg --pr'e' x docs/refactor/STATE.md", "rg -'-pre=bash' x docs/refactor/STATE.md",
-             "sed -n 1p -'i' docs/refactor/STATE.md", "grep 'x''y' docs/refactor/STATE.md"]
+             "sed -n 1p -'i' docs/refactor/STATE.md", "grep 'x''y' docs/refactor/STATE.md",
+             # 보완 3(자동 보안 검토): 큰따옴표 안 \" 로 닫는 자리를 속여 옵션을 숨김 · rg --hostname-bin(프로그램 실행) · 따옴표 안 $
+             "rg \"\\\" \" --pre=bash \\\" x docs/refactor/STATE.md", "grep \"\\\" \" -r \\\" x docs/refactor/STATE.md",
+             "sed -n \"\\\" \" -i \\\" 1p docs/refactor/STATE.md",
+             "rg --hostname-bin=bash --hyperlink-format=default x docs/refactor/STATE.md", "cat \"$F\"", "cat \"$F\" docs/refactor/STATE.md"]
+    hk = f"`bash {_R}/hooks/tu*n.sh`"
+    # 보완 3: ( · { 묶음 안 인터프리터(출력을 셸에 흘려 넣음)와 ruby·perl 본문은 HI 아님(probe_sec_ex F5·F6·F7 원문)
+    hi_out = [f"bash <(python - <<'EOF'\nprint('{hk}')\nEOF\n)", f"( python - <<'EOF'\nprint('{hk}')\nEOF\n) | bash",
+              f"{{ python - <<'EOF'\nprint('{hk}')\nEOF\n}} | bash",
+              f"perl - <<'EOF'\nsystem 'echo {hk}';\nEOF", f"ruby - <<'EOF'\nsystem 'echo {hk}'\nEOF",
+              f"perl - <<'EOF'\n$x=q{{it's}}, $y={hk};\nEOF", f"ruby - <<'EOF'\nm='a\nb' + {hk}\nEOF"]
     b3 = [f"cd {other} && " + S3, f"cd {P}/src && " + S3, f"cd {P} && cd {P} && " + S3, "cd $PWD && " + S3] + [S3 + "\n" + t for t in tails]
     try:
         _cases_042(res, proj, "0.4.8 작은따옴표 안 백틱·cd 머리·읽기 꼬리 → 통과(go 차례)", [(OK, bash(c)) for c in passes])
@@ -6010,6 +6027,24 @@ def check_backtick_048(res):
         _cases_042(res, proj, "0.4.8 go 차례 아님 → 그대로 통과", [(OK, bash(c)) for c in passes_for(proj.as_posix())])
         # go 차례 밖에서는 안전 실행기 판정이 없으므로 B1 이웃이 막히는 이유가 플러그인 훅 판정 그 자체인지 본다
         _cases_042(res, proj, "0.4.8 B1 이웃 go 차례 아님 → 플러그인 훅으로 막음", [(B, bash(c)) for c in b1], need="플러그인 훅")
+        _cases_042(res, proj, "0.4.8 HI 앞 조각(go 차례 아님) → 플러그인 훅으로 막음", [(B, bash(c)) for c in hi_out], need="플러그인 훅")
+    finally:
+        rmtree_rw(proj)
+
+
+def check_amp_048(res):
+    """0.4.8 보완 3(사장님 결정 — 옛 판부터의 구멍): & 하나(뒤로 돌리기)도 명령 경계 — go 차례에 cd X & npm test 가 안전 실행기를 지나치지 않는다.
+    >& · <& · &> 는 넘겨주기라 자르지 않는다(안전 실행기 뒤 2>&1 은 그대로 통과)"""
+    proj = make_project(phase="EXECUTE", allow=(".turn",))
+    P = proj.as_posix()
+    need = "안전 실행기"
+    blocks = [f"cd {P} & npm test", f"cd {P} &npm test", "true & npm test", "sleep 1 & npm test", f"cd {P} & pnpm test",
+              f"cd {P} & npx vitest run", f"cd {P} & bash x.sh", f"cd {P} & python x.py", f"cd {P} & npm test &", f"(cd {P} & npm test)",
+              f"cd {P} && npm test", "npm test 2>&1", f"cd {P} &\nnpm test"]
+    passes = [f"bash {_R}/hooks/run.sh refactor-safe-run -- npm test 2>&1", f"bash {_R}/hooks/run.sh refactor-safe-run -- npm test >&2"]
+    try:
+        _cases_042(res, proj, "0.4.8 & 하나 뒤 프로젝트 코드(go 차례) → 안전 실행기로", [(B, bash(c)) for c in blocks], need=need)
+        _cases_042(res, proj, "0.4.8 안전 실행기 뒤 2>&1 · >&2 → 통과(넘겨주기는 자르지 않음)", [(OK, bash(c)) for c in passes])
     finally:
         rmtree_rw(proj)
 

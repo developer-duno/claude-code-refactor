@@ -7272,9 +7272,13 @@ def check_docs_048(check):
           and "잔치" not in line and "janchi" not in line and "flowershop" not in line, line)
     c, e = rd.find("### 0.4.8 (2026-10-08)"), rd.find("### 0.4.7 (2026-10-08)")
     sec = rd[c:e] if 0 <= c < e else ""
-    check("0.4.8 문구 README §13 0.4.8 변경 이력 절(0.4.7 절 위) · 글머리 셋(알려진 빈틈 포함) · 사용자·레포 이름 없음",
-          sec.count("\n- **") == 3 and "**따옴표 구분자 heredoc 으로 넘긴 코드의 문자열 안 백틱은 글**" in sec
+    check("0.4.8 문구 README §13 0.4.8 변경 이력 절(0.4.7 절 위) · 글머리 넷(알려진 빈틈 포함) · 사용자·레포 이름 없음",
+          sec.count("\n- **") == 4 and "**따옴표 구분자 heredoc 으로 넘긴 코드의 문자열 안 백틱은 글**" in sec
           and "**문서 편집 예외에 cd 머리·읽기 꼬리**" in sec and "- **알려진 빈틈(0.4.8 기준 — 신고 오면 우선)** —" in sec
+          # 보완 3: 데이터로 보는 언어(ruby·perl·php 제외) · ( · { 묶음 제외 · F3 머리 넓힘 · & 하나도 경계
+          and "python·node·deno·bun·tsx·ts-node" in sec and "ruby·perl·php 는 백틱이 실행" in sec and "`(`·`{` 묶음" in sec
+          and "`python -u -`" in sec and "`<<\\EOF`" in sec and "**`&` 하나도 명령 경계(옛 판부터의 구멍)**" in sec
+          and "루비/펄의 따옴표 밖 백틱" not in sec
           and "`subprocess`" in sec and "`'sys'+'tem'`" in sec and "사용자 신고" in sec
           and "잔치" not in sec and "janchi" not in sec and "flowershop" not in sec, sec)
 
