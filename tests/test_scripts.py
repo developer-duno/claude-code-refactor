@@ -7256,7 +7256,7 @@ def check_docs_047(check):
 
 def check_docs_048(check):
     """0.4.8 문서: 판 번호 네 곳(0.4.8) · README '0.4.8에서 달라진 점' 줄(0.4.7 줄 위 · 0.4.7 줄 남김) ·
-    §13 0.4.8 변경 이력 절(0.4.7 절 위 · 글머리 셋(알려진 빈틈 포함) · 사용자·레포 이름 없음)."""
+    §13 0.4.8 변경 이력 절(0.4.7 절 위 · 글머리 넷(알려진 빈틈 포함) · 사용자·레포 이름 없음)."""
     rd = (ROOT / "README.md").read_text(encoding="utf-8")
     pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
     mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")

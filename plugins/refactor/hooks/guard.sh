@@ -237,13 +237,16 @@ unesc_line() {
     #   앞에 $( · 백틱 없음)은 셸이 백틱을 풀지 않는다 → 그 본문의 작은따옴표 문자열 안 백틱은 데이터로 본다(아래 출력에서 sqbt).
     #   본문에 프로세스를 띄우는 글자(CEX · getattr · __import__ · importlib)가 하나라도 있으면(HX) 지금처럼 통째로 본다.
     #   보완 3: 언어는 python·py·pypy·node·nodejs·deno·bun·tsx·ts-node 만(ruby·perl·php 는 백틱이 실행이라 뺀다 — 사장님 결정) ·
-    #   앞 조각에 ( · { 가 있으면(bash <(python - · ( python - · { python - — 출력을 셸에 흘려 넣는 묶음) HI 아님
+    #   보완 4: 줄 머리(<< 앞) 전체에 ( · { 가 있으면(bash <(python - · ( true; python - · { :; python - — 출력을 셸에 흘려 넣는 묶음) HI 아님 ·
+    #   ; · & · | 로 나눈 마지막 조각 앞의 조각은 모두 cd <한 낱말 경로>(따옴표로 감싼 경로도 한 낱말) 이거나 빈 조각이어야 한다(F3 머리 꼴)
     for (h = 1; h <= nh; h++) {
       HI[h] = 0; HX[h] = 0
-      if (HC[h] || !HQ[h] || HPRE[h] ~ /\$\(|`/) continue
+      if (HC[h] || !HQ[h] || HPRE[h] ~ /\$\(|`|[({]/) continue
       t = HP[h]; gsub(/2>&1/, "", t); if (t !~ /^[ \t]*$/) continue
-      np = split(HPRE[h], PC, /[;&|]/); t = (np ? tolower(PC[np]) : ""); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
-      if (t ~ /[({]/) continue
+      np = split(HPRE[h], PC, /[;&|]/); hok = 1
+      for (j = 1; j < np; j++) if (PC[j] !~ /^[ \t]*$/ && PC[j] !~ /^[ \t]*cd[ \t]+("[^"]*"|\047[^\047]*\047|[^ \t"\047]+)[ \t]*$/) hok = 0
+      if (!hok) continue
+      t = (np ? tolower(PC[np]) : ""); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
       if (t !~ /(^|[ \t])(python[0-9.]*|py|pypy3?|node|nodejs|deno|bun|tsx|ts-node)([ \t]+-[^ \t]*)*[ \t]*$/) continue
       HI[h] = 1
       for (i = HS[h] + 1; i < HE[h] && i <= n; i++) { t = tolower(L[i]); if (t ~ CEX || t ~ /getattr|__import__|importlib/) HX[h] = 1 }
