@@ -1071,6 +1071,7 @@ def main():
     check_verify_pw_wait_046(check)
     check_docs_046(check)
     check_docs_047(check)
+    check_docs_048(check)
 
     check(f"훅 시간 초과({HOOK_TIMEOUT}초) 0건", not HOOK_TIMEOUTS, " / ".join(HOOK_TIMEOUTS))
 
@@ -7234,15 +7235,9 @@ def check_docs_046(check):
 
 def check_docs_047(check):
     """0.4.7 문서: 판 번호 네 곳(0.4.7) · README '0.4.7에서 달라진 점' 줄(0.4.6 줄 위 · 0.4.6 줄 남김 · 승인 기록 읽기 문구 없음 — F3 은 이번 판에서 뺌) ·
-    §13 0.4.7 변경 이력 절(0.4.6 절 위 · 글머리 넷 · 사용자 이름 없음) · F6 문구."""
+    §13 0.4.7 변경 이력 절(0.4.6 절 위 · 글머리 넷 · 사용자 이름 없음) · F6 문구.
+    (판 번호 네 곳 단언은 0.4.8 에서 check_docs_048 로 옮김)"""
     rd = (ROOT / "README.md").read_text(encoding="utf-8")
-    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
-    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
-    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
-    check("0.4.7 판 번호: plugin.json", '"version": "0.4.7"' in pj, "")
-    check("0.4.7 판 번호: marketplace.json", '"version": "0.4.7"' in mk, "")
-    check("0.4.7 판 번호: bug.yml placeholder", 'placeholder: "0.4.7"' in bg, "")
-    check("0.4.7 판 번호: README 배지", "version-0.4.7-blue" in rd, "")
     a, b = rd.find("> **0.4.7에서 달라진 점**:"), rd.find("> **0.4.6에서 달라진 점**:")
     line = rd[a:b] if 0 <= a < b else ""
     check("0.4.7 문구 README 달라진 점 줄 존재(0.4.6 줄 위 · 0.4.6 줄 남김) + 전체 주소·-X=·heroku·--name-only · 승인 기록 문구 없음",
@@ -7257,6 +7252,31 @@ def check_docs_047(check):
     check("0.4.7 F6 문구 README 달라진 점 줄 + §13 글머리(문서 heredoc 뒤 git add·diff 헛막힘)",
           "문서를 heredoc 으로 쓴 뒤 `git add`·`git diff` 로 그 문서를 다시 부를 때 본문 글자를 실행으로 읽던 헛막힘도 고쳤습니다" in line
           and "**문서 heredoc 뒤 git add·diff 로 그 문서를 불러도 본문은 글**" in sec, sec)
+
+
+def check_docs_048(check):
+    """0.4.8 문서: 판 번호 네 곳(0.4.8) · README '0.4.8에서 달라진 점' 줄(0.4.7 줄 위 · 0.4.7 줄 남김) ·
+    §13 0.4.8 변경 이력 절(0.4.7 절 위 · 글머리 셋(알려진 빈틈 포함) · 사용자·레포 이름 없음)."""
+    rd = (ROOT / "README.md").read_text(encoding="utf-8")
+    pj = (ROOT / "plugins/refactor/.claude-plugin/plugin.json").read_text(encoding="utf-8")
+    mk = (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    bg = (ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text(encoding="utf-8")
+    check("0.4.8 판 번호: plugin.json", '"version": "0.4.8"' in pj, "")
+    check("0.4.8 판 번호: marketplace.json", '"version": "0.4.8"' in mk, "")
+    check("0.4.8 판 번호: bug.yml placeholder", 'placeholder: "0.4.8"' in bg, "")
+    check("0.4.8 판 번호: README 배지", "version-0.4.8-blue" in rd, "")
+    a, b = rd.find("> **0.4.8에서 달라진 점**:"), rd.find("> **0.4.7에서 달라진 점**:")
+    line = rd[a:b] if 0 <= a < b else ""
+    check("0.4.8 문구 README 달라진 점 줄 존재(0.4.7 줄 위 · 0.4.7 줄 남김) + 문자열 안 백틱 · cd 머리 · 읽기 확인",
+          bool(line) and all(w in line for w in ("**문자열 안 백틱**", "`cd <프로젝트 폴더> &&`", "`sed -n`", "사용자 신고"))
+          and "잔치" not in line and "janchi" not in line and "flowershop" not in line, line)
+    c, e = rd.find("### 0.4.8 (2026-10-08)"), rd.find("### 0.4.7 (2026-10-08)")
+    sec = rd[c:e] if 0 <= c < e else ""
+    check("0.4.8 문구 README §13 0.4.8 변경 이력 절(0.4.7 절 위) · 글머리 셋(알려진 빈틈 포함) · 사용자·레포 이름 없음",
+          sec.count("\n- **") == 3 and "**따옴표 구분자 heredoc 으로 넘긴 코드의 문자열 안 백틱은 글**" in sec
+          and "**문서 편집 예외에 cd 머리·읽기 꼬리**" in sec and "- **알려진 빈틈(0.4.8 기준 — 신고 오면 우선)** —" in sec
+          and "`subprocess`" in sec and "`'sys'+'tem'`" in sec and "사용자 신고" in sec
+          and "잔치" not in sec and "janchi" not in sec and "flowershop" not in sec, sec)
 
 
 # 가짜 playwright(0.4.6 시험용): goto 순간부터 지난 시간에 따라 globalThis.document 를 바꾸고, evaluate·waitForFunction 은 그 document 로 fn(arg) 를 부른다.

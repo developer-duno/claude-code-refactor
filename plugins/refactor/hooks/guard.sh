@@ -132,6 +132,18 @@ unesc_line() {
     }
     return HDP
   }
+  function sqbt(s,   i, n, c, st, o) {   # 0.4.8 B1 — 인터프리터 히어독 본문 한 줄: 작은따옴표 문자열 안 백틱만 빈칸으로(큰따옴표 안·따옴표 밖은 그대로, 줄마다 밖에서 시작)
+    o = ""; st = 0; n = length(s)
+    for (i = 1; i <= n; i++) {
+      c = substr(s, i, 1)
+      if (st && c == "\002") { o = o c substr(s, i + 1, 1); i++; continue }
+      if (st == 0) { if (c == "\047") st = 1; else if (c == "\"") st = 2 }
+      else if (st == 1) { if (c == "\047") st = 0; else if (c == "`") c = " " }
+      else if (c == "\"") st = 0
+      o = o c
+    }
+    return o
+  }
   function rhs(s,   p) { p = index(s, "="); return (p ? substr(s, p + 1) : s) }
   function callargs(s,   t, out, st, i, d, c, n2) {
     out = ""; t = s
@@ -194,7 +206,7 @@ unesc_line() {
         x = substr(pre, RSTART, RLENGTH); sub(/^[^a-z0-9_.-]?tee/, "", x); k = split(x, W2, /[ \t]+/)
         for (j = 1; j <= k; j++) { y = W2[j]; gsub(/["\047]/, "", y); if (y == "" || y ~ /^[->]/ || y == "/dev/null") continue; tg = tg "\003" y }
       }
-      HT[nh] = tg; HP[nh] = post
+      HT[nh] = tg; HP[nh] = post; HPRE[nh] = pre
     }
     # 0.4.7 W3: 명령 전체(heredoc 본문 제외)에 git 이 다른 프로그램을 돌리게 하는 설정·환경변수 글자가 있으면 git 보기 예외를 쓰지 않는다(GVX)
     #   — git config(사이 옵션 포함)·외부 diff·textconv·filter·fsmonitor·gitattributes·pager(--no-pager 는 제외)·GIT_CONFIG*·alias·git 폴더 바꾸기
@@ -221,6 +233,18 @@ unesc_line() {
       }
       if (!run) DROP[h] = HQ[h] ? 1 : 2   # 1 = 본문 빼기, 2 = 실행되는 부분만 남기기
     }
+    # 0.4.8 B1(사용자 신고): 따옴표 구분자로 코드 인터프리터에 넘긴 본문(HI — cat·tee 아님 · 앞 조각 끝이 python - 등 · 뒤는 공백·2>&1 만 ·
+    #   앞에 $( · 백틱 없음)은 셸이 백틱을 풀지 않는다 → 그 본문의 작은따옴표 문자열 안 백틱은 데이터로 본다(아래 출력에서 sqbt).
+    #   본문에 프로세스를 띄우는 글자(CEX · getattr · __import__ · importlib)가 하나라도 있으면(HX) 지금처럼 통째로 본다.
+    for (h = 1; h <= nh; h++) {
+      HI[h] = 0; HX[h] = 0
+      if (HC[h] || !HQ[h] || HPRE[h] ~ /\$\(|`/) continue
+      t = HP[h]; gsub(/2>&1/, "", t); if (t !~ /^[ \t]*$/) continue
+      np = split(HPRE[h], PC, /[;&|(]/); t = (np ? tolower(PC[np]) : ""); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
+      if (t !~ /(^|[ \t])(python[0-9.]*|py|pypy3?|node|nodejs|ruby|perl|php|deno|bun|tsx|ts-node)([ \t]+-[^ \t]*)*[ \t]*$/) continue
+      HI[h] = 1
+      for (i = HS[h] + 1; i < HE[h] && i <= n; i++) { t = tolower(L[i]); if (t ~ CEX || t ~ /getattr|__import__|importlib/) HX[h] = 1 }
+    }
     # 비밀값·원격 주소 판정용 사본(outs): 실행되지 않는 따옴표 없는 cat·tee 문서 본문(DROP 2)만 줄을 거른다(K: 1 셸 동작 · 2 코드 동작 · 3 변수 정의).
     # 코드 인터프리터 본문·뒤에서 실행되는 본문(DROP 0)은 0.2.1 처럼 통째로 본다(사장님 결정 — 코드는 줄 필터 안 함). 따옴표 구분자 + 실행 안 됨(DROP 1)은 본문을 아예 뺀다
     for (h = 1; h <= nh; h++) {
@@ -240,15 +264,16 @@ unesc_line() {
       for (k = 1; k <= nh; k++) if (i > HS[k] && i <= HE[k]) { inb = k; break }
       if (inb && i == HE[inb]) continue
       if (inb && DROP[inb] == 1) continue
+      li = (inb && HI[inb] && !HX[inb]) ? sqbt(L[i]) : L[i]   # 0.4.8 B1 — 원래 L[i] 는 그대로 둔다
       if (inb && FI[inb] && K[i]) outs = outs (outs == "" ? "" : " ; ") L[i]
-      if (!(inb && FI[inb])) outs = outs (outs == "" ? "" : " ; ") L[i]
+      if (!(inb && FI[inb])) outs = outs (outs == "" ? "" : " ; ") li
       if (inb && DROP[inb] == 2) {
         t = L[i]; parts = ""
         while (match(t, /\$\([^)]*\)|`[^`]*`|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)) { parts = parts " " substr(t, RSTART, RLENGTH); t = substr(t, RSTART + RLENGTH) }
         if (parts != "") out = out " ; " parts
         continue
       }
-      out = out (out == "" ? "" : " ; ") L[i]
+      out = out (out == "" ? "" : " ; ") li
     }
     printf "%s\004%s", substr(out, 1, 20000), substr(outs, 1, 20000) }')
   UVS=${UV#*$'\004'}; UV=${UV%%$'\004'*}
@@ -2676,9 +2701,81 @@ dei_count() { # $1 글 $2 정규식(앞 경계 괄호 1 · 뒤 경계 괄호가 
   done
   DC=$n
 }
+# 0.4.8 B3(사용자 신고): 문서 편집 히어독 뒤 꼬리 $1 이 공백뿐이거나, docs/refactor 의 .md 를 읽기만 하는 grep·egrep·fgrep·rg·head·tail·cat·wc·cut·sed -n
+#   조각(| · ; · && · 줄바꿈으로 이음)뿐이면 0. 쓰기(> <)·명령 치환·백틱·뒤로 돌리기(&)·따옴표 밖 역슬래시·$ 가 있으면 1.
+#   따옴표 묶음: 안이 단순 글자(영숫자 _ . , / -)면 따옴표만 떼고 낱말로 보고, 아니면 / 가 없을 때만 자리표시로 비운다(/ 가 있으면 1).
+#   낱말: 명령 자리는 이름 그대로(경로·감싸기·대입 없음) · rg 의 --pre(파일마다 프로그램 실행)는 1 · 옵션 아닌 낱말에 / 가 있으면 dei_path_ok 통과 문서만
+#   · sed 는 옵션이 -n·-E·-r(과 묶음)·--quiet·--silent 뿐이고 -n 이 있으며 첫 낱말(스크립트)이 숫자[,숫자]p 또는 /…/p 일 때만(그 낱말은 경로 검사에서 뺀다).
+#   nocasematch 를 끈 채로 부른다(-e 와 -E 를 가른다).
+dei_tail_view() {
+  local s=$1 t="" pre q qc seg w i n sedn sedw
+  case "$s" in *[![:space:]]*) ;; *) return 0 ;; esac
+  case "$s" in *'>'*|*'<'*|*'$('*|*'`'*) return 1 ;; esac
+  t=${s//&&/}; case "$t" in *'&'*) return 1 ;; esac
+  t=""
+  while :; do
+    case "$s" in *[\'\"]*) ;; *) t="$t$s"; break ;; esac
+    pre=${s%%[\'\"]*}; s=${s:${#pre}}; q=${s:0:1}; s=${s:1}
+    case "$s" in *"$q"*) ;; *) return 1 ;; esac
+    qc=${s%%"$q"*}; s=${s#*"$q"}
+    case "$qc" in
+      *[!A-Za-z0-9_.,/-]*|'') case "$qc" in */*) return 1 ;; esac; t="$t$pre _Q_ " ;;
+      *) t="$t$pre $qc " ;;
+    esac
+  done
+  case "$t" in *"$BS"*|*'$'*) return 1 ;; esac
+  cut_segs "${t//$NL/;}"
+  local segs=$CUTS
+  while [ -n "$segs" ]; do
+    case "$segs" in *"$NL"*) seg=${segs%%"$NL"*}; segs=${segs#*"$NL"} ;; *) seg=$segs; segs="" ;; esac
+    case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
+    seg_words "$seg"
+    [ "$SI" = 0 ] && [ "${SW[0]}" = "$SCMD" ] || return 1
+    case "$SCMD" in grep|egrep|fgrep|rg|head|tail|cat|wc|cut|sed) ;; *) return 1 ;; esac
+    n=${#SW[@]}; sedn=0; sedw=""
+    i=1
+    while [ "$i" -lt "$n" ]; do
+      w=${SW[$i]}; i=$((i + 1))
+      case "$w" in --pre*) return 1 ;; esac
+      if [ "$SCMD" = sed ]; then
+        case "$w" in
+          -n|-nE|-En|-nr|-rn|--quiet|--silent) sedn=1; continue ;;
+          -E|-r) continue ;;
+          -*) return 1 ;;
+        esac
+        if [ -z "$sedw" ]; then
+          sedw=$w
+          case "$w" in
+            /*/p) w=${w#/}; w=${w%/p}; case "$w" in ''|*/*) return 1 ;; esac ;;
+            *p) w=${w%p}; case "$w" in ''|*[!0-9,]*|,*|*,|*,*,*) return 1 ;; esac ;;
+            *) return 1 ;;
+          esac
+          continue
+        fi
+      fi
+      case "$w" in -*) continue ;; */*) dei_path_ok "$w" || return 1 ;; esac
+    done
+    if [ "$SCMD" = sed ]; then [ "$sedn" = 1 ] && [ -n "$sedw" ] || return 1; fi
+  done
+  return 0
+}
 doc_edit_inline() {
-  local c=$1 lang="" body="" sq="'" re r
+  local c=$1 lang="" body="" sq="'" re r cdp cdt
   c=${c%"${c##*[![:space:]]}"}; c=${c#"${c%%[![:space:]]*}"}
+  # 0.4.8 B3: 머리의 cd <프로젝트 폴더> && · ; 하나는 벗긴다(따옴표 없음·'…'·"…" · 끝 / 하나 허용) — 경로가 프로젝트 폴더와 글자 그대로 같을 때만, 아니면 아님
+  case "$c" in "cd"[[:space:]]*)
+    cdt=${c#cd}; cdt=${cdt#"${cdt%%[![:space:]]*}"}
+    case "$cdt" in
+      "'"*) cdt=${cdt#"'"}; case "$cdt" in *"'"*) ;; *) return 1 ;; esac; cdp=${cdt%%"'"*}; cdt=${cdt#*"'"} ;;
+      '"'*) cdt=${cdt#'"'}; case "$cdt" in *'"'*) ;; *) return 1 ;; esac; cdp=${cdt%%'"'*}; cdt=${cdt#*'"'} ;;
+      *) cdp=${cdt%%[[:space:]\;\&\|]*}; cdt=${cdt:${#cdp}} ;;
+    esac
+    cdt=${cdt#"${cdt%%[![:space:]]*}"}
+    case "$cdt" in '&&'*) cdt=${cdt#'&&'} ;; ';'*) cdt=${cdt#';'} ;; *) return 1 ;; esac
+    cdp=${cdp%/}
+    [ -n "$cdp" ] && [ "$cdp" = "$proj" ] || return 1
+    c=${cdt#"${cdt%%[![:space:]]*}"} ;;
+  esac
   re="^(python|python3|py|node)[[:space:]]+(-c|-e)[[:space:]]+(${sq}([^${sq}]*)${sq}|\"(([^\"\\\\\$\`]|\\\\[^\$\`])*)\")\$"
   if [[ $c =~ $re ]]; then
     case "${BASH_REMATCH[1]}:${BASH_REMATCH[2]}" in python:-c|python3:-c|py:-c) lang=py ;; node:-e) lang=js ;; *) return 1 ;; esac
@@ -2699,7 +2796,8 @@ doc_edit_inline() {
       [ -n "$rest" ] || break
     done
     [ "$found" = 1 ] || return 1
-    case "$rest" in *[![:space:]]*) return 1 ;; esac   # 구분자 줄 뒤에 다른 명령이 없어야
+    shopt -u nocasematch; dei_tail_view "$rest"; r=$?; shopt -s nocasematch   # 구분자 줄 뒤에 다른 명령이 없거나 문서 읽기뿐이어야(0.4.8 B3)
+    [ "$r" = 0 ] || return 1
     if [ "$quoted" = 0 ]; then case "$body" in *'$'*|*'`'*|*"$BS"*) return 1 ;; esac; fi
   fi
   shopt -u nocasematch
@@ -2710,7 +2808,7 @@ doc_edit_inline() {
 dei_body() { # $1 본문 $2 py|js — 조건 ①②③(nocasematch 끈 채로 부른다)
   local b=$1 lang=$2 C="" n=0 m pre w q3=$'\003' re st t mods it top nm id ids="" after k g1 tot
   local -a L
-  case "$b" in *"'''"*|*'"""'*|*'`'*|*"$q3"*|*"$PH"*) return 1 ;; esac
+  case "$b" in *"'''"*|*'"""'*|*"$q3"*|*"$PH"*) return 1 ;; esac
   # 따옴표 글자 → \003번호\003 (값은 L) · 파이썬 주석(#…) 은 지운다. 따옴표가 줄을 넘거나 닫히지 않으면 아님 · f-문자열(f'…{…}')은 아님
   local re_tok="^([^'\"#]*)(#[^$NL]*|'(([^'\\\\$NL]|\\\\.)*)'|\"(([^\"\\\\$NL]|\\\\.)*)\")"
   [ "$lang" = js ] && re_tok="^([^'\"]*)('(([^'\\\\$NL]|\\\\.)*)'|\"(([^\"\\\\$NL]|\\\\.)*)\")"
@@ -2724,6 +2822,7 @@ dei_body() { # $1 본문 $2 py|js — 조건 ①②③(nocasematch 끈 채로 �
   done
   case "$b" in *[\'\"]*) return 1 ;; esac
   C="$C$b"
+  case "$C" in *'`'*) return 1 ;; esac   # 0.4.8 B2 — 백틱은 따옴표 토큰 밖 코드에 있을 때만 아님(따옴표 구분자 본문의 문자열 안 백틱은 데이터 · 따옴표 없는 구분자는 doc_edit_inline 이 먼저 거른다)
   # 따옴표 밖 코드: 역슬래시(줄 잇기)·/ ·점 옆 공백 없음 · 노드는 [ 도 없음
   case "$C" in *"$BS"*|*/*) return 1 ;; esac
   re='[[:space:]][.]|[.][[:space:]]'
