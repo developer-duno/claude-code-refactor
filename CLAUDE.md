@@ -8,7 +8,7 @@
 
 1. **그 커밋의 CI**(`.github/workflows/test.yml` · 잡 4개: ubuntu-latest · windows-latest · macos-latest · ubuntu-26.04 미리보기)
    ```bash
-   H=$(git rev-parse origin/main)   # 합친 뒤 fetch 한 상태에서
+   H=$(git rev-parse origin/main)   # 레포 루트에서 · 합친 뒤 fetch 한 상태에서
    gh run list --commit "$H" --event push --json databaseId,conclusion,headSha --jq '.[]|"\(.databaseId) \(.conclusion) \(.headSha[0:7])"'
    ```
    기대 = `<run id> success <해시>` 1줄. 아직 돌고 있으면 `timeout 3000 gh run watch <run id> --exit-status -i 30`. 맨 위 run 이 아니라 **해시로 고른 run** 만 본다.
@@ -16,7 +16,7 @@
    ```bash
    gh release view --json tagName,targetCommitish --jq '"\(.tagName) \(.targetCommitish[0:7])"'
    ```
-   기대 = 새 판 태그가 합친 해시를 가리킨다. 판 번호는 네 곳이 같아야 CI 가 지나간다(`plugins/refactor/.claude-plugin/plugin.json` · `.claude-plugin/marketplace.json` · README 배지 · `.github/ISSUE_TEMPLATE/bug.yml` placeholder — `tests/test_scripts.py` 25번 「판 번호 일치」).
+   기대 = 새 판 태그가 합친 해시를 가리킨다(문서만 바꾼 합치기면 옛 판 태그가 옛 해시를 가리키는 것이 정상 — 불일치가 아니다). 판 번호는 네 곳이 같아야 CI 가 지나간다(`plugins/refactor/.claude-plugin/plugin.json` · `.claude-plugin/marketplace.json` · README 머리의 판 배지 · `.github/ISSUE_TEMPLATE/bug.yml` placeholder — `tests/test_scripts.py` 25번 「판 번호 일치」).
 3. **설치본**(릴리스 뒤, 설치된 범위마다 `claude plugin update refactor@vibe-consulting --scope <user|local>`)
    ```bash
    claude plugin list | grep -A1 'refactor@vibe-consulting'   # Version: <새 판> — 범위(user·local)마다 한 항목
